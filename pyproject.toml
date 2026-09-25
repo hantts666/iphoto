@@ -1,0 +1,9 @@
+[project]
+name = "iphoto-local"
+version = "1.7.0"
+description = "A native, non-destructive photo editing prototype"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
