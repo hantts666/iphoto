@@ -50,9 +50,13 @@ def main():
     if os.environ.get("QT_QPA_PLATFORM") != "offscreen" and app.primaryScreen():
         geometry = app.primaryScreen().availableGeometry()
         window = qml.rootObjects()[0]
-        window.resize(
-            min(1440, geometry.width() - 24), min(930, geometry.height() - 24)
-        )
+        width = min(1440, geometry.width() - 24)
+        height = min(930, geometry.height() - 24)
+        window.resize(width, height)
+        # Center inside the available area and clamp, so the window can never
+        # open partially off-screen after a monitor or DPI change.
+        window.setX(geometry.x() + max(0, (geometry.width() - width) // 2))
+        window.setY(geometry.y() + max(0, (geometry.height() - height) // 2))
     app.aboutToQuit.connect(editor.close)
     if args.scene_panel:
 
