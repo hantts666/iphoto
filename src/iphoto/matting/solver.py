@@ -2,7 +2,25 @@
 
 from time import perf_counter
 import os
+from pathlib import Path
+
 import numpy as np
+
+
+def _enable_numba_cache():
+    # Persist numba JIT artifacts so the first transparent-edge refine after a
+    # relaunch reuses compiled code instead of recompiling for several seconds.
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    directory = root / "iPhoto" / "numba-cache"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("NUMBA_CACHE_DIR", str(directory))
+    except OSError:
+        pass
+
+
+_enable_numba_cache()
 
 
 def solve_alpha(image, trimap, *, tile_size=256):
@@ -51,3 +69,14 @@ def solve_alpha(image, trimap, *, tile_size=256):
             alpha[y:y1, x:x1][unknown] = core[unknown]
             tiles += 1
     return np.clip(alpha, 0, 1), tiles
+
+
+def warm():
+    """Compile the matting kernels on a tiny trimap so first use is fast."""
+    from PIL import Image
+
+    trimap = np.zeros((96, 96), dtype=np.float64)
+    trimap[:32] = 1.0
+    trimap[32:64] = 0.5
+    image = Image.new("RGB", (96, 96), (128, 128, 128))
+    solve_alpha(image, trimap, tile_size=64)

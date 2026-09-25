@@ -5,12 +5,41 @@ Weights are verified data; arbitrary local model paths are never accepted.
 """
 
 from hashlib import sha256
+import os
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
 
-from .models import verified_path
+from ..storage import atomic_output
+from .models import FILES, verified_path
 from .runtime import prepare_runtime
+
+CACHE_MAX_FILES = 8
+CACHE_MAX_BYTES = 256 * 1024 * 1024
+EMBEDDING_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _cache_dir():
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    directory = root / "iPhoto" / "embedding-cache"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _cache_name(variant, width, height, digest):
+    encoder = FILES[f"{variant}_encoder"][2][:12]
+    return f"{variant}-{encoder}-{width}x{height}-{digest[:16]}.npy"
+
+
+def _prune(directory):
+    entries = sorted(directory.glob("*.npy"), key=lambda p: p.stat().st_mtime)
+    total = sum(p.stat().st_size for p in entries)
+    while entries and (len(entries) > CACHE_MAX_FILES or total > CACHE_MAX_BYTES):
+        old = entries.pop(0)
+        total -= old.stat().st_size
+        old.unlink(missing_ok=True)
 
 
 class EfficientSAM:
@@ -39,20 +68,53 @@ class EfficientSAM:
         self._key = self._embedding = None
         self.encoding_ms = 0
 
+    def _disk_path(self, key):
+        width, height, digest = key
+        try:
+            return _cache_dir() / _cache_name(self.variant, width, height, digest.hex())
+        except OSError:
+            return None
+
+    def _load_disk(self, key):
+        path = self._disk_path(key)
+        if path is None or not path.is_file():
+            return None
+        try:
+            embedding = np.load(path)
+        except (OSError, ValueError):
+            return None
+        return embedding if np.isfinite(embedding).all() else None
+
+    def _save_disk(self, key, embedding):
+        path = self._disk_path(key)
+        if path is None or embedding.nbytes > EMBEDDING_MAX_BYTES:
+            return
+        try:
+            with atomic_output(path, overwrite=True) as file:
+                np.save(file, embedding)
+            _prune(path.parent)
+        except (OSError, ValueError):
+            pass
+
     def predict(self, image, coords, labels):
         array = np.asarray(image.convert("RGB"), dtype=np.uint8)
         height, width = array.shape[:2]
         key = (width, height, sha256(array.tobytes()).digest())
         reused = key == self._key
+        from_disk = False
         started = perf_counter()
         if not reused:
-            batched = (
-                np.ascontiguousarray(array.transpose(2, 0, 1)[None], dtype=np.float32)
-                / 255
-            )
-            (self._embedding,) = self.encoder.run(None, {"batched_images": batched})
-            if not np.isfinite(self._embedding).all():
-                raise ValueError("分割编码结果无效")
+            self._embedding = self._load_disk(key)
+            from_disk = self._embedding is not None
+            if not from_disk:
+                batched = (
+                    np.ascontiguousarray(array.transpose(2, 0, 1)[None], dtype=np.float32)
+                    / 255
+                )
+                (self._embedding,) = self.encoder.run(None, {"batched_images": batched})
+                if not np.isfinite(self._embedding).all():
+                    raise ValueError("分割编码结果无效")
+                self._save_disk(key, self._embedding)
             self._key = key
         self.encoding_ms = (perf_counter() - started) * 1000
         started = perf_counter()
@@ -79,7 +141,8 @@ class EfficientSAM:
             scores,
             {
                 "model": f"EfficientSAM-{self.variant.upper()}",
-                "embedding_cached": reused,
+                "embedding_cached": reused or from_disk,
+                "embedding_disk": from_disk,
                 "encoding_ms": round(self.encoding_ms, 1),
                 "decoding_ms": round((perf_counter() - started) * 1000, 1),
             },

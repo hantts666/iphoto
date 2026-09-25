@@ -232,6 +232,7 @@ class AIController(QObject):
         testing,
         mode="edit",
         workspace=None,
+        attempt=0,
     ):
         request = QNetworkRequest(QUrl(settings.base_url + "/chat/completions"))
         request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
@@ -255,6 +256,19 @@ class AIController(QObject):
             "testing": testing,
             "mode": mode,
             "workspace": workspace or {},
+            "attempt": attempt,
+            "retry_args": (
+                settings,
+                secret,
+                text,
+                recipe,
+                locked,
+                image_url,
+                generation,
+                testing,
+                mode,
+                workspace or {},
+            ),
             "started": time.monotonic(),
             "body": bytearray(),
             "abort": "",
@@ -300,6 +314,10 @@ class AIController(QObject):
             status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
             if context["abort"]:
                 raise ValueError(context["abort"])
+            if (status != 200 or reply.error() != QNetworkReply.NoError) and (
+                self._maybe_retry(context, status, reply)
+            ):
+                return
             if status != 200:
                 messages = {
                     400: "请求格式或模型不兼容，请确认模型支持图片和 JSON 输出",
@@ -379,6 +397,42 @@ class AIController(QObject):
             context["body"].clear()
             reply.deleteLater()
             self.changed.emit()
+
+    MAX_RETRIES = 2
+
+    @staticmethod
+    def _retryable(status, reply):
+        if status is None:
+            return reply.error() in (
+                QNetworkReply.ConnectionRefusedError,
+                QNetworkReply.RemoteHostClosedError,
+                QNetworkReply.HostNotFoundError,
+                QNetworkReply.TimeoutError,
+                QNetworkReply.TemporaryNetworkFailureError,
+                QNetworkReply.NetworkSessionFailedError,
+                QNetworkReply.ProxyConnectionRefusedError,
+                QNetworkReply.ProxyConnectionClosedError,
+                QNetworkReply.ProxyTimeoutError,
+                QNetworkReply.UnknownNetworkError,
+            )
+        return status in (408, 502, 503, 504)
+
+    def _maybe_retry(self, context, status, reply):
+        if context["attempt"] >= self.MAX_RETRIES or not self._retryable(
+            status, reply
+        ):
+            return False
+        delay = 1500 * 2 ** context["attempt"]
+        QTimer.singleShot(delay, lambda: self._restart(context))
+        self._show(
+            f"网络瞬时错误，{delay / 1000:.1f} 秒后第 {context['attempt'] + 1} 次重试…"
+        )
+        return True
+
+    def _restart(self, context):
+        if self._reply is not None:
+            return  # A newer request superseded this stale retry.
+        self._start(*context["retry_args"], attempt=context["attempt"] + 1)
 
     def _abort(self, reason):
         if self._reply is not None:

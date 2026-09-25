@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import sys
+import threading
 import time
 
 from .engine import (
@@ -32,6 +33,16 @@ def main():
     current_original = None
     current_overlay = previous_mask_key = None
     composition_cache = LayerPreviewCache()
+
+    def _warm_matting():
+        try:
+            from .matting.solver import warm
+
+            warm()
+        except Exception:
+            pass  # Warm-up is best effort; first refine still works without it.
+
+    threading.Thread(target=_warm_matting, daemon=True).start()
     for line in sys.stdin:
         request = {}
         try:

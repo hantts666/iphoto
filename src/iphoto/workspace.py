@@ -295,7 +295,9 @@ class Editor(QObject):
 
     @Property("QVariantList", notify=layersChanged)
     def layers(self):
-        return deepcopy(self._layer_rows)
+        # _publish_layer_rows rebuilds this list on every change, so the property
+        # can hand it out directly instead of deepcopying on each access.
+        return self._layer_rows
 
     @Property(str, notify=changed)
     def activeLayerId(self):
@@ -531,7 +533,7 @@ class Editor(QObject):
 
     @Property("QVariantList", notify=conversationChanged)
     def conversation(self):
-        return deepcopy(self._conversation)
+        return self._conversation
 
     @Property(bool, notify=changed)
     def dirty(self):
