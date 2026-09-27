@@ -18,14 +18,14 @@ def start(self, radius):
         if self._candidate is None:
             self.beginSelection("current")
         mask = self._candidate
-    self._status = "正在按原图分辨率细化边缘…大图需要更长时间"
+    self._status = "正在按原图分辨率细化边缘…可随时取消，大图需要更长时间"
     self._request("matte", mask=deepcopy(mask), radius=radius)
 
 
 def cancel(self):
     if self.matteBusy:
-        self._active["cancelled"] = True
-        self._status = "已取消接收边缘结果，等待本地计算释放；原选区保留"
+        self._stop_matte()
+        self._status = "已取消边缘细化；原选区保留，可继续编辑"
         self.changed.emit()
 
 

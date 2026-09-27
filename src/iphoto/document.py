@@ -1,6 +1,7 @@
 """Versioned layer documents with vector strokes and bounded grayscale masks."""
 
 from copy import deepcopy
+from collections import OrderedDict
 from datetime import datetime
 import json
 import math
@@ -51,8 +52,22 @@ def number(value, lo, hi):
         or not math.isfinite(value)
         or not lo <= value <= hi
     ):
-        raise ValueError("选区或图层数值超出允许范围")
+        raise ValueError(f"选区或图层数值超出允许范围：{value!r} 不在 {lo} ~ {hi}")
     return float(value)
+
+
+def coord999(value):
+    """AI boundary tolerance: models emit -1/1000 edge sentinels; clamp those,
+    reject true scale mistakes (pixel values) instead of guessing."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (float, int))
+        or not math.isfinite(value)
+    ):
+        raise ValueError(f"坐标无效：{value!r}")
+    if -16 <= value <= 1015:
+        return min(999.0, max(0.0, float(value)))
+    raise ValueError(f"坐标超出 0~999 归一化范围：{value!r}")
 
 
 def validate_mask(mask):
@@ -61,6 +76,9 @@ def validate_mask(mask):
     if not isinstance(mask.get("inverted"), bool):
         raise ValueError("选区反选标记无效")
     number(mask.get("feather"), 0, 0.05)
+    shift = mask.get("edge_shift", 0)
+    if isinstance(shift, bool) or not isinstance(shift, int) or not -5 <= shift <= 5:
+        raise ValueError("边缘位移应为 -5～5 的整数（短边百分比）")
     if not isinstance(mask.get("label"), str) or len(mask["label"]) > 200:
         raise ValueError("选区名称过长")
     ops = mask.get("ops")
@@ -106,6 +124,7 @@ def validate_mask(mask):
         "label": mask["label"],
         **({"bitmap": validate_bitmap(mask["bitmap"])} if "bitmap" in mask else {}),
         "feather": float(mask["feather"]),
+        **({"edge_shift": mask["edge_shift"]} if mask.get("edge_shift") else {}),
         "ops": [
             {
                 "kind": op["kind"],
@@ -142,6 +161,50 @@ def validate_layers(layers):
             not isinstance(k, str) or k not in RANGES for k in locked
         ):
             raise ValueError("图层锁定参数无效")
+        inpaint = layer.get("inpaint")
+        if inpaint is not None:
+            if (
+                layer.get("kind") == "group"
+                or not isinstance(inpaint, dict)
+                or inpaint.get("method") not in ("telea", "ns")
+                or isinstance(inpaint.get("radius"), bool)
+                or not isinstance(inpaint.get("radius"), (int, float))
+                or not 1 <= inpaint["radius"] <= 25
+            ):
+                raise ValueError("内容感知填充参数无效")
+            inpaint = {
+                "method": inpaint["method"],
+                "radius": float(inpaint["radius"]),
+            }
+        heal = layer.get("heal")
+        if heal is not None:
+            if (
+                layer.get("kind") == "group"
+                or not isinstance(heal, dict)
+                or not isinstance(heal.get("ops"), list)
+                or not 1 <= len(heal["ops"]) <= 60
+            ):
+                raise ValueError("修复笔画无效")
+            clean_ops = []
+            for op in heal["ops"]:
+                if not isinstance(op, dict) or op.get("kind") != "heal":
+                    raise ValueError("修复笔画无效")
+                points = op.get("points")
+                if not isinstance(points, list) or not 1 <= len(points) <= 512:
+                    raise ValueError("修复点数无效")
+                for point in points:
+                    if not isinstance(point, list) or len(point) != 2:
+                        raise ValueError("修复坐标无效")
+                    for v in point:
+                        number(v, 0, 1)
+                clean_ops.append(
+                    {
+                        "kind": "heal",
+                        "points": deepcopy(points),
+                        "radius": number(op.get("radius"), 0.003, 0.2),
+                    }
+                )
+            heal = {"ops": clean_ops}
         result.append(
             {
                 "id": lid,
@@ -154,6 +217,8 @@ def validate_layers(layers):
                 "kind": layer.get("kind", "adjustment"),
                 "parent_id": layer.get("parent_id", ""),
                 "collapsed": layer.get("collapsed", False),
+                **({"inpaint": inpaint} if inpaint is not None else {}),
+                **({"heal": heal} if heal is not None else {}),
             }
         )
     return validate_hierarchy(result)
@@ -197,6 +262,15 @@ def raster_mask(mask, size):
                 )
     if mask["inverted"]:
         image = ImageChops.invert(image)
+    shift = mask.get("edge_shift", 0)
+    if shift:
+        # Photoshop-like contract/expand, percent of the short side.
+        px = max(1, round(abs(shift) / 100 * min(size)))
+        image = image.filter(
+            ImageFilter.MaxFilter(2 * px + 1)
+            if shift > 0
+            else ImageFilter.MinFilter(2 * px + 1)
+        )
     if mask["feather"]:
         # Inward feather may lower coverage, but must not square partial alpha.
         # For a binary mask this is identical to the previous multiply rule.
@@ -206,31 +280,157 @@ def raster_mask(mask, size):
     return image
 
 
+class _RasterCache:
+    """Bounded LRU of rasterized masks; mask dicts are immutable per version."""
+
+    def __init__(self, max_bytes=64 * 1024 * 1024):
+        self.max_bytes = max_bytes
+        self.entries = OrderedDict()
+        self.bytes = 0
+
+    def get(self, key):
+        item = self.entries.get(key)
+        if item is not None:
+            self.entries.move_to_end(key)
+        return item
+
+    def put(self, key, image):
+        weight = image.width * image.height
+        if weight > self.max_bytes:
+            return
+        while self.entries and self.bytes + weight > self.max_bytes:
+            _, old = self.entries.popitem(last=False)
+            self.bytes -= old.width * old.height
+        self.entries[key] = image
+        self.bytes += weight
+
+    def clear(self):
+        self.entries.clear()
+        self.bytes = 0
+
+
+RASTER_CACHE = _RasterCache()
+
+
+def raster_mask_cached(mask, size):
+    key = (
+        json.dumps(
+            {k: v for k, v in mask.items() if k != "label"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        tuple(size),
+    )
+    hit = RASTER_CACHE.get(key)
+    if hit is not None:
+        return hit
+    image = raster_mask(mask, size)
+    RASTER_CACHE.put(key, image)
+    return image
+
+
 def render_layers(image, layers):
     return render_nodes(image, forest(layers))
 
 
-def render_nodes(image, nodes):
-    result = image.copy()
+def heal_region_mask(heal, size):
+    """Raster of healing strokes; reuses brush rendering of the mask protocol."""
+    proxy = {
+        "base": "empty",
+        "inverted": False,
+        "feather": 0.0,
+        "label": "修复",
+        "ops": [
+            {
+                "kind": "brush",
+                "mode": "add",
+                "points": op["points"],
+                "radius": op["radius"],
+            }
+            for op in heal["ops"]
+        ],
+    }
+    return raster_mask(proxy, size)
+
+
+def render_nodes(image, nodes, *, canvas_size=None, canvas_box=None):
+    from .inpainting import inpaint_image
+
+    if (canvas_size is None) != (canvas_box is None):
+        raise ValueError("细节画布尺寸和裁剪范围必须同时提供")
+    full_size = canvas_size or image.size
+    result = image
     for node in nodes:
         layer = node["layer"]
         if not layer["visible"] or not layer["opacity"]:
             continue
         group = layer.get("kind") == "group"
-        if not group and not any(layer["recipe"].values()):
+        inpaint = layer.get("inpaint")
+        heal = layer.get("heal")
+        if not group and not inpaint and not heal and not any(layer["recipe"].values()):
             continue
-        mask = raster_mask(layer["mask"], image.size)
-        if not mask.getbbox():
-            continue
-        if layer["opacity"] < 1:
+        if heal:
+            strokes = heal_region_mask(heal, full_size)
+            if canvas_box is not None:
+                strokes = strokes.crop(canvas_box)
+            if strokes.getbbox():
+                radius = max(
+                    3,
+                    min(
+                        25,
+                        round(max(op["radius"] for op in heal["ops"]) * min(full_size) / 2),
+                    ),
+                )
+                filled = inpaint_image(
+                    result, strokes, {"method": "telea", "radius": radius}
+                )
+                result = Image.composite(filled, result, strokes)
+        source_mask = layer["mask"]
+        opaque_full = (
+            not inpaint and layer["opacity"] == 1
+            and source_mask["base"] == "full"
+            and not source_mask["ops"] and not source_mask["inverted"]
+            and not source_mask["feather"] and not source_mask.get("edge_shift", 0)
+            and not source_mask.get("bitmap")
+        )
+        if opaque_full:
+            region = None
+        else:
+            region = raster_mask_cached(source_mask, full_size)
+            if canvas_box is not None:
+                region = region.crop(canvas_box)
+            if not region.getbbox():
+                continue
+        base = inpaint_image(result, region, inpaint) if inpaint else result
+        mask = region
+        if mask is not None and layer["opacity"] < 1:
             mask = mask.point([round(v * layer["opacity"]) for v in range(256)])
         adjusted = (
-            render_nodes(result, node["children"])
+            render_nodes(base, node["children"], canvas_size=canvas_size, canvas_box=canvas_box)
             if group
-            else render(result, Recipe.from_dict(layer["recipe"]))
+            else render(base, Recipe.from_dict(layer["recipe"]), detail_size=full_size)
         )
-        result = Image.composite(adjusted, result, mask)
-    return result
+        result = adjusted if opaque_full else Image.composite(adjusted, result, mask)
+    return result if result is not image else image.copy()
+
+
+def render_detail_tile(image, layers, box, halo=128):
+    """Render a viewport crop at source resolution with nearby filter context."""
+    if not (isinstance(box, (list, tuple)) and len(box) == 4):
+        raise ValueError("细节裁剪范围无效")
+    left, top, right, bottom = (int(value) for value in box)
+    if not (0 <= left < right <= image.width and 0 <= top < bottom <= image.height):
+        raise ValueError("细节裁剪范围超出照片")
+    if (right - left) * (bottom - top) > 8_000_000:
+        raise ValueError("细节裁剪范围超过 800 万像素")
+    margin = max(0, min(256, int(halo)))
+    outer = (
+        max(0, left - margin), max(0, top - margin),
+        min(image.width, right + margin), min(image.height, bottom + margin),
+    )
+    cropped = image.crop(outer)
+    rendered = render_nodes(cropped, forest(layers), canvas_size=image.size, canvas_box=outer)
+    return rendered.crop((left - outer[0], top - outer[1], right - outer[0], bottom - outer[1]))
 
 
 def overlay_mask(mask, size, mode="overlay"):
@@ -239,6 +439,19 @@ def overlay_mask(mask, size, mode="overlay"):
     alpha = raster_mask(mask, size).point([round(v * 0.38) for v in range(256)])
     overlay = Image.new("RGBA", size, (52, 215, 166, 0))
     overlay.putalpha(alpha)
+    return overlay
+
+
+def overlay_mask_tile(mask, size, box, mode="overlay"):
+    """Match the source-resolution selection edge in a viewport crop."""
+    left, top, right, bottom = box
+    if not (0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]):
+        raise ValueError("蒙版细节裁剪范围无效")
+    alpha = raster_mask_cached(mask, size).crop(box)
+    if mode == "grayscale":
+        return alpha.convert("RGB")
+    overlay = Image.new("RGBA", alpha.size, (52, 215, 166, 0))
+    overlay.putalpha(alpha.point([round(v * 0.38) for v in range(256)]))
     return overlay
 
 
@@ -306,7 +519,7 @@ def _validate_project(payload):
             "active_layer": layer["id"],
             "conversation": [],
         }
-    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6"):
+    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7"):
         raise ValueError("不支持此项目版本")
     if (
         not isinstance(payload.get("source"), str)
@@ -318,6 +531,12 @@ def _validate_project(payload):
     active = payload.get("active_layer")
     if active not in [l["id"] for l in layers]:
         raise ValueError("当前图层不存在")
+    conversation_draft = payload.get("conversation_draft", "")
+    if not isinstance(conversation_draft, str) or len(conversation_draft) > 4000:
+        raise ValueError("对话草稿无效或超过 4000 字")
+    conversation_draft_mode = payload.get("conversation_draft_mode", "edit")
+    if conversation_draft_mode not in ("edit", "advice", "regions"):
+        raise ValueError("对话草稿模式无效")
     region_draft = validate_region_draft(payload.get("region_draft"))
     if region_draft and (
         payload.get("selection_draft") is not None
@@ -331,13 +550,15 @@ def _validate_project(payload):
     from .scene import validate_catalog
 
     return {
-        "schema_version": "1.6",
+        "schema_version": "1.7",
         "engine_version": ENGINE_VERSION,
         "source": payload["source"],
         "source_sha256": payload["source_sha256"].lower(),
         "layers": layers,
         "active_layer": active,
         "conversation": validate_conversation(payload.get("conversation", [])),
+        "conversation_draft": conversation_draft,
+        "conversation_draft_mode": conversation_draft_mode,
         "selection_draft": validate_mask(payload["selection_draft"])
         if payload.get("selection_draft") is not None
         else None,

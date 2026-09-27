@@ -1,4 +1,4 @@
-"""EfficientSAM ONNX backend with one-image embedding reuse and fixed CPU budget.
+"""EfficientSAM ONNX backend with one-image embedding reuse and bounded CPU use.
 
 Input/output conventions follow the authors' EfficientSAM_onnx_example.py.
 Weights are verified data; arbitrary local model paths are never accepted.
@@ -50,7 +50,10 @@ class EfficientSAM:
         import onnxruntime as ort
 
         options = ort.SessionOptions()
-        options.intra_op_num_threads = 4
+        # Encoding dominates the first selection. Eight threads performed
+        # better than four on a large desktop, while this cap avoids letting
+        # ONNX Runtime use every logical core on high-core-count machines.
+        options.intra_op_num_threads = min(8, os.cpu_count() or 4)
         options.inter_op_num_threads = 1
         options.enable_cpu_mem_arena = False
         options.log_severity_level = 3
@@ -95,6 +98,26 @@ class EfficientSAM:
             _prune(path.parent)
         except (OSError, ValueError):
             pass
+
+    def warm(self, image):
+        """Encode (or load) the embedding for this image without decoding prompts."""
+        array = np.asarray(image.convert("RGB"), dtype=np.uint8)
+        height, width = array.shape[:2]
+        key = (width, height, sha256(array.tobytes()).digest())
+        if key == self._key:
+            return True
+        embedding = self._load_disk(key)
+        if embedding is None:
+            batched = (
+                np.ascontiguousarray(array.transpose(2, 0, 1)[None], dtype=np.float32)
+                / 255
+            )
+            (embedding,) = self.encoder.run(None, {"batched_images": batched})
+            if not np.isfinite(embedding).all():
+                raise ValueError("分割编码结果无效")
+            self._save_disk(key, embedding)
+        self._embedding, self._key = embedding, key
+        return True
 
     def predict(self, image, coords, labels):
         array = np.asarray(image.convert("RGB"), dtype=np.uint8)

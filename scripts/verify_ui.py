@@ -62,6 +62,7 @@ def find(name):
 
 def click(name):
     item = find(name)
+    assert item.isVisible(), name + " is not visible"
     point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
     QTest.qWait(60)
@@ -81,10 +82,13 @@ try:
     wait_for(idle)
     assert editor.parameters["warmth"] == 0
     click("compareButton")
-    assert not window.property("compare")
-    click("compareButton")
     assert window.property("compare")
+    click("compareButton")
+    assert not window.property("compare")
+    click("layerSelect_" + editor.activeLayerId)
+    wait_for(lambda: editor.selection.pickedLayerId == editor.activeLayerId)
     slider = find("parameter_exposure")
+    assert slider.isVisible()
     point = slider.mapToScene(QPointF(slider.width() * .62, slider.height() / 2)).toPoint()
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
     wait_for(idle)

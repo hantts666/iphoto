@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 from hashlib import sha256
 from io import BytesIO
@@ -31,6 +31,7 @@ RANGES = {
     "blacks": (-60, 60),
     "sharpness": (0, 100),
     "softness": (0, 100),
+    "skin_smoothing": (0, 100),
 }
 LABELS = {
     "exposure": "曝光",
@@ -45,8 +46,31 @@ LABELS = {
     "blacks": "黑色色阶",
     "sharpness": "锐化",
     "softness": "柔化",
+    "skin_smoothing": "磨皮",
 }
+DETAIL_FIELDS = frozenset(("sharpness", "softness", "skin_smoothing"))
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+RAW_EXTENSIONS = {
+    ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng",
+    ".raf", ".orf", ".rw2", ".pef", ".srw", ".x3f",
+}
+
+
+def _load_raw(path: Path) -> Image.Image:
+    try:
+        import rawpy
+    except ImportError as exc:
+        raise ValueError(
+            "RAW 解码需要 rawpy：.venv\\Scripts\\python -m pip install rawpy"
+        ) from exc
+    with rawpy.open(str(path)) as raw:
+        array = raw.postprocess(
+            use_camera_wb=True,
+            output_color=rawpy.ColorSpace.sRGB,
+            output_bps=8,
+            no_auto_rotate=False,
+        )
+    return Image.fromarray(array)
 _LEVELS = np.arange(256, dtype=np.float32) / 255
 LINEAR_LUT = np.where(
     _LEVELS <= 0.04045, _LEVELS / 12.92, ((_LEVELS + 0.055) / 1.055) ** 2.4
@@ -67,6 +91,7 @@ class Recipe:
     blacks: float = 0.0
     sharpness: float = 0.0
     softness: float = 0.0
+    skin_smoothing: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict) -> "Recipe":
@@ -110,9 +135,12 @@ def file_hash(path: Path) -> str:
 def load_source(path: str | Path) -> Source:
     path = Path(path).resolve(strict=True)
     warning = ""
+    if path.suffix.lower() in RAW_EXTENSIONS:
+        image = _load_raw(path)
+        return Source(path, image, file_hash(path), b"", "")
     with Image.open(path) as raw:
-        if raw.format not in {"JPEG", "PNG"}:
-            raise ValueError("当前原型支持 JPEG 和 PNG，RAW / HEIC 尚未接入")
+        if raw.format not in {"JPEG", "PNG", "MPO"}:
+            raise ValueError("当前原型支持 JPEG / PNG / MPO 与相机 RAW，其他格式请先转换")
         if raw.width * raw.height > 60_000_000:
             raise ValueError("当前原型支持不超过 6000 万像素的照片")
         if raw.mode in {"I", "I;16", "F"}:
@@ -217,38 +245,72 @@ def _color_lut(recipe):
     return ImageFilter.Color3DLUT(65, table, channels=3, target_mode="RGB")
 
 
-def render(image: Image.Image, recipe: Recipe, strip_height=192) -> Image.Image:
+def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=None) -> Image.Image:
     """Versioned LUT renderer. The reference renderer below checks interpolation error."""
     if not any(recipe.to_dict().values()):
         return image.copy()
-    result = image.convert("RGB").filter(_color_lut(recipe))
-    # LUT interpolation near a clipped channel is inaccurate when tint and
-    # adaptive saturation interact. Correct only transition pixels using the
-    # float reference; fully clipped values remain cheap and within LUT tolerance.
-    pixels = np.asarray(image.convert("RGB"))
-    corrected = np.asarray(result).copy()
-    low_transition = 64 if recipe.vibrance and recipe.saturation > 0 else 40
-    for top in range(0, image.height, strip_height):
-        region = corrected[top : top + strip_height]
-        boundary = np.any(
-            ((region > 0) & (region < low_transition))
-            | ((region > 240) & (region < 255)),
-            axis=-1,
-        )
-        if np.any(boundary):
-            exact = _transform_linear(
-                LINEAR_LUT[pixels[top : top + strip_height][boundary]].copy(), recipe
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
+    if any(value for key, value in recipe.to_dict().items() if key not in DETAIL_FIELDS):
+        color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
+        filtered = rgb.filter(_color_lut(color_recipe))
+        # LUT interpolation near a clipped channel is inaccurate when tint and
+        # adaptive saturation interact. Correct only transition pixels using the
+        # float reference; fully clipped values remain cheap and within LUT tolerance.
+        corrected = np.asarray(filtered).copy()
+        del filtered
+        pixels = None
+        low_transition = 64 if recipe.vibrance and recipe.saturation > 0 else 40
+        for top in range(0, image.height, strip_height):
+            region = corrected[top : top + strip_height]
+            boundary = np.any(
+                ((region > 0) & (region < low_transition))
+                | ((region > 240) & (region < 255)),
+                axis=-1,
             )
-            region[boundary] = np.rint(exact * 255).clip(0, 255).astype(np.uint8)
-    result = Image.fromarray(corrected)
-    result = _detail(result, recipe)
+            if np.any(boundary):
+                if pixels is None:
+                    pixels = np.asarray(rgb)
+                exact = _transform_linear(
+                    LINEAR_LUT[pixels[top : top + strip_height][boundary]].copy(), color_recipe
+                )
+                region[boundary] = np.rint(exact * 255).clip(0, 255).astype(np.uint8)
+        del pixels
+        result = Image.fromarray(corrected)
+    else:
+        result = rgb.copy()
+    result = _detail(result, recipe, detail_size)
     if image.mode == "RGBA":
         result.putalpha(image.getchannel("A"))
     return result
 
 
-def _detail(image, recipe):
-    radius = max(image.size) / 1600
+def _detail(image, recipe, detail_size=None):
+    radius = max(detail_size or image.size) / 1600
+    if recipe.skin_smoothing:
+        # Bilateral filtering suppresses small texture while retaining strong
+        # boundaries. Work at the same photographic scale for preview, zoomed
+        # tiles and export, rather than applying a tiny fixed-pixel radius to
+        # a large original. The layer mask limits the final affected area.
+        import cv2
+
+        original = np.asarray(image.convert("RGB"))
+        strength = recipe.skin_smoothing / 100
+        diameter = 5 if strength < 0.35 else 7 if strength < 0.75 else 9
+        scale = max(1.0, radius)
+        if scale > 1:
+            working_size = (
+                max(1, round(image.width / scale)),
+                max(1, round(image.height / scale)),
+            )
+            working = cv2.resize(original, working_size, interpolation=cv2.INTER_AREA)
+        else:
+            working = original
+        smooth = cv2.bilateralFilter(
+            working, diameter, 16 + 52 * strength, 3 + 5 * strength
+        )
+        if scale > 1:
+            smooth = cv2.resize(smooth, image.size, interpolation=cv2.INTER_LINEAR)
+        image = Image.fromarray(cv2.addWeighted(original, 1 - strength, smooth, strength, 0))
     if recipe.softness:
         softened = image.filter(ImageFilter.GaussianBlur(max(0.25, radius * 3)))
         image = Image.blend(image, softened, recipe.softness / 100)
@@ -268,6 +330,12 @@ def render_reference(
 ) -> Image.Image:
     if not any(recipe.to_dict().values()):
         return image.copy()
+    if not any(value for key, value in recipe.to_dict().items() if key not in DETAIL_FIELDS):
+        result = image.convert("RGB")
+        result = _detail(result, recipe)
+        if image.mode == "RGBA":
+            result.putalpha(image.getchannel("A"))
+        return result
     pixels = np.asarray(image.convert("RGB"))
     output = np.empty_like(pixels)
     for top in range(0, image.height, strip_height):
@@ -290,6 +358,18 @@ def histogram(image: Image.Image) -> list[float]:
     bins = np.histogram(y, bins=64, range=(0, 256))[0].astype(float)
     bins = np.log1p(bins)
     return (bins / max(float(bins.max()), 1)).round(4).tolist()
+
+
+def stats(image: Image.Image) -> dict:
+    """Encoded-space tone/color statistics for the local auto balance."""
+    small = np.asarray(preview(image.convert("RGB"), 400), dtype=np.float32) / 255
+    y = small @ LUMA
+    return {
+        "means": [round(float(small[..., i].mean()), 4) for i in range(3)],
+        "low": round(float(np.quantile(y, 0.01)), 4),
+        "mid": round(float(np.quantile(y, 0.50)), 4),
+        "high": round(float(np.quantile(y, 0.99)), 4),
+    }
 
 
 PRESETS = {
@@ -326,7 +406,7 @@ def interpret_local(text: str, current: Recipe, locked=()) -> tuple[Recipe, str]
         raise ValueError("先写下你希望怎样调整这张照片")
     if any(
         k in text
-        for k in ("移除", "去掉", "换天", "换背景", "瘦脸", "磨皮", "祛痘", "扩图")
+        for k in ("移除", "去掉", "换天", "换背景", "瘦脸", "祛痘", "扩图")
     ):
         raise ValueError(
             "这项要求涉及局部修复或内容修改，当前引擎只支持已有选区内的参数调整，尚未应用任何变化。"
@@ -359,6 +439,8 @@ def interpret_local(text: str, current: Recipe, locked=()) -> tuple[Recipe, str]
         changes.update(saturation=-20, contrast=-8, shadows=18, highlights=-20)
     if any(k in text for k in ("层次", "对比", "contrast")):
         changes["contrast"] = 16
+    if any(k in text for k in ("磨皮", "皮肤平滑", "skin smoothing")):
+        changes["skin_smoothing"] = 35
     if any(k in text for k in ("黑白", "去色", "monochrome")):
         raise ValueError("当前原型仅支持有限的颜色调整，完整黑白与高级效果将在后续加入")
     if not changes:
@@ -374,15 +456,24 @@ def interpret_local(text: str, current: Recipe, locked=()) -> tuple[Recipe, str]
         for k, v in changes.items()
     )
     note = "按关键词调整当前选区：" + summary + "。"
-    if any(k in text for k in ("脸", "人物", "背景", "天空", "眼", "皮肤")):
+    if any(k in text for k in ("脸", "人物", "背景", "天空", "眼", "皮肤", "磨皮")):
         note += " 本地规则不识别目标，只按当前图层已有选区调整。"
     return Recipe.from_dict(data), note
 
 
 def validate_export_target(source: Source, target: str | Path) -> Path:
-    target = Path(target).resolve()
-    if target == source.path or (
-        target.exists() and os.path.samefile(target, source.path)
+    return validate_export_destination(source.path, target)
+
+
+def validate_export_destination(source_path: str | Path, target: str | Path) -> Path:
+    """Shared UI preflight and worker gate for an export destination."""
+    target = Path(target)
+    if not target.is_absolute():
+        raise ValueError("请填写完整路径，或点击浏览选择导出位置")
+    target = target.resolve()
+    source_path = Path(source_path).resolve()
+    if target == source_path or (
+        target.exists() and os.path.samefile(target, source_path)
     ):
         raise ValueError("请另存为新文件，不能覆盖原图")
     if target.suffix.lower() not in {".jpg", ".jpeg", ".png"}:

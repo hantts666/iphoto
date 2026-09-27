@@ -2,11 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
+import "../components/selection"
 
 ColumnLayout {
+    id: regionRoot
     required property var workspace
     required property var editor
- visible: editor.hasRegionDraft; Layout.fillWidth: true; spacing: 10
+    visible: workspace.regionModal; Layout.fillWidth: true; spacing: 10
     Text { text: "AI 分区方案"; color: workspace.ink; font.bold: true; font.pixelSize: 15 }
     Caption { text: editor.regionSummary; wrapMode: Text.Wrap; Layout.fillWidth: true }
     Caption { text: "画布预览包含勾选区域的调整。点击区域查看蒙版；确认前原图层保持不变。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -22,8 +24,7 @@ ColumnLayout {
             }
         }
     }
-    Action { text: "优化当前区域边缘"; enabled: !editor.busy; Layout.fillWidth: true; onClicked: editor.refineSelection("grabcut") }
-    Action { text: "细化当前区域透明边缘"; enabled: !editor.busy && editor.matteAvailable; Layout.fillWidth: true; onClicked: editor.refineMatte(8) }
-    Action { text: "取消边缘细化"; visible: editor.matteBusy; onClicked: editor.cancelMatte() }
-    Caption { text: "创建图层后，可单独载入每层蒙版继续补选或擦除。"; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.bottomMargin: 12 }
+    TaskStatusBar { editor: regionRoot.editor; prefix: "region" }
+    RefineControls { workspace: regionRoot.workspace; editor: regionRoot.editor; regionMode: true; prefix: "region" }
+    Caption { text: "细化作用于当前选中的区域。创建图层后，可单独载入每层蒙版继续补选或擦除。"; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.bottomMargin: 12 }
 }

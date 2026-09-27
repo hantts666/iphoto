@@ -30,6 +30,7 @@ from iphoto.scene import (
 )
 from iphoto.workspace import Editor
 from iphoto.plugins import refine, bitmap_mask
+from iphoto.controllers import pixel_selections
 from test_ai import wait_for, mock_api, configure
 from test_editor import settled
 
@@ -96,7 +97,7 @@ def workspace_v14(qt_app, ai_store, tmp_path):
     editor.close()
 
 
-def test_flat_qwen_coordinates_are_unambiguous_and_strict():
+def test_flat_qwen_coordinates_clamp_edge_sentinels_and_reject_scale_errors():
     data = {
         "status": "selected",
         "summary": "三角形",
@@ -104,10 +105,16 @@ def test_flat_qwen_coordinates_are_unambiguous_and_strict():
     }
     mask = parse_selection(response(data))["mask"]
     assert mask["ops"][0]["points"] == [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
+    clamped = parse_selection(
+        response({**data, "polygons": [[0, -1, 600, 400, 999, 1000]]})
+    )["mask"]
+    pts = clamped["ops"][0]["points"]
+    assert pts[0] == [0.0, 0.0] and pts[2] == [1.0, 1.0]
+    assert pts[1][0] == pytest.approx(600 / 999) and pts[1][1] == pytest.approx(400 / 999)
     for bad in (
         [0, 0, 999, 0, 999],
         [0, False, 999, 0, 999, 999],
-        [0, 0, 1000, 0, 999, 999],
+        [0, 0, 2000, 0, 999, 999],
         [0, 0, float("nan"), 0, 999, 999],
     ):
         with pytest.raises(ValueError):
@@ -445,3 +452,33 @@ def test_editor_scene_analysis_targets_combination_and_failure_preserve_layers(
     e.finishGesture()
     wait_for(lambda: not e.busy and settled(e))
     assert e.maskUrl == url  # overlay file reused while only recipe changes
+
+
+def test_scene_analysis_prewarms_without_hiding_ai_progress(workspace_v14, monkeypatch):
+    editor = workspace_v14
+    requests = []
+    original_request = Editor._request
+    monkeypatch.setattr(pixel_selections, "available", lambda: True)
+    monkeypatch.setattr(
+        Editor, "_start_warm", lambda self: requests.append((self._ai.busy, self._sha))
+    )
+
+    def request(self, op, **data):
+        if op == "segment":
+            requests.append((self._ai.busy, data))
+        else:
+            original_request(self, op, **data)
+
+    monkeypatch.setattr(Editor, "_request", request)
+    with mock_api(scene_response()) as (url, _):
+        configure(editor.ai, url)
+        editor.analyzeScene(True)
+        assert requests and requests[0][0] is False
+        assert requests[0][1] == editor._sha
+        assert editor.ai.busy and editor.status.startswith("AI 正在建立画面元素清单")
+        wait_for(lambda: not editor.ai.busy and len(editor.sceneObjects) == 3)
+        assert editor.status == "元素清单已建立，可在画布点选或勾选元素"
+        assert any(
+            isinstance(data, dict) and data["context"]["purpose"] == "precache"
+            for _, data in requests[1:]
+        )

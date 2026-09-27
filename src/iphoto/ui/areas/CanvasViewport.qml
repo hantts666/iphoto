@@ -8,11 +8,21 @@ Rectangle {
     objectName: "canvasViewport"
     required property var workspace
     required property var editor
+    readonly property var selection: editor.selection
     property bool holdingOriginal: false
     property bool showNavigator: true
     property bool wheelZoom: false
     readonly property var navigation: editor.viewport
     readonly property bool previewReady: afterImage.status === Image.Ready
+    readonly property bool detailReady: detailImage.visible && detailImage.status === Image.Ready
+    readonly property bool maskDetailReady: detailMaskImage.visible && detailMaskImage.status === Image.Ready
+    readonly property bool maskDetailCoversViewport: {
+        var tile = editor.detailRect, view = navigation.visibleRect
+        return editor.detailMaskUrl.length > 0 && detailMaskImage.status === Image.Ready
+            && tile[0] <= view[0] && tile[1] <= view[1]
+            && tile[0] + tile[2] >= view[0] + view[2]
+            && tile[1] + tile[3] >= view[1] + view[3]
+    }
     readonly property bool selectionPreviewReady: editor.maskUrl.length > 0 && maskImage.status === Image.Ready
     readonly property bool selectionTool: !["inspect", "hand", "zoom"].includes(workspace.selectionTool)
     color: "#191c20"; clip: true
@@ -20,6 +30,9 @@ Rectangle {
     function updateSize() { navigation.resize(surface.width, surface.height, root.Screen.devicePixelRatio) }
     Component.onCompleted: { navigation.attachWindow(workspace); updateSize() }
     Screen.onDevicePixelRatioChanged: updateSize()
+    Timer { id: detailTimer; interval: 180; repeat: false; onTriggered: editor.requestDetail() }
+    Connections { target: editor; function onChanged() { detailTimer.restart() } }
+    Connections { target: root.selection; function onChanged() { detailTimer.restart() } }
 
     Item {
         id: surface
@@ -51,12 +64,31 @@ Rectangle {
             width: root.navigation.imageWidth; height: root.navigation.imageHeight
             focus: true
             Image { id: afterImage; anchors.fill: parent; source: root.holdingOriginal ? editor.originalUrl : editor.previewUrl; cache: false; asynchronous: true; fillMode: Image.Stretch }
+            Image {
+                id: detailImage; objectName: "detailImage"
+                x: editor.detailRect[0] * photo.width; y: editor.detailRect[1] * photo.height
+                width: editor.detailRect[2] * photo.width; height: editor.detailRect[3] * photo.height
+                source: editor.detailUrl; cache: false; asynchronous: true; fillMode: Image.Stretch
+                visible: editor.detailUrl.length > 0 && !root.holdingOriginal
+            }
             Item {
                 visible: workspace.compare && !root.holdingOriginal
                 width: photo.width*workspace.split; height: photo.height; clip: true
                 Image { width: photo.width; height: photo.height; source: editor.originalUrl; fillMode: Image.Stretch }
             }
-            Image { id: maskImage; anchors.fill: parent; source: editor.maskUrl; visible: workspace.showMask && !root.holdingOriginal && !workspace.compare; cache: false; asynchronous: true; fillMode: Image.Stretch }
+            Image {
+                id: maskImage; anchors.fill: parent; source: editor.maskUrl
+                visible: workspace.showMask && !root.holdingOriginal && !workspace.compare && !root.maskDetailCoversViewport
+                cache: false; asynchronous: true; fillMode: Image.Stretch
+            }
+            Image {
+                id: detailMaskImage; objectName: "detailMaskImage"
+                x: editor.detailRect[0] * photo.width; y: editor.detailRect[1] * photo.height
+                width: editor.detailRect[2] * photo.width; height: editor.detailRect[3] * photo.height
+                source: editor.detailMaskUrl; cache: false; asynchronous: true; fillMode: Image.Stretch
+                visible: workspace.showMask && !root.holdingOriginal && !workspace.compare
+                         && detailImage.visible && root.maskDetailCoversViewport
+            }
             MouseArea {
                 id: selectionMouse
                 objectName: "selectionMouse"
@@ -78,7 +110,7 @@ Rectangle {
                     if (workspace.selectionTool === "object") { overlays.hoverId=editor.objectAt(mouse.x/width,mouse.y/height); return }
                     if (workspace.selectionTool === "smart") return
                     if (pressed && points.length) {
-                        if (workspace.selectionTool === "brush" || workspace.selectionTool === "polygon") appendPoint(point(mouse))
+                        if (workspace.selectionTool === "brush" || workspace.selectionTool === "polygon" || workspace.selectionTool === "heal") appendPoint(point(mouse))
                         else points = [points[0],point(mouse)]
                         overlays.repaint()
                     }
@@ -88,6 +120,7 @@ Rectangle {
                     if (workspace.selectionTool === "smart") editor.pixelPoint(point(mouse), !(mouse.modifiers & Qt.AltModifier))
                     else if (workspace.selectionTool === "object") editor.clickObject(point(mouse),strokeMode)
                     else if (workspace.selectionTool === "wand") editor.wandSelection(point(mouse),workspace.tolerance,strokeMode)
+                    else if (workspace.selectionTool === "heal") { appendPoint(point(mouse)); editor.drawHeal(points,workspace.brushRadius) }
                     else {
                         if (workspace.selectionTool === "brush" || workspace.selectionTool === "polygon") appendPoint(point(mouse))
                         else points = [points[0],point(mouse)]
@@ -114,7 +147,7 @@ Rectangle {
             objectName: "navigationMouse"
             anchors.fill: parent
             enabled: editor.hasImage && !workspace.modalActive
-            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
             preventStealing: true
             property string gesture: ""
             property real lastX: 0
@@ -128,6 +161,7 @@ Rectangle {
             readonly property bool handTool: root.navigation.spaceHeld || ["hand","inspect"].includes(workspace.selectionTool)
             cursorShape: gesture === "pan" ? Qt.ClosedHandCursor : zoomTool ? Qt.CrossCursor : handTool ? Qt.OpenHandCursor : workspace.selectionTool === "object" ? Qt.PointingHandCursor : Qt.CrossCursor
             onPressed: function(mouse) {
+                if (mouse.button === Qt.RightButton) { canvasMenu.popup(); mouse.accepted = true; return }
                 if (mouse.button === Qt.MiddleButton) gesture = "pan"
                 else if (zoomTool) gesture = "zoom"
                 else if (handTool && !workspace.compare || root.navigation.spaceHeld || workspace.selectionTool === "hand") gesture = "pan"
@@ -177,9 +211,22 @@ Rectangle {
     }
     Connections {
         target: root.navigation
-        function onChanged() { checker.requestPaint(); if (selectionMouse.pressed) selectionMouse.clearStroke() }
+        function onChanged() { checker.requestPaint(); detailTimer.restart(); if (selectionMouse.pressed) selectionMouse.clearStroke() }
         function onKeysChanged() { if (root.navigation.spaceHeld) selectionMouse.clearStroke(); overlays.repaint() }
         function onCancelGesture() { navigationMouse.gesture = ""; selectionMouse.clearStroke() }
+    }
+    Menu {
+        id: canvasMenu
+        MenuItem { objectName: "canvasMenuAll"; text: "全选  Ctrl+A"; enabled: editor.hasImage && !editor.busy; onTriggered: editor.draftAction("all") }
+        MenuItem { objectName: "canvasMenuInvert"; text: "反选  Ctrl+Shift+I"; enabled: editor.hasSelectionDraft && !editor.busy; onTriggered: editor.draftAction("invert") }
+        MenuItem { objectName: "canvasMenuClear"; text: "清空范围"; enabled: editor.hasSelectionDraft && !editor.busy; onTriggered: editor.draftAction("clear") }
+        MenuItem { objectName: "canvasMenuDiscard"; text: "取消选区  Ctrl+D"; enabled: editor.hasSelectionDraft && !editor.busy; onTriggered: editor.selection.discard() }
+        MenuSeparator {}
+        MenuItem { objectName: "canvasMenuMask"; text: root.workspace.showMask ? "隐藏蒙版  Q" : "显示蒙版  Q"; enabled: editor.hasImage; onTriggered: root.selection.toggleShowMask() }
+        MenuItem { objectName: "canvasMenuCompare"; text: root.workspace.compare ? "结束对比" : "原图对比"; enabled: editor.hasImage; onTriggered: { root.workspace.compare = !root.workspace.compare; if (root.workspace.compare) root.selection.chooseTool("inspect") } }
+        MenuSeparator {}
+        MenuItem { objectName: "canvasMenuFit"; text: "适应画布  Ctrl+0"; enabled: editor.hasImage; onTriggered: root.navigation.fit() }
+        MenuItem { objectName: "canvasMenu100"; text: "原图 100%  Ctrl+1"; enabled: editor.hasImage; onTriggered: root.navigation.setZoom(1) }
     }
     Column {
         anchors.centerIn: parent; spacing: 16; visible: !editor.hasImage

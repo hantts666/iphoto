@@ -82,6 +82,22 @@ CAPABILITIES = (
         "https://github.com/xuebinqin/U-2-Net",
         "u2netp.onnx",
     ),
+    Capability(
+        "inpaint",
+        "内容感知填充 · OpenCV",
+        "用周围内容合成填充选区，用于移除对象或瑕疵；大孔洞可能留下痕迹，需分次小范围填充。",
+        "cv2",
+        "Apache-2.0",
+        "https://docs.opencv.org/4.x/d7/d05/group__photo__inpaint.html",
+    ),
+    Capability(
+        "raw",
+        "RAW 解码 · rawpy",
+        "解码相机 RAW（CR2/CR3/NEF/ARW/DNG/RAF 等）为 sRGB 后进入同一修图管线；使用相机白平衡。",
+        "rawpy",
+        "MIT",
+        "https://github.com/letmaier/rawpy",
+    ),
 )
 
 

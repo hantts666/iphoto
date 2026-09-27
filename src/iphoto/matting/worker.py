@@ -1,0 +1,46 @@
+"""One-shot source-resolution alpha matting outside the main edit worker."""
+
+import json
+from pathlib import Path
+import sys
+
+from ..document import validate_mask
+from ..engine import load_source
+from .service import refine_alpha
+
+
+def main():
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    line = sys.stdin.readline()
+    if not line:
+        return
+    request = {}
+    try:
+        if len(line) > 24 * 1024 * 1024:
+            raise ValueError("边缘细化请求过大")
+        request = json.loads(line)
+        if request.get("op") != "matte":
+            raise ValueError("未知边缘细化操作")
+        source = load_source(Path(request["source_path"]))
+        if source.digest != request["source_sha"]:
+            raise ValueError("源照片已变化，原选区保持不变")
+        mask, quality = refine_alpha(
+            source.image, validate_mask(request["mask"]), request["radius"]
+        )
+        response = {
+            "id": request["id"], "op": "matte",
+            "generation": request["generation"], "ok": True,
+            "result": {"mask": mask, "quality": quality},
+        }
+    except Exception as exc:
+        response = {
+            "id": request.get("id", -1), "op": "matte",
+            "generation": request.get("generation", 0),
+            "ok": False, "error": str(exc)[:1000],
+        }
+    print(json.dumps(response, ensure_ascii=False), flush=True)
+
+
+if __name__ == "__main__":
+    main()

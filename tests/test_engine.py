@@ -33,6 +33,25 @@ def test_zero_recipe_preserves_pixels_and_alpha():
     assert np.array_equal(np.asarray(adjusted)[:, :, 3], np.asarray(image)[:, :, 3])
 
 
+def test_skin_smoothing_reduces_texture_and_keeps_strong_boundary():
+    rng = np.random.default_rng(17)
+    base = np.zeros((96, 128, 3), dtype=np.int16)
+    base[:, :64] = (176, 126, 105)
+    base[:, 64:] = (36, 42, 48)
+    noisy = np.clip(base + rng.integers(-18, 19, base.shape), 0, 255).astype(np.uint8)
+    image = Image.fromarray(noisy)
+    output = np.asarray(render(image, Recipe(skin_smoothing=80)))
+    assert output[:, 12:52, 0].var() < noisy[:, 12:52, 0].var() * .7
+    assert output[:, 62, 0].mean() - output[:, 65, 0].mean() > 100
+    assert np.array_equal(np.asarray(render(image, Recipe())), noisy)
+
+
+def test_local_skin_smoothing_recipe_is_available_to_ai_parameter_path():
+    recipe, note = interpret_local("给当前选区轻微磨皮", Recipe())
+    assert recipe.skin_smoothing == 35
+    assert "当前图层" in note
+
+
 def test_exposure_is_linear_light_not_gamma_multiplication():
     image = Image.new("RGB", (10, 10), (80, 80, 80))
     value = render(image, Recipe(exposure=1)).getpixel((0, 0))[0]

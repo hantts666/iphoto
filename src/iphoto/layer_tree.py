@@ -69,6 +69,9 @@ def display_rows(layers):
                     "depth": depth,
                     "effectiveVisible": effective,
                     "mask": {"label": layer["mask"]["label"]},
+                    # Production mask edits replace the dict. Carry its identity
+                    # so the layer list can refresh thumbnails only on mask edits.
+                    "maskToken": id(layer["mask"]),
                     "childCount": len(node["children"]),
                 }
             )

@@ -27,7 +27,7 @@ def test_layer_selection_does_not_destroy_redo(workspace):
     e = workspace
     original = e.activeLayerId
     e.addLayer()
-    e.selectionAction("all")
+    e.beginSelection("empty"); e.draftAction("all"); e.acceptSelection()
     e.setParameter("exposure",.5); e.finishGesture()
     e.undo()
     assert e.canRedo
@@ -150,12 +150,14 @@ def test_old_advice_does_not_overwrite_changed_selection(workspace):
         e.sendMessage("先给我建议", "advice")
         wait_for(lambda: not e.busy)
     suggestion = e.conversation[-1]["id"]
-    e.selectionAction("invert")
-    e.drawSelection("rect","add",[[.1,.1],[.5,.5]],.02)
+    e.beginSelection("empty"); e.draftAction("invert")
+    e.drawDraft("rect","add",[[.1,.1],[.5,.5]],.02)
+    e.acceptSelection()
     before = deepcopy(e._layers)
     e.applyAdvice(suggestion)
     assert e._layers == before
-    assert e.conversation[-1]["state"] == "stale"
+    advice = next(m for m in e.conversation if m["id"] == suggestion)
+    assert advice["state"] == "stale"
     assert "重新获取建议" in e.status
 
 
@@ -168,12 +170,14 @@ def test_selection_navigation_reuses_composite_but_not_mask(workspace):
     e.addLayer(); wait_for(lambda: settled(e))
     assert e.previewUrl == composite
     urls = set()
+    e.beginSelection("empty")
     for i in range(10):
-        e.drawSelection("ellipse","add",[[.05*i,.1],[.05*i+.1,.5]],.02)
+        e.drawDraft("ellipse","add",[[.05*i,.1],[.05*i+.1,.5]],.02)
         wait_for(lambda: settled(e))
         urls.add(e.maskUrl)
         assert e.previewUrl == composite
     assert len(urls) == 10
+    e.acceptSelection(); wait_for(lambda: settled(e))
     from PySide6.QtCore import QUrl
     assert Path(QUrl(composite).toLocalFile()).exists()  # cache cleanup must retain live preview
     e.selectLayer(original_layer); wait_for(lambda: settled(e))
@@ -200,14 +204,16 @@ def test_combined_color_tools_match_float_reference(values):
     assert np.percentile(delta,99.9) <= 1
 
 
-def test_worker_exit_preserves_save_and_does_not_leave_busy(workspace, tmp_path):
+def test_worker_exit_preserves_save_and_independent_export(workspace, tmp_path):
     from PySide6.QtCore import QProcess
     e = workspace
     e.setParameter("exposure",.5); e.finishGesture()
     wait_for(lambda: settled(e))
     e.process.kill()
     wait_for(lambda: e.process.state() == QProcess.NotRunning and not e.busy)
-    e.exportImage(str(tmp_path / "unavailable.png"))
+    output = tmp_path / "independent.png"
+    assert e.exportImage(str(output))
+    wait_for(lambda: settled(e) and output.exists())
     assert not e.busy and not e._queue
     project = tmp_path / "safe.iphoto"
     e.saveProject(str(project))

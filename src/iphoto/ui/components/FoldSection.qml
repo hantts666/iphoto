@@ -14,7 +14,7 @@ GroupBox {
     label: Action {
         objectName: root.objectName.length ? root.objectName + "Toggle" : ""
         width: root.width; implicitHeight: 30
-        text: (root.expanded ? "▾  " : "▸  ") + root.title
+        text: (root.expanded ? "-  " : "+  ") + root.title
         subtle: true; font.bold: true
         hint: root.expanded ? "收起这一组，不改变设置" : "展开这一组"
         onClicked: root.expanded = !root.expanded

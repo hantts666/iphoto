@@ -98,7 +98,7 @@ def test_reject_invalid_region_plans_without_partial_result(mutation):
     plan=json.loads(data["choices"][0]["message"]["content"])
     if mutation=="too_many": plan["regions"]*=3
     if mutation=="missing": del plan["regions"][1]["recipe"]["exposure"]
-    if mutation=="invalid": plan["regions"][0]["polygons"][0][0][0]=1001
+    if mutation=="invalid": plan["regions"][0]["polygons"][0][0][0]=5000
     if mutation=="truncated": data["choices"][0]["finish_reason"]="length"
     if mutation=="unsupported_regions": plan["status"]="unsupported"
     data["choices"][0]["message"]["content"]=json.dumps(plan)

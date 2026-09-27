@@ -286,7 +286,7 @@ def test_zoom_tool_scrub_double_click_comparison_and_bounded_overlay(canvas):
     ui.key(Qt.Key_1, Qt.ControlModifier)
     n.centerOn(0.5, 0.5)
     ui.w.setProperty("compare", True)
-    ui.w.setProperty("selectionTool", "inspect")
+    ui.e.selection.chooseTool("inspect")
     handle = ui.point("compareHandle")
     ui.drag(handle, handle + QPoint(50, 0))
     assert ui.w.property("split") > 0.5
@@ -313,6 +313,32 @@ def test_zoom_tool_scrub_double_click_comparison_and_bounded_overlay(canvas):
     n.centerOn(0.55, 0.48)
     QTest.qWait(250)
     assert ui.w.grabWindow().save(str(ROOT / f"artifacts/canvas-v141-{ui.size[0]}.png"))
+
+
+def test_draft_output_jumps_to_edge_refinement(canvas):
+    ui = canvas
+    ui.e.beginSelection("empty")
+    wait_for(lambda: ui.e.hasSelectionDraft and settled(ui.e))
+    QTest.qWait(80)
+    scroll = ui.find("propertyScroll")
+    edge = ui.find("edgeRefineCard")
+    flick = scroll.property("contentItem")
+    top_before = edge.mapToItem(scroll, QPointF()).y()
+    matte = ui.find("refineMatteButton")
+    matte_before = matte.mapToItem(scroll, QPointF()).y()
+    scroll_before = flick.property("contentY")
+    if ui.size[0] == 1080:
+        assert matte_before + matte.height() / 2 >= scroll.height()
+    assert edge.property("visible")
+    assert ui.find("jumpToRefineButton").property("visible")
+    ui.click("jumpToRefineButton")
+    top_after = edge.mapToItem(scroll, QPointF()).y()
+    assert flick.property("contentY") >= scroll_before
+    assert top_after < top_before
+    assert 0 <= top_after < scroll.height() * 0.5
+    assert 0 <= matte.mapToItem(scroll, QPointF()).y() < scroll.height()
+    if ui.size[0] == 1080:
+        assert ui.w.grabWindow().save(str(ROOT / "artifacts/refine-shortcut-1080.png"))
 
 
 def math_exp(value):

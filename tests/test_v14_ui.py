@@ -89,15 +89,15 @@ def test_object_hover_click_combine_and_nested_group_controls(
         editor.clearObjectChecks()
         click("checkCategoryButton")
         assert editor.checkedObjectCount == 2
-        click("combineObjectsButton")
+        click("adjustCheckedObjectsButton")
         wait_for(idle)
-        assert raster_mask(editor._candidate, (200, 140)).getpixel((40, 40)) == 255
+        assert not editor.hasSelectionDraft
+        assert editor.selection.pickedLayerId == editor.activeLayerId
+        assert raster_mask(editor._layers[-1]["mask"], (200, 140)).getpixel((40, 40)) == 255
         QTest.qWait(400)
         folder = ROOT / "artifacts"
         folder.mkdir(exist_ok=True)
         assert window.grabWindow().save(str(folder / f"v14-objects-mock-{size[0]}.png"))
-        click("selectionToLayerButton")
-        wait_for(idle)
         assert len(editor._layers) == 2
         click("groupLayerButton")
         wait_for(idle)
@@ -110,7 +110,12 @@ def test_object_hover_click_combine_and_nested_group_controls(
         assert max(row["depth"] for row in editor.layers) == 2
         QTest.qWait(200)
         assert window.grabWindow().save(str(folder / f"v14-groups-mock-{size[0]}.png"))
-        click("moveOutGroupButton")
+        rows = editor.layers
+        idx = next(i for i, r in enumerate(rows) if r["id"] == editor.activeLayerId)
+        lp = find("layerList").mapToScene(QPointF(60, idx * 43 + 20)).toPoint()
+        QTest.mouseClick(window, Qt.RightButton, Qt.NoModifier, lp)
+        QTest.qWait(150)
+        click("layerMenuUngroup")
         wait_for(idle)
         assert not editor.activeParentId
         # Typing a Photoshop shortcut in a rename field must not create a group.
@@ -119,7 +124,8 @@ def test_object_hover_click_combine_and_nested_group_controls(
         QTest.keyClick(window, Qt.Key_G, Qt.ControlModifier)
         assert len(editor._layers) == count
         editor.selectLayer(editor._layers[0]["id"])
-        click("selectionTab")
+        editor.selection.clearPick()
+        QTest.qWait(90)
         field = find("selectionDescriptionInput")
         field.setProperty("text", "两个方块")
         with mock_api(target_response()) as (url, _):

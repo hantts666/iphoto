@@ -47,6 +47,7 @@ def pixel_protocol_stub(monkeypatch):
 
     original = Editor._request
     monkeypatch.setattr(pixel_selections, "available", lambda: True)
+    monkeypatch.setattr(pixel_selections, "warm", lambda _: None)
 
     def request(self, op, **data):
         if op != "segment":

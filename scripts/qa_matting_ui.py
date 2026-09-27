@@ -104,7 +104,6 @@ def main():
         original = deepcopy(e._layers)
         e.beginSelection("current")
         wait(idle)
-        w.setProperty("inspectorPage", 1)
         QTest.qWait(150)
         started = monotonic()
         click("refineMatteButton")

@@ -1,6 +1,7 @@
 """Objects actions. ``self`` is the owning Editor, passed explicitly."""
 
 from ..scene import combine_masks
+from ..document import MAX_LAYERS
 from . import pixel_selections
 
 
@@ -18,7 +19,15 @@ def analyzeScene(self, refresh=False):
         return
     if not refresh and self._scene.restore(self._scene_key()):
         self.changed.emit()
+        # Restored catalogs skip the cloud scene response, so precache must be
+        # kicked here or hover previews stay as boxes forever.
+        pixel_selections.precache(self, [o["id"] for o in self.sceneObjects])
         return self._notify("已载入这张照片的元素清单，无需再次调用 AI")
+    # The cloud scene request and local photo encoding use different resources.
+    # Start the low-priority encode while the cloud request is in flight so
+    # object previews can reuse its embedding when the catalog arrives.
+    if self._ai.ready:
+        pixel_selections.warm(self)
     self.sendMessage(
         "分析画面中的主要可见元素，包含可见的天空、前景和背景，按类别列出可以独立选择的对象。",
         "scene",
@@ -98,6 +107,22 @@ def combineObjects(self, mode):
         return self._notify("请先新建选区，再添加、减去或相交")
     try:
         pixel_selections.select_objects(self, self._scene.selected, mode)
+    except ValueError as exc:
+        self._notify(str(exc), True)
+
+
+def adjustCheckedObjects(self):
+    """One user action: resolve checked objects and open their adjustment layer."""
+    if self.busy or self.hasRegionDraft or not self.hasImage:
+        return
+    if not self._scene.selected:
+        return self._notify("请先勾选要调整的对象")
+    if len(self._layers) >= MAX_LAYERS:
+        return self._notify("图层与组最多 32 项", True)
+    try:
+        pixel_selections.select_objects(
+            self, self._scene.selected, "replace", auto_apply=True
+        )
     except ValueError as exc:
         self._notify(str(exc), True)
 

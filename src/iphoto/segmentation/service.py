@@ -61,6 +61,32 @@ def choose_candidate(logits, scores, coords, labels, hint=None):
     }
 
 
+def warm(image):
+    """Pre-encode the embedding cache so the first real click is fast."""
+    proxy = image.convert("RGB")
+    proxy.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+    return backend().warm(proxy)
+
+
+def segment_jobs(image, jobs, *, tolerant=False):
+    """Run bounded pixel jobs with the same validation in either worker."""
+    if not isinstance(jobs, list) or len(jobs) > 16:
+        raise ValueError("一次最多分割 16 个对象")
+    if not jobs:
+        warm(image)
+        return {"items": []}
+    items = []
+    for job in jobs:
+        try:
+            mask, quality = segment(image, job.get("hint"), job.get("points"))
+        except ValueError:
+            if not tolerant:
+                raise
+            continue
+        items.append({"id": job["id"], "mask": mask, "quality": quality})
+    return {"items": items}
+
+
 def segment(image, hint=None, points=None, *, engine=None, soften=True):
     started = perf_counter()
     points = validate_points(points or [])

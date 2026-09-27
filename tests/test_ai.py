@@ -157,11 +157,24 @@ def test_plan_validation_manual_lock_and_unsupported():
     current = Recipe(exposure=.7).to_dict()
     assert parse_plan(completion(), current, ["exposure"])["recipe"]["exposure"] == .7
     assert parse_plan(completion(status="unsupported"), current, [])["recipe"] == current
-    for invalid in ({"extra": 1}, {**Recipe().to_dict(), "warmth": 900}, {**Recipe().to_dict(), "exposure": True}, {**Recipe().to_dict(), "contrast": float("nan")}):
+    for invalid in ({"extra": 1}, {**Recipe().to_dict(), "exposure": True}, {**Recipe().to_dict(), "contrast": float("nan")}):
         with pytest.raises(ValueError): parse_plan(completion(invalid), current, [])
+    clamped = parse_plan(completion({**Recipe().to_dict(), "warmth": 900}), current, [])["recipe"]["warmth"]
+    assert clamped != 900  # Out-of-range but finite values are clamped, not rejected.
     broken = completion(); broken["choices"][0]["finish_reason"] = "length"
     with pytest.raises(ValueError): parse_plan(broken, current, [])
     with pytest.raises(ValueError): parse_plan({"unexpected": "HTML instead of JSON"}, current, [])
+
+
+def test_ai_recipes_expose_skin_smoothing_for_single_and_region_edits():
+    from iphoto.ai_protocol import RECIPE_SCHEMA
+    from iphoto.ai_tasks import REGION_SCHEMA
+
+    assert "skin_smoothing" in RECIPE_SCHEMA["properties"]["recipe"]["required"]
+    region_recipe = REGION_SCHEMA["properties"]["regions"]["items"]["properties"]["recipe"]
+    assert "skin_smoothing" in region_recipe["required"]
+    proposal = completion({**Recipe().to_dict(), "skin_smoothing": 42})
+    assert parse_plan(proposal, Recipe().to_dict(), [])["recipe"]["skin_smoothing"] == 42
 
 
 def test_connection_probe_save_and_real_editor_cloud_undo_export(qt_app, ai_store, tmp_path):

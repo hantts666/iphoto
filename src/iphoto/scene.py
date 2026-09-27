@@ -152,7 +152,12 @@ def parse_scene(data):
                 "box",
                 "point",
             }:
-                polygon, anchor = box_hint(obj["box"], obj["point"])
+                try:
+                    polygon, anchor = box_hint(obj["box"], obj["point"])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"元素定位坐标越界（{exc}），本次清单未建立；请重试或改用对话直选"
+                    ) from None
                 obj = {
                     "name": obj["name"],
                     "category": obj["category"],
@@ -277,15 +282,19 @@ class SceneIndex:
 
     def __init__(self):
         self.catalog = None
+        self.revision = 0
         self.precise = {}
+        self.pixel_status = {}
         self._hover = {}
         self.selected = set()
         self._hits = []
         self._cache = OrderedDict()
 
     def set(self, catalog):
+        self.revision += 1
         self.catalog = validate_catalog(catalog)
         self.precise = {}
+        self.pixel_status = {}
         self._hover = {}
         self.selected.clear()
         self._hits = []
@@ -293,7 +302,19 @@ class SceneIndex:
             mask = raster_mask(obj["mask"], (384, 384))
             area = sum(mask.histogram()[1:])
             self._hits.append((area, obj["id"], mask))
+            # Hover previews exist for every catalog object, not only after
+            # pixel refinement; otherwise row hover shows nothing useful.
+            self._hover[obj["id"]] = self._preview_url(mask)
         self._hits.sort(key=lambda row: row[0])
+
+    def _preview_url(self, mask384):
+        color = Image.new("RGBA", mask384.size, (92, 226, 170))
+        color.putalpha(mask384.point(lambda v: round(v * 0.45)))
+        output = BytesIO()
+        color.save(output, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode(
+            "ascii"
+        )
 
     def set_precise(self, lid, mask, quality):
         if lid not in {o["id"] for o in (self.catalog or {}).get("objects", [])}:
@@ -302,17 +323,20 @@ class SceneIndex:
         if "bitmap" not in mask:
             raise ValueError("像素分割器必须返回位图蒙版")
         self.precise[lid] = {"mask": mask, "quality": quality}
+        self.pixel_status[lid] = "ready"
         alpha = raster_mask(mask, (384, 384))
         self._hits = [row for row in self._hits if row[1] != lid]
         self._hits.append((sum(alpha.histogram()[1:]), lid, alpha))
         self._hits.sort(key=lambda row: row[0])
-        color = Image.new("RGBA", alpha.size, (92, 226, 170))
-        color.putalpha(alpha.point(lambda v: round(v * 0.45)))
-        output = BytesIO()
-        color.save(output, format="PNG")
-        self._hover[lid] = "data:image/png;base64," + base64.b64encode(
-            output.getvalue()
-        ).decode("ascii")
+        self._hover[lid] = self._preview_url(alpha)
+
+    def mark_pixel_status(self, ids, status):
+        if status not in ("pending", "unavailable"):
+            raise ValueError("未知元素轮廓状态")
+        valid = {o["id"] for o in (self.catalog or {}).get("objects", [])}
+        for lid in ids:
+            if lid in valid and lid not in self.precise:
+                self.pixel_status[lid] = status
 
     def remember(self, key):
         self._cache[key] = deepcopy(self.catalog)
@@ -342,6 +366,7 @@ class SceneIndex:
                 "checked": o["id"] in self.selected,
                 "polygons": [op["points"] for op in o["mask"]["ops"]],
                 "pixelReady": o["id"] in self.precise,
+                "pixelStatus": self.pixel_status.get(o["id"], "idle"),
                 "maskPreview": self._hover.get(o["id"], ""),
             }
             for o in (self.catalog or {}).get("objects", [])

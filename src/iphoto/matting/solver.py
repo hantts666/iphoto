@@ -23,12 +23,16 @@ def _enable_numba_cache():
 _enable_numba_cache()
 
 
-def solve_alpha(image, trimap, *, tile_size=256):
+def solve_alpha(image, trimap, *, tile_size=256, byte_output=False):
     # Lazy import in the image worker only. Avoid a CPU-wide parallel pool.
     os.environ.setdefault("NUMBA_NUM_THREADS", "4")
     from pymatting import estimate_alpha_cf, ichol
 
-    alpha = trimap.copy()
+    if byte_output:
+        alpha = np.zeros(trimap.shape, dtype=np.uint8)
+        alpha[trimap == 1] = 255
+    else:
+        alpha = trimap.copy()
     h, w = trimap.shape
     started = perf_counter()
     tiles = 0
@@ -66,9 +70,21 @@ def solve_alpha(image, trimap, *, tile_size=256):
             if not np.isfinite(matte).all():
                 raise ValueError("透明度求解失败，原选区保留")
             core = matte[y - top : y1 - top, x - left : x1 - left]
-            alpha[y:y1, x:x1][unknown] = core[unknown]
+            target = alpha[y:y1, x:x1]
+            if byte_output:
+                # Match the historical float32-to-byte rounding while storing
+                # only one byte per output pixel for a full-resolution matte.
+                values = np.asarray(core[unknown], dtype=np.float32)
+                np.clip(values, 0, 1, out=values)
+                np.multiply(values, 255, out=values)
+                np.rint(values, out=values)
+                target[unknown] = values.astype(np.uint8)
+            else:
+                target[unknown] = core[unknown]
             tiles += 1
-    return np.clip(alpha, 0, 1), tiles
+    if not byte_output:
+        np.clip(alpha, 0, 1, out=alpha)
+    return alpha, tiles
 
 
 def warm():

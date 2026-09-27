@@ -24,7 +24,7 @@ def reset_prompts(self, refine=False):
     self.changed.emit()
 
 
-def start(self, jobs, context):
+def start(self, jobs, context, priority=None):
     if not ready(self):
         return False
     context.setdefault(
@@ -34,12 +34,81 @@ def start(self, jobs, context):
             or {"mode": "selection", "model": "EfficientSAM-S（本地）"}
         ),
     )
-    self._status = "正在生成像素选区…首次需编码照片，后续提示复用缓存"
-    self._request("segment", jobs=jobs, context=context)
+    points = len(context.get("points") or [])
+    if context.get("purpose") not in ("warm", "precache"):
+        if getattr(self, "_warm_sha", "") == self._sha:
+            self._status = "照片首次编码中；点选已排队，完成后会自动生成选区…"
+        else:
+            self._status = (
+                f"正在按 {points} 个提示点生成本地选区…编码已缓存时约 1～3 秒"
+                if points
+                else "正在生成像素选区…首次需编码照片，后续提示复用缓存"
+            )
+    if priority:
+        self._request("segment", jobs=jobs, context=context, priority=priority)
+    else:
+        self._request("segment", jobs=jobs, context=context)
     return True
 
 
-def select_objects(self, ids, mode="replace", exclude=None, summary=""):
+def warm(self):
+    """Pre-encode the embedding so the first point click responds in seconds."""
+    if self.busy or self._pixel_active or self._pixel_queue or not self.hasImage or not available():
+        return
+    self._start_warm()
+
+
+def precache(self, ids):
+    """Background precise masks for catalog objects: real hover previews."""
+    if not self.hasImage or not available():
+        return
+    objects = {o["id"]: o for o in (self._scene.catalog or {}).get("objects", [])}
+    revision = self._scene.revision
+    pending = {
+        job["id"]
+        for request in (
+            ([self._active] if self._active else [])
+            + ([self._pixel_active] if self._pixel_active else [])
+            + list(self._queue) + list(self._pixel_queue)
+        )
+        if request["op"] == "segment"
+        and request.get("context", {}).get("purpose") == "precache"
+        and request["context"].get("source_sha") == self._sha
+        and request["context"].get("scene_revision") == revision
+        for job in request.get("jobs", [])
+    }
+    jobs = [
+        {
+            "id": lid,
+            "hint": objects[lid]["mask"],
+            "points": [[*objects[lid]["anchor"], 1]] if "anchor" in objects[lid] else [],
+        }
+        for lid in ids
+        if lid in objects and lid not in self._scene.precise and lid not in pending
+    ][:16]
+    if not jobs:
+        return
+    self._status = "后台预计算元素蒙版…悬停元素行可查看真实轮廓"
+    self._scene.mark_pixel_status([job["id"] for job in jobs], "pending")
+    self.changed.emit()
+    # One object per request lets the pixel worker prioritize a foreground
+    # click and keeps failures limited to a small unit of work.
+    for job in jobs:
+        start(
+            self,
+            [job],
+            {
+                "purpose": "precache",
+                "source_sha": self._sha,
+                "scene_revision": revision,
+                "object_id": job["id"],
+                "status_epoch": self._status_epoch,
+            },
+            priority="low",
+        )
+
+
+def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_apply=False):
     if mode not in ("replace", "add", "subtract", "intersect"):
         return self._notify("选区组合方式无效", True)
     ids = list(dict.fromkeys(ids))
@@ -54,6 +123,7 @@ def select_objects(self, ids, mode="replace", exclude=None, summary=""):
         "mode": mode,
         "base": deepcopy(self._candidate),
         "summary": summary,
+        "auto_apply": bool(auto_apply),
         "origin": deepcopy(
             self._pending_request
             or {"mode": "selection", "model": "EfficientSAM-S（本地）"}
@@ -84,9 +154,12 @@ def select_hint(self, hint, summary="", anchor=None):
     )
 
 
-def select_regions(self, regions, summary):
+def select_regions(self, regions, summary, auto_apply=False):
     if len(self._layers) + len(regions) > MAX_LAYERS:
         return self._notify("分区方案超过图层上限，未应用", True)
+    origin = deepcopy(self._pending_request or {})
+    if auto_apply:
+        origin["layer_name"] = "局部分层"
     return start(
         self,
         [
@@ -97,7 +170,7 @@ def select_regions(self, regions, summary):
             }
             for i, r in enumerate(regions)
         ],
-        {"purpose": "regions", "regions": regions, "summary": summary},
+        {"purpose": "regions", "regions": regions, "summary": summary, "auto_apply": bool(auto_apply), "origin": origin},
     )
 
 
@@ -134,15 +207,70 @@ def undo_point(self):
 
 
 def cancel(self):
-    if self._active and self._active["op"] == "segment":
+    if getattr(self, "_pixel_active", None):
+        self._stop_pixel()
+        self._status = "已停止本次像素计算；原选区保留"
+        self.changed.emit()
+        return
+    if (
+        self._active
+        and self._active["op"] == "segment"
+        and self._active.get("priority") != "low"
+    ):
         self._active["cancelled"] = True
         self._status = "已取消接收本次选区，等待本地计算释放；原选区保留"
         self.changed.emit()
+        return
+    queued = [
+        request
+        for request in list(self._queue) + list(getattr(self, "_pixel_queue", ()))
+        if request["op"] == "segment" and request.get("priority") != "low"
+    ]
+    if queued:
+        self._queue = type(self._queue)(
+            request for request in self._queue if request not in queued
+        )
+        if hasattr(self, "_pixel_queue"):
+            self._pixel_queue = type(self._pixel_queue)(
+                request for request in self._pixel_queue if request not in queued
+            )
+        self._stop_warm()
+        self._status = "已取消等待中的像素选区；原选区保留"
+        self.changed.emit()
+
+
+def keep_points(self, points, message):
+    """A rejected click still counts: retain prompts so the next click stacks."""
+    self._pixel_points = deepcopy(points)
+    self._status = message
+    self.changed.emit()
+    self._notify(message)
 
 
 def complete(self, result, context):
     purpose = context["purpose"]
     items = {item["id"]: item for item in result["items"]}
+    if purpose == "warm":
+        # Preheating is background work. An AI request or another foreground
+        # action owns the status line and must not be hidden by this result.
+        return
+    if purpose == "precache":
+        for lid, item in items.items():
+            self._scene.set_precise(lid, item["mask"], item["quality"])
+        missing = context.get("object_id")
+        if missing and missing not in items:
+            self._scene.mark_pixel_status([missing], "unavailable")
+        states = [row["pixelStatus"] for row in self._scene.rows()]
+        status = f"元素轮廓 {states.count('ready')}/{len(states)} 已就绪"
+        if pending := states.count("pending"):
+            status += f"；{pending} 个预计算中"
+        if unavailable := states.count("unavailable"):
+            status += f"；{unavailable} 个未可靠贴边，可点击重试或手动选择"
+        if (context.get("status_epoch") == self._status_epoch
+                and self._candidate is None and not self._ai.busy):
+            self._status = status
+        self.changed.emit()
+        return
     if purpose == "objects":
         for lid, item in items.items():
             self._scene.set_precise(lid, item["mask"], item["quality"])
@@ -194,7 +322,7 @@ def complete(self, result, context):
     )
     if warnings:
         self._selection_quality += " · " + "；".join(warnings)
-    self._status = "像素选区已就绪；可用正负点修正，确认后再输出到图层"
+    self._status = "像素选区已就绪；可修正边缘或开始调整"
     self._message(
         "assistant",
         (context.get("summary", "") + "\n" if context.get("summary") else "")
@@ -208,4 +336,18 @@ def complete(self, result, context):
         origin=context.get("origin"),
     )
     self.changed.emit()
+    if context.get("auto_apply") and purpose == "regions":
+        self.selection.applyRegions()
+        if not self.hasRegionDraft:
+            self._status = "AI 已自动建立局部调整层；检查边缘时可点图层蒙版缩略图"
+            self._notify(self._status)
+            return
+    if context.get("auto_apply") and purpose == "objects":
+        self.selection.apply("new_layer")
+        if not self.hasSelectionDraft:
+            self._scene.selected.clear()
+            self._status = "已开始局部调整；右侧可调参数，点图层蒙版缩略图可修边"
+            self.changed.emit()
+            self._notify(self._status)
+            return
     self._notify("已生成像素蒙版，请检查边缘与漏选")

@@ -42,6 +42,12 @@ def test_draw_layer_ai_draft_and_advice_controls(qt_app, ai_store, tmp_path, siz
     try:
         # UI geometry is tested against the real bundled photograph, never a user image.
         editor.loadDemo(); wait_for(lambda: editor.hasImage and settled(editor))
+        if size[1] < 800:
+            assert not window.property("chatOpen")
+            canvas_height = find("canvasSurface").height()
+            click("chatToggleButton")
+            assert window.property("chatOpen")
+            assert find("canvasSurface").height() < canvas_height - 100
         click("addLayerButton")
         assert len(editor.layers)==2 and editor.selectionLabel=="全图"
         editor.renameLayer("天空练习")
@@ -57,18 +63,20 @@ def test_draw_layer_ai_draft_and_advice_controls(qt_app, ai_store, tmp_path, siz
         assert editor._candidate["ops"][0]["kind"] == "rect"
         assert editor._layer()["mask"]["base"] == "full"  # Selection is detached until output.
         wait_for(lambda: window.property("selectionPreviewReady"))
+        click("moreOutputButton")
         click("acceptSelectionButton")
         editor.setParameter("exposure",.7); editor.finishGesture()
         wait_for(lambda: settled(editor))
         with mock_api(selection_completion()) as (url,requests):
             configure(editor.ai,url)
-            editor.setAutoRefine(False)  # This case isolates cloud protocol/UI; real GrabCut is tested separately.
-            click("selectionTab")
+            editor.selection.clearPick()
+            QTest.qWait(90)
             find("descriptionInput").setProperty("text","让照片更亮")
             find("selectionDescriptionInput").setProperty("text","选出主体，生成粗选区")
             click("directSelectionButton")
             wait_for(lambda: editor.hasSelectionDraft and settled(editor))
             wait_for(lambda: window.property("selectionPreviewReady"))
+            click("moreOutputButton")
             assert find("acceptSelectionButton").property("visible")
             click("acceptSelectionButton")
             wait_for(lambda: not editor.hasSelectionDraft and settled(editor))
@@ -108,8 +116,14 @@ def test_text_undo_long_brush_and_close_failure(qt_app, ai_store, tmp_path, monk
         path = tmp_path / "photo.png"
         Image.new("RGB",(400,300),(80,110,150)).save(path)
         editor.openImage(str(path)); wait_for(lambda: editor.hasImage and settled(editor))
+        assert not window.property("chatOpen")
+        chat_toggle = find("chatToggleButton")
+        point = chat_toggle.mapToScene(QPointF(chat_toggle.width()/2, chat_toggle.height()/2)).toPoint()
+        QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
+        QTest.qWait(80)
+        assert window.property("chatOpen")
         editor.addLayer()
-        editor.selectionAction("all")
+        editor.beginSelection("empty"); editor.draftAction("all"); editor.acceptSelection()
         before = deepcopy(editor._layers)
         field = find("descriptionInput"); field.forceActiveFocus()
         for key in (Qt.Key_A,Qt.Key_B,Qt.Key_C): QTest.keyClick(window,key)
@@ -126,9 +140,9 @@ def test_text_undo_long_brush_and_close_failure(qt_app, ai_store, tmp_path, monk
         for key in (Qt.Key_N,Qt.Key_E,Qt.Key_W): QTest.keyClick(window,key)
         QTest.keyClick(window,Qt.Key_S,Qt.ControlModifier)
         from iphoto.document import read_project
-        assert read_project(project)["layers"][-1]["name"] == "new"
+        wait_for(lambda: not editor.savingProject and read_project(project)["layers"][-1]["name"] == "new")
 
-        editor.selectionAction("clear")
+        editor.beginSelection("empty"); editor.draftAction("clear"); editor.acceptSelection()
         brush=find("tool_brush")
         QTest.mouseClick(window,Qt.LeftButton,Qt.NoModifier,brush.mapToScene(QPointF(brush.width()/2,brush.height()/2)).toPoint()); QTest.qWait(100)
         assert window.property("selectionTool") == "brush"

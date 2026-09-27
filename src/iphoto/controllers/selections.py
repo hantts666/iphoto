@@ -5,10 +5,6 @@ from ..document import new_layer, empty_mask, validate_mask, raster_mask, MAX_LA
 from ..plugins import capabilities, assess
 
 
-def setAutoRefine(self, enabled):
-    self._auto_refine = enabled
-
-
 def _quality_text(mask):
     quality = assess(mask)
     return f"覆盖约 {quality['coverage']:g}%" + (
@@ -51,7 +47,7 @@ def beginSelection(self, source="empty"):
     self._set_candidate(
         deepcopy(self._layer()["mask"]) if source == "current" else empty_mask()
     )
-    self._notify("正在编辑独立选区；输出到图层后才会改变照片")
+    self._notify("已进入暂存范围：接下来的修改只影响暂存，输出到图层后才会改变照片")
 
 
 def drawDraft(self, kind, mode, points, radius):
@@ -175,6 +171,39 @@ def selectionToLayer(self):
     self._change()
 
 
+def inpaintToLayer(self):
+    if self._candidate is None or self.busy:
+        return
+    capability = next((c for c in capabilities() if c["id"] == "inpaint"), None)
+    if not capability or not capability["available"]:
+        return self._notify("内容感知填充需要 OpenCV；请在扩展 → 图像能力中查看", True)
+    if len(self._layers) >= MAX_LAYERS:
+        return self._notify("图层与组最多 32 项", True)
+    if not raster_mask(self._candidate, (256, 256)).getbbox():
+        return self._notify("选区为空，请先选中要移除的内容", True)
+    self._sync_layer()
+    layer = new_layer(f"内容感知填充 {len(self._layers)}")
+    layer["parent_id"] = self._selected if self.activeIsGroup else self.activeParentId
+    layer["mask"] = deepcopy(self._candidate)
+    layer["inpaint"] = {"method": "telea", "radius": 5}
+    self._layers.append(layer)
+    self._selected = layer["id"]
+    self._candidate = None
+    self._pixel_points, self._pixel_hint = [], None
+    self._draft_history = []
+    self._load_layer()
+    for message in reversed(self._conversation):
+        if message["state"] == "draft":
+            message["state"] = "confirmed"
+            break
+    self._message(
+        "event",
+        "已从选区创建内容感知填充层：用周围内容合成填充，原图未改变；删除该层即可还原。",
+    )
+    self._commit()
+    self._change()
+
+
 def selectRegion(self, index):
     if (
         self.busy
@@ -242,50 +271,6 @@ def discardRegions(self):
     self.changed.emit()
 
 
-def selectionAction(self, action):
-    if not self._can_edit():
-        return
-    if action in ("all", "clear"):
-        self._layer()["mask"] = empty_mask(action == "all")
-    elif action == "invert":
-        mask = self._layer()["mask"]
-        mask["inverted"] = not mask["inverted"]
-        mask["label"] = "反选 · " + mask["label"].replace("反选 · ", "")
-    else:
-        return
-    self._commit()
-    self._change()
-
-
-def setFeather(self, value):
-    if self._can_edit():
-        self._layer()["mask"]["feather"] = round(max(0, min(5, value)) / 100, 4)
-        self._change()
-
-
-def drawSelection(self, kind, mode, points, radius):
-    if not self._can_edit():
-        return
-    try:
-        mask = deepcopy(self._layer()["mask"])
-        # Add/subtract must follow the visible selection, including an inverted base.
-        effective_mode = (
-            ("subtract" if mode == "add" else "add") if mask["inverted"] else mode
-        )
-        op = {"kind": kind, "mode": effective_mode, "points": points}
-        if kind == "brush":
-            op["radius"] = radius
-        mask["ops"].append(op)
-        mask["label"] = (
-            "手动选区" if not mask["label"].startswith("AI") else "AI 选区 + 手动修正"
-        )
-        self._layer()["mask"] = validate_mask(mask)
-        self._commit()
-        self._change()
-    except (ValueError, TypeError) as exc:
-        self._notify(str(exc), True)
-
-
 def acceptSelection(self):
     if self._candidate is None or self.busy:
         return
@@ -328,4 +313,12 @@ def setEdgeProtection(self, value):
         return
     mask = deepcopy(self._candidate)
     mask["edge_protection"] = round(max(0, min(100, value)) / 100, 2)
+    self._set_candidate(mask, False)
+
+
+def setEdgeShift(self, value):
+    if self._candidate is None or self.busy:
+        return
+    mask = deepcopy(self._candidate)
+    mask["edge_shift"] = int(max(-5, min(5, round(value))))
     self._set_candidate(mask, False)

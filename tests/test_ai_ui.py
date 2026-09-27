@@ -71,6 +71,9 @@ def test_settings_visible_and_complete_cloud_ui_flow(qt_app, ai_store, tmp_path,
             assert editor.ai.ready
             assert ai_store.load().provider == "custom"
             assert find("applyDescriptionButton").property("text").startswith("AI 修图")
+            if size[1] < 800:
+                assert not window.property("chatOpen")
+                click("chatToggleButton")
             find("descriptionInput").setProperty("text", "提亮暗部，颜色自然")
             click("applyDescriptionButton")
             wait_for(lambda: not editor.busy and editor.parameters["shadows"] == 18)

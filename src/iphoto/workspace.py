@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 import sys
@@ -18,6 +19,8 @@ from .document import (
 from .plugins import capabilities
 from .scene import SceneIndex
 from .layer_tree import descendants
+from .layer_rows_model import LayerRowsModel
+from .conversation_rows_model import ConversationRowsModel
 from .viewport import Viewport
 
 from .paths import ROOT
@@ -30,17 +33,30 @@ from .controllers import (
     session,
     pixel_selections,
     matting,
+    auto_adjust,
+    heal,
+    detail_tiles,
+    matte_process,
+    export_process,
 )
+from .controllers.selection_controller import SelectionController
 
 
 class Editor(QObject):
     changed = Signal()
     layersChanged = Signal()
     conversationChanged = Signal()
+    conversationDraftChanged = Signal()
+    conversationExportCompleted = Signal(str, str)  # destination, error (empty on success)
+    exportCompleted = Signal(str, str)  # destination, error (empty on success)
+    projectSaveCompleted = Signal(str, str)  # destination, error (empty on success)
 
     notification = Signal(str, bool)
 
     imageOpened = Signal()
+    sourceRelinkRequested = Signal(str, str, str)  # original path, project path, reason
+    sourceRelinkFailed = Signal(str)
+    sourceRelinkCompleted = Signal()
 
     aiSettingsRequested = Signal()
     recoverySaveFailed = Signal()
@@ -55,14 +71,41 @@ class Editor(QObject):
         self._original = self._preview = self._path = self._name = self._sha = ""
         self._width = self._height = 0
         self._histogram = []
+        self._stats = None
         self._summary = "写下想调整的地方，让照片更接近你眼中的样子。"
         self._status = "正在启动本地引擎…"
+        self._status_epoch = 0
         self._elapsed = 0
         self._generation = self._serial = 0
         self._active = None
         self._queue = deque()
+        self._pixel_active = None
+        self._pixel_queue = deque()
+        self._pixel_buffer = b""
+        self._pixel_aborting = False
+        self._detail_active = self._detail_pending = None
+        self._detail_buffer = b""
+        self._detail_url = ""
+        self._detail_mask_url = ""
+        self._detail_box = None
+        self._detail_generation = -1
+        self._detail_failed_generation = -1
+        self._detail_version = 0
+        self._detail_serial = 0
+        self._detail_aborting = False
+        self._matte_active = self._matte_pending = None
+        self._matte_buffer = b""
+        self._matte_aborting = False
+        self._matte_fresh = False
+        self._export_request = self._export_cancelled = None
+        self._export_buffer = b""
+        self._export_aborting = False
+        self._export_serial = 0
+        self._export_cleanup_pending = []
         self._pending_render = None
         self._buffer = b""
+        self._warm_sha = self._warm_ready_sha = ""
+        self._warm_abandoned = False
         self._sample = False
         self._restore = None
         self._closing = False
@@ -77,7 +120,42 @@ class Editor(QObject):
         self._timer.setSingleShot(True)
         self._timer.setInterval(90)
         self._timer.timeout.connect(self._schedule_render)
+        self._detail_idle_timer = QTimer(self)
+        self._detail_idle_timer.setSingleShot(True)
+        self._detail_idle_timer.setInterval(20000)
+        self._detail_idle_timer.timeout.connect(self._park_detail)
         self.process = QProcess(self)
+        self._pixel_process = QProcess(self)
+        self._pixel_process.started.connect(self._pump_pixel)
+        self._pixel_process.readyReadStandardOutput.connect(self._pixel_read)
+        self._pixel_process.readyReadStandardError.connect(self._pixel_stderr)
+        self._pixel_process.finished.connect(self._pixel_finished)
+        self._pixel_process.errorOccurred.connect(self._pixel_error)
+        self._detail_process = QProcess(self)
+        self._detail_process.started.connect(self._pump_detail)
+        self._detail_process.readyReadStandardOutput.connect(self._detail_read)
+        self._detail_process.readyReadStandardError.connect(self._detail_stderr)
+        self._detail_process.finished.connect(self._detail_finished)
+        self._detail_process.errorOccurred.connect(self._detail_error)
+        self._matte_process = QProcess(self)
+        self._matte_process.started.connect(self._pump_matte)
+        self._matte_process.readyReadStandardOutput.connect(self._matte_read)
+        self._matte_process.readyReadStandardError.connect(self._matte_stderr)
+        self._matte_process.finished.connect(self._matte_finished)
+        self._matte_process.errorOccurred.connect(self._matte_error)
+        self._export_process = QProcess(self)
+        self._export_process.started.connect(self._export_started)
+        self._export_process.readyReadStandardOutput.connect(self._export_read)
+        self._export_process.readyReadStandardError.connect(self._export_stderr)
+        self._export_process.finished.connect(self._export_finished)
+        self._export_process.errorOccurred.connect(self._export_error)
+        self._export_cleanup_timer = QTimer(self)
+        self._export_cleanup_timer.setSingleShot(True)
+        self._export_cleanup_timer.setInterval(100)
+        self._export_cleanup_timer.timeout.connect(self._export_retry_cleanup)
+        self._warm_process = QProcess(self)
+        self._warm_process.finished.connect(self._warm_finished)
+        self._warm_process.errorOccurred.connect(self._warm_error)
         self.process.readyReadStandardOutput.connect(self._read)
         self.process.readyReadStandardError.connect(self._stderr)
         self.process.errorOccurred.connect(self._process_error)
@@ -156,9 +234,18 @@ class Editor(QObject):
 
     @Property(bool, notify=changed)
     def busy(self):
-        operations = list(self._queue) + ([self._active] if self._active else [])
-        return self._ai.busy or any(
-            request["op"] in {"open", "export", "interpret", "selection", "segment", "matte"}
+        operations = (
+            list(self._queue)
+            + list(self._pixel_queue)
+            + ([self._active] if self._active else [])
+            + ([self._pixel_active] if self._pixel_active else [])
+            + ([self._matte_active] if self._matte_active else [])
+            + ([self._matte_pending] if self._matte_pending else [])
+            + ([self._export_request] if self._export_request else [])
+        )
+        return self._export_aborting or self._ai.busy or any(
+            request["op"] in {"open", "export", "interpret", "selection", "matte"}
+            or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations
         )
 
@@ -195,6 +282,99 @@ class Editor(QObject):
     def _pump(self):
         return worker_bridge._pump(self)
 
+    def _pump_pixel(self):
+        return worker_bridge._pump_pixel(self)
+
+    def _pixel_read(self):
+        return worker_bridge._pixel_read(self)
+
+    def _pixel_stderr(self):
+        return worker_bridge._pixel_stderr(self)
+
+    def _pixel_finished(self, code, status):
+        return worker_bridge._pixel_finished(self, code, status)
+
+    def _pixel_error(self, error):
+        return worker_bridge._pixel_error(self, error)
+
+    def _stop_pixel(self):
+        return worker_bridge._stop_pixel(self)
+
+    def _pump_detail(self):
+        return detail_tiles.pump(self)
+
+    def _detail_read(self):
+        return detail_tiles.read(self)
+
+    def _detail_stderr(self):
+        return detail_tiles.stderr(self)
+
+    def _detail_finished(self, *args):
+        return detail_tiles.finished(self, *args)
+
+    def _detail_error(self, error):
+        return detail_tiles.error(self, error)
+
+    def _stop_detail(self):
+        return detail_tiles.stop(self)
+
+    def _pump_matte(self):
+        return matte_process.pump(self)
+
+    def _matte_read(self):
+        return matte_process.read(self)
+
+    def _matte_stderr(self):
+        return matte_process.stderr(self)
+
+    def _matte_finished(self, *args):
+        return matte_process.finished(self, *args)
+
+    def _matte_error(self, reason):
+        return matte_process.error(self, reason)
+
+    def _stop_matte(self):
+        return matte_process.stop(self)
+
+    def _park_detail(self):
+        return detail_tiles.park(self)
+
+    @Slot()
+    def requestDetail(self):
+        return detail_tiles.request(self)
+
+    @Property(str, notify=changed)
+    def detailUrl(self):
+        return self._detail_url
+
+    @Property(str, notify=changed)
+    def detailMaskUrl(self):
+        return self._detail_mask_url
+
+    @Property(bool, notify=changed)
+    def detailLoading(self):
+        return bool(self._detail_active or self._detail_pending)
+
+    @Property("QVariantList", notify=changed)
+    def detailRect(self):
+        if self._detail_box is None or not self._width or not self._height:
+            return [0, 0, 0, 0]
+        left, top, right, bottom = self._detail_box
+        return [left / self._width, top / self._height,
+                (right - left) / self._width, (bottom - top) / self._height]
+
+    def _start_warm(self):
+        return worker_bridge._start_warm(self)
+
+    def _stop_warm(self):
+        return worker_bridge._stop_warm(self)
+
+    def _warm_finished(self, code, status):
+        return worker_bridge._warm_finished(self, code, status)
+
+    def _warm_error(self, error):
+        return worker_bridge._warm_error(self, error)
+
     def _stderr(self):
         return worker_bridge._stderr(self)
 
@@ -206,6 +386,24 @@ class Editor(QObject):
 
     def _finished(self, *_):
         return worker_bridge._finished(self, *_)
+
+    def _export_started(self):
+        return export_process.started(self)
+
+    def _export_read(self):
+        return export_process.read(self)
+
+    def _export_stderr(self):
+        return export_process.stderr(self)
+
+    def _export_finished(self, code, status):
+        return export_process.finished(self, code, status)
+
+    def _export_error(self, reason):
+        return export_process.error(self, reason)
+
+    def _export_retry_cleanup(self):
+        return export_process.retry_cleanup(self)
 
     def _base_change(self):
         self._generation += 1
@@ -237,6 +435,10 @@ class Editor(QObject):
         return layers._base_applyPreset(self, name)
 
     @Slot()
+    def autoAdjust(self):
+        return auto_adjust.autoAdjust(self)
+
+    @Slot()
     def _base_reset(self):
         return layers._base_reset(self)
 
@@ -248,9 +450,14 @@ class Editor(QObject):
         self._layers = [new_layer("全图调整", True)]
         self._selected = self._layers[0]["id"]
         self._layer_rows = []
+        self._layer_rows_model = LayerRowsModel(self)
         self.changed.connect(self._publish_layer_rows)
         self._publish_layer_rows()
         self._conversation = []
+        self._conversation_model = ConversationRowsModel(self)
+        self._conversation_drafts = {}
+        self._conversation_draft_modes = {}
+        self._conversation_draft_key = ""
         self._mask_url = ""
         self._candidate = None
         self._pending_request = None
@@ -259,24 +466,50 @@ class Editor(QObject):
         self._mask_view = "overlay"
         self._region_candidate, self._region_index = None, 0
         self._capabilities = capabilities()
-        self._auto_refine = False
         self._pixel_points = []
         self._pixel_hint = None
         self._scene = SceneIndex()
         self._scene_followup = ""
         self._mask_thumbnails = {}
         self._pending_project = None
+        self._relink_pending = None
         self._project_path = ""
         self._dirty = False
+        self._edit_revision = 0
         self._recovery_error = False
         self._recovery_dir = self._ai.store.directory / "recovery"
         self._recovery_path = self._recovery_dir / (uuid4().hex + ".iphoto")
+        self._recovered_from = None
+        self._recovery_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="iphoto-recovery")
+        self._recovery_future = None
+        self._recovery_active_path = None
+        self._recovery_pending = None
+        self._recovery_poll = QTimer(self)
+        self._recovery_poll.setInterval(30)
+        self._recovery_poll.timeout.connect(self._poll_recovery)
+        self._project_save_future = None
+        self._project_save_path = None
+        self._project_save_revision = 0
+        self._project_save_was_dirty = False
+        self._project_save_poll = QTimer(self)
+        self._project_save_poll.setInterval(30)
+        self._project_save_poll.timeout.connect(self._poll_project_save)
+        self._conversation_export_future = None
+        self._conversation_export_path = None
+        self._conversation_export_poll = QTimer(self)
+        self._conversation_export_poll.setInterval(30)
+        self._conversation_export_poll.timeout.connect(self._poll_conversation_export)
         self._history = [self._snapshot()]
         self._autosave = QTimer(self)
         self._autosave.setSingleShot(True)
         self._autosave.setInterval(600)
-        self._autosave.timeout.connect(self._save_recovery)
+        self._autosave.timeout.connect(self._queue_recovery)
         self.imageOpened.connect(self._opened)
+        self._selection = SelectionController(self)
+
+    @Property(QObject, constant=True)
+    def selection(self):
+        return self._selection
 
     def _layer(self):
         return layers._layer(self)
@@ -298,6 +531,10 @@ class Editor(QObject):
         # _publish_layer_rows rebuilds this list on every change, so the property
         # can hand it out directly instead of deepcopying on each access.
         return self._layer_rows
+
+    @Property(QObject, constant=True)
+    def layerRowsModel(self):
+        return self._layer_rows_model
 
     @Property(str, notify=changed)
     def activeLayerId(self):
@@ -334,7 +571,10 @@ class Editor(QObject):
 
     @Property(bool, notify=changed)
     def pixelBusy(self):
-        return bool(self._active and self._active["op"] == "segment")
+        return bool(
+            self._pixel_active
+            or (self._active and self._active["op"] == "segment")
+        )
 
     @Property(bool, notify=changed)
     def matteAvailable(self):
@@ -342,7 +582,7 @@ class Editor(QObject):
 
     @Property(bool, notify=changed)
     def matteBusy(self):
-        return bool(self._active and self._active["op"] == "matte")
+        return bool(self._matte_active or self._matte_pending)
 
     @Slot(int)
     def refineMatte(self, radius=8):
@@ -427,6 +667,10 @@ class Editor(QObject):
     def combineObjects(self, mode):
         return objects.combineObjects(self, mode)
 
+    @Slot()
+    def adjustCheckedObjects(self):
+        return objects.adjustCheckedObjects(self)
+
     @Slot(float, float, result=str)
     def objectAt(self, x, y):
         return objects.objectAt(self, x, y)
@@ -460,9 +704,30 @@ class Editor(QObject):
     def setEdgeProtection(self, value):
         return selections.setEdgeProtection(self, value)
 
-    @Slot(str, int)
+    @Property(float, notify=changed)
+    def edgeShift(self):
+        mask = self._candidate or self._layer()["mask"]
+        return mask.get("edge_shift", 0)
+
+    @Slot(float)
+    def setEdgeShift(self, value):
+        return selections.setEdgeShift(self, value)
+
+    @Slot("QVariantList", float)
+    def drawHeal(self, points, radius):
+        return heal.drawHeal(self, points, radius)
+
+    @Slot(str, int, result=bool)
     def exportWithQuality(self, url, quality):
         return session.exportImage(self, url, quality)
+
+    @Slot()
+    def cancelExport(self):
+        return export_process.cancel(self)
+
+    @Slot(int, result=str)
+    def suggestExportPath(self, format_index):
+        return session.suggestExportPath(self, format_index)
 
     @Property(str, notify=changed)
     def maskUrl(self):
@@ -523,10 +788,6 @@ class Editor(QObject):
         self._capabilities = capabilities()
         self.changed.emit()
 
-    @Slot(bool)
-    def setAutoRefine(self, enabled):
-        return selections.setAutoRefine(self, enabled)
-
     @Slot(str, result=str)
     def layerMaskThumbnail(self, lid):
         return layers.layerMaskThumbnail(self, lid)
@@ -535,6 +796,63 @@ class Editor(QObject):
     def conversation(self):
         return self._conversation
 
+    @Property(QObject, constant=True)
+    def conversationModel(self):
+        return self._conversation_model
+
+    @Property(int, notify=conversationChanged)
+    def conversationCount(self):
+        return len(self._conversation)
+
+    @Property(str, notify=conversationDraftChanged)
+    def conversationDraft(self):
+        return self._conversation_drafts.get(self._conversation_draft_key, "")
+
+    @Property(str, notify=conversationDraftChanged)
+    def conversationDraftMode(self):
+        return self._conversation_draft_modes.get(self._conversation_draft_key, "edit")
+
+    @Slot(str)
+    def setConversationDraft(self, text):
+        if not self.hasImage or not self._conversation_draft_key:
+            return
+        if text == self.conversationDraft:
+            return
+        if len(text) > 4000:
+            return
+        self._conversation_drafts[self._conversation_draft_key] = text
+        was_dirty = self._dirty
+        self._mark_dirty()
+        self.conversationDraftChanged.emit()
+        if not was_dirty:
+            self.changed.emit()
+
+    @Slot(str)
+    def setConversationDraftMode(self, mode):
+        if (
+            not self.hasImage
+            or not self._conversation_draft_key
+            or mode not in ("edit", "advice", "regions")
+            or mode == self.conversationDraftMode
+        ):
+            return
+        self._conversation_draft_modes[self._conversation_draft_key] = mode
+        if not self.conversationDraft:
+            self.conversationDraftChanged.emit()
+            return
+        was_dirty = self._dirty
+        self._mark_dirty()
+        self.conversationDraftChanged.emit()
+        if not was_dirty:
+            self.changed.emit()
+
+    @Slot(str, result=str)
+    def conversationMessageState(self, message_id):
+        return next(
+            (message["state"] for message in self._conversation if message["id"] == message_id),
+            "",
+        )
+
     @Property(bool, notify=changed)
     def dirty(self):
         return self._dirty
@@ -542,6 +860,28 @@ class Editor(QObject):
     @Property(str, notify=changed)
     def projectPath(self):
         return self._project_path
+
+    @Property(str, notify=changed)
+    def photoBrowseDirectory(self):
+        if self._path and not self._sample:
+            return str(Path(self._path).parent)
+        pictures = Path.home() / "Pictures"
+        return str(pictures if pictures.is_dir() else Path.home())
+
+    @Property(str, notify=changed)
+    def projectBrowseDirectory(self):
+        return (
+            str(Path(self._project_path).parent)
+            if self._project_path else self.photoBrowseDirectory
+        )
+
+    @Property(bool, notify=changed)
+    def savingProject(self):
+        return self._project_save_future is not None
+
+    @Property(bool, notify=changed)
+    def exportingConversation(self):
+        return self._conversation_export_future is not None
 
     @Property("QVariantList", constant=True)
     def tools(self):
@@ -575,7 +915,9 @@ class Editor(QObject):
     def _schedule_render(self):
         return worker_bridge._schedule_render(self)
 
-    def _notify(self, message, error=False):
+    def _notify(self, message, error=False, *, background=False):
+        if not background:
+            self._status_epoch += 1
         if error and getattr(self, "_pending_request", None):
             self._scene_followup = ""
             self._message("error", message, state="failed")
@@ -703,18 +1045,6 @@ class Editor(QObject):
     def setOpacity(self, value):
         return layers.setOpacity(self, value)
 
-    @Slot(str)
-    def selectionAction(self, action):
-        return selections.selectionAction(self, action)
-
-    @Slot(float)
-    def setFeather(self, value):
-        return selections.setFeather(self, value)
-
-    @Slot(str, str, "QVariantList", float)
-    def drawSelection(self, kind, mode, points, radius):
-        return selections.drawSelection(self, kind, mode, points, radius)
-
     @Slot()
     def acceptSelection(self):
         return selections.acceptSelection(self)
@@ -756,7 +1086,7 @@ class Editor(QObject):
     def applyDescription(self, text):
         return conversation.applyDescription(self, text)
 
-    @Slot(str, str)
+    @Slot(str, str, result=bool)
     def sendMessage(self, text, mode):
         return conversation.sendMessage(self, text, mode)
 
@@ -774,9 +1104,20 @@ class Editor(QObject):
     def copyMessage(self, message_id):
         return conversation.copyMessage(self, message_id)
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def exportConversation(self, url):
         return conversation.exportConversation(self, url)
+
+    @Slot(str, result=bool)
+    def exportConversationAsync(self, url):
+        return conversation.exportConversationAsync(self, url)
+
+    def _poll_conversation_export(self):
+        conversation._finish_conversation_export(self)
+
+    @Slot(result=str)
+    def suggestConversationPath(self):
+        return conversation.suggestConversationPath(self)
 
     def _payload(self):
         return session._payload(self)
@@ -785,12 +1126,37 @@ class Editor(QObject):
     def saveProject(self, url):
         return session.saveProject(self, url)
 
+    @Slot(str, result=bool)
+    def saveProjectAsync(self, url):
+        return session.saveProjectAsync(self, url)
+
+    @Slot(result=str)
+    def suggestProjectPath(self):
+        return session.suggestProjectPath(self)
+
+    def _poll_project_save(self):
+        return session._poll_project_save(self)
+
     @Slot(str)
     def openProject(self, url):
         return session.openProject(self, url)
 
+    @Slot(str, result=bool)
+    def relinkProjectSource(self, url):
+        return session.relinkProjectSource(self, url)
+
+    @Slot()
+    def cancelProjectRelink(self):
+        return session.cancelProjectRelink(self)
+
     def _save_recovery(self):
         return session._save_recovery(self)
+
+    def _queue_recovery(self):
+        return session._queue_recovery(self)
+
+    def _poll_recovery(self):
+        return session._poll_recovery(self)
 
     def _recovery_files(self):
         return session._recovery_files(self)

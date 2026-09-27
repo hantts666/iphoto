@@ -62,8 +62,7 @@ def main():
 
         def show_objects():
             window = qml.rootObjects()[0]
-            window.setProperty("inspectorPage", 2)
-            window.setProperty("selectionTool", "object")
+            editor.selection.chooseTool("object")
             window.setProperty("chatOpen", False)
 
         editor.imageOpened.connect(lambda: QTimer.singleShot(0, show_objects))

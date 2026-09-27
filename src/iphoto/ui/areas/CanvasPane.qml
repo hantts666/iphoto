@@ -8,6 +8,8 @@ ColumnLayout {
     required property var workspace
     required property var editor
     readonly property bool previewReady: viewport.previewReady
+    readonly property bool detailReady: viewport.detailReady
+    readonly property bool maskDetailReady: viewport.maskDetailReady
     readonly property bool selectionPreviewReady: viewport.selectionPreviewReady
     readonly property bool menuOpened: canvasMenu.opened
     property alias wheelZoom: viewport.wheelZoom
@@ -19,7 +21,7 @@ ColumnLayout {
         Text { text: editor.imageName || "打开一张照片开始"; color: workspace.ink; Layout.fillWidth: true; elide: Text.ElideMiddle }
         Action { objectName: "undoButton"; text: "撤销"; enabled: editor.canUndo && !editor.busy && !editor.hasRegionDraft; subtle: true; onClicked: editor.undo() }
         Action { objectName: "redoButton"; text: "重做"; enabled: editor.canRedo && !editor.busy && !editor.hasRegionDraft; subtle: true; onClicked: editor.redo() }
-        Action { text: workspace.compare ? "结束对比" : "原图对比"; enabled: editor.hasImage; subtle: true; onClicked: { workspace.compare=!workspace.compare; if(workspace.compare) workspace.selectionTool="inspect" } }
+        Action { objectName: "compareButton"; text: workspace.compare ? "结束对比" : "原图对比"; enabled: editor.hasImage; subtle: true; onClicked: { workspace.compare=!workspace.compare; if(workspace.compare) workspace.chooseTool("inspect") } }
     }
     Rectangle {
         Layout.fillWidth: true; Layout.preferredHeight: 32; color: editor.hasSelectionDraft || editor.hasRegionDraft ? "#3c483e" : "#2c373b"
@@ -59,7 +61,7 @@ ColumnLayout {
             onEditingFinished: commit()
             Keys.onEscapePressed: { userEdited=false; sync(); canvasRoot.focusCanvas() }
             Connections { target: editor.viewport; function onChanged() { if(!zoomInput.activeFocus) zoomInput.sync() } }
-            ToolTip.visible: hovered; ToolTip.text: "输入原图缩放比例并回车 · 1%–3200%\n100% 为一个原图像素对应一个屏幕像素；当前画布按原图分辨率合成。"; ToolTip.delay: 600
+            ToolTip.visible: hovered; ToolTip.text: "输入原图缩放比例并回车 · 1%–3200%\n放大时先显示 1600px 快速预览，再加载可见区域的原图细节；导出始终按原图像素合成。"; ToolTip.delay: 600
         }
         Action { objectName: "zoomInButton"; text: "+"; hint: "放大 Ctrl++ / Ctrl+="; enabled: editor.hasImage; subtle: true; onClicked: { editor.viewport.step(1); canvasRoot.focusCanvas() } }
         Action { objectName: "fitCanvasButton"; text: "适应"; hint: "适应画布 Ctrl+0 · 双击抓手也可复位"; primary: editor.viewport.fitMode; enabled: editor.hasImage; implicitHeight: 27; onClicked: { editor.viewport.fit(); canvasRoot.focusCanvas() } }
@@ -88,7 +90,7 @@ ColumnLayout {
     }
     RowLayout {
         Layout.fillWidth: true; Layout.preferredHeight: 22; Layout.leftMargin: 14; Layout.rightMargin: 14
-        Caption { text: editor.imageInfo + " · 原图分辨率"; font.pixelSize: 10 }
+        Caption { text: editor.imageInfo + (editor.detailLoading ? " · 正在载入当前区域细节…" : editor.detailUrl.length ? " · 原图细节已加载" : " · 快速预览 1600px") + " · 导出按原图像素"; font.pixelSize: 10 }
         Caption { text: "空格拖动 · Alt＋滚轮缩放"; font.pixelSize: 10; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight; elide: Text.ElideRight }
     }
     ConversationPane { workspace: canvasRoot.workspace; editor: canvasRoot.editor }

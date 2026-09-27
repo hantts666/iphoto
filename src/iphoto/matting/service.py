@@ -13,14 +13,18 @@ from .solver import solve_alpha
 
 def refine_alpha(image, mask, radius=8):
     started = perf_counter()
-    proxy = image.convert("RGB")
+    # The source loader already supplies RGB for ordinary photos. Avoid a
+    # second 180 MB image allocation on a 60 MP source.
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
     seed = deepcopy(validate_mask(mask))
     # A user's feather is an adjustment envelope, not evidence about coverage.
     # Re-estimate the unfeathered edge and output it without extra blur.
     seed["feather"] = 0
-    trimap = make_trimap(raster_mask(seed, proxy.size), radius)
-    alpha, tiles = solve_alpha(proxy, trimap)
-    pixels = np.rint(alpha * 255).astype(np.uint8)
+    trimap = make_trimap(raster_mask(seed, rgb.size), radius)
+    pixels, tiles = solve_alpha(rgb, trimap, byte_output=True)
+    unknown_pixels = int(np.count_nonzero(trimap == 0.5))
+    del trimap
+    partial_pixels = int(np.count_nonzero((pixels > 0) & (pixels < 255)))
     result = empty_mask()
     if "edge_protection" in mask:
         result["edge_protection"] = mask["edge_protection"]
@@ -33,8 +37,8 @@ def refine_alpha(image, mask, radius=8):
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "radius": radius,
         "tiles": tiles,
-        "mask_size": list(proxy.size),
-        "partial_pixels": int(((pixels > 0) & (pixels < 255)).sum()),
-        "unknown_pixels": int((trimap == 0.5).sum()),
+        "mask_size": list(rgb.size),
+        "partial_pixels": partial_pixels,
+        "unknown_pixels": unknown_pixels,
         "warnings": ["已重新估计边缘透明度并取消额外羽化，请对照照片检查"],
     }

@@ -67,7 +67,7 @@ def selection_completion(polygons=None):
     return {"choices":[{"finish_reason":"stop", "message":{"content":json.dumps(result)}}]}
 
 
-@pytest.mark.parametrize("points", [[], [[0,0],[1,1]], [[0,0],[1,1],[2,2]], [[0,0],[1000,0],[0,999]], [[0,0],[True,0],[0,999]], [[0,0],[float('nan'),0],[0,999]]])
+@pytest.mark.parametrize("points", [[], [[0,0],[1,1]], [[0,0],[1,1],[2,2]], [[0,0],[5000,0],[0,999]], [[0,0],[True,0],[0,999]], [[0,0],[float('nan'),0],[0,999]]])
 def test_invalid_ai_selection_never_becomes_mask(points):
     with pytest.raises(ValueError): parse_selection(selection_completion([points]))
 
@@ -98,8 +98,10 @@ def test_full_size_export_history_and_project_roundtrip(tmp_path, qt_app, ai_sto
         editor.openImage(str(tmp_path / "original.png")); wait_for(lambda: editor.hasImage and settled(editor))
         editor.addLayer(); editor.renameLayer("人物提亮")
         assert editor.selectionLabel == "空选区"
-        editor.drawSelection("ellipse","add",[[.2,.2],[.7,.8]],.02)
-        editor.setFeather(2)
+        editor.beginSelection("empty")
+        editor.drawDraft("ellipse","add",[[.2,.2],[.7,.8]],.02)
+        editor.setDraftFeather(2)
+        editor.acceptSelection()
         editor.setParameter("exposure",1)
         editor.setParameter("sharpness",50)
         editor.finishGesture()
@@ -110,6 +112,7 @@ def test_full_size_export_history_and_project_roundtrip(tmp_path, qt_app, ai_sto
         output = tmp_path / "edited.png"
         editor.exportImage(str(output)); wait_for(lambda: settled(editor))
         exported = np.asarray(Image.open(output)); original = np.asarray(image)
+        assert np.array_equal(exported, np.asarray(render_layers(image, state)))
         hard = deepcopy(state[-1]["mask"]); hard["feather"] = 0
         outside = np.asarray(raster_mask(hard,image.size)) == 0
         assert exported.shape == original.shape

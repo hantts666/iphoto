@@ -99,6 +99,8 @@ def test_real_closed_form_recovers_partial_alpha_and_tile_seams():
     trimap = make_trimap(raster_mask(mask, image.size), 8)
     assert np.all(result[trimap == 0] == 0) and np.all(result[trimap == 1] == 1)
     whole, _ = solve_alpha(image, trimap, tile_size=1024)
+    whole_bytes, _ = solve_alpha(image, trimap, tile_size=1024, byte_output=True)
+    assert np.array_equal(whole_bytes, np.rint(whole * 255).astype(np.uint8))
     assert np.abs(result - whole).max() < 0.025
     assert quality["partial_pixels"] > 100 and refined["feather"] == 0
 
@@ -177,5 +179,24 @@ def test_real_worker_draft_preview_undo_save_and_export(qt_app, ai_store, tmp_pa
         output = np.asarray(Image.open(tmp_path / "export.png"))
         alpha = np.asarray(raster_mask(refined, image.size))
         assert np.array_equal(output[alpha == 0], np.asarray(image)[alpha == 0])
+    finally:
+        editor.close()
+
+
+def test_missing_source_during_matte_keeps_selection_and_releases_task(qt_app, ai_store, tmp_path):
+    path = tmp_path / "removed.png"
+    Image.new("RGB", (360, 240), (70, 130, 90)).save(path)
+    editor = Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(path))
+        wait_for(lambda: editor.hasImage and settled(editor))
+        editor.drawDraft("rect", "replace", [[.2, .2], [.8, .8]], .025)
+        wait_for(lambda: editor.hasSelectionDraft and settled(editor))
+        before = deepcopy(editor._candidate)
+        path.unlink()
+        editor.refineMatte(8)
+        wait_for(lambda: not editor.matteBusy and settled(editor))
+        assert editor._candidate == before
+        assert editor.status != "正在按原图分辨率细化边缘…可随时取消，大图需要更长时间"
     finally:
         editor.close()

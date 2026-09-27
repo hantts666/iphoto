@@ -25,7 +25,11 @@ def wait_for(test, timeout=15000):
 
 
 def settled(editor):
-    return editor._active is None and not editor._pending_render and not editor._queue and not editor._timer.isActive()
+    return (editor._active is None and editor._pixel_active is None
+            and editor._matte_active is None and editor._matte_pending is None
+            and editor._export_request is None and not editor._export_aborting
+            and not editor._pending_render and not editor._queue
+            and not editor._pixel_queue and not editor._timer.isActive())
 
 
 def test_real_editor_history_latest_render_project_and_export(tmp_path, qt_app, ai_store):

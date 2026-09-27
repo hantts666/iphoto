@@ -9,12 +9,14 @@ Item {
     required property var input
     property string hoverId: ""
     property string hoverPreview: ""
+    readonly property string activeHover: hoverId !== "" ? hoverId : (workspace.sceneHoverId || "")
     function repaint() { outlines.requestPaint() }
     Connections { target: editor; function onChanged() { root.syncHover() } }
     Connections { target: editor.viewport; function onChanged() { root.repaint() } }
-    function syncHover() { var row=editor.sceneObjects.find(function(o) { return o.id===root.hoverId }); hoverPreview=row ? row.maskPreview : ""; repaint() }
+    function syncHover() { var row=editor.sceneObjects.find(function(o) { return o.id===root.activeHover }); hoverPreview=row ? row.maskPreview : ""; repaint() }
     onHoverIdChanged: syncHover()
-    Image { x: root.photo.x; y: root.photo.y; width: root.photo.width; height: root.photo.height; source: root.hoverPreview; visible: root.workspace.selectionTool==="object" && !root.editor.viewport.spaceHeld; fillMode: Image.Stretch }
+    onActiveHoverChanged: syncHover()
+    Image { x: root.photo.x; y: root.photo.y; width: root.photo.width; height: root.photo.height; source: root.hoverPreview; visible: root.activeHover!=="" && !root.editor.viewport.spaceHeld; fillMode: Image.Stretch }
     Canvas {
         id: outlines
         objectName: "canvasOverlays"
@@ -25,11 +27,11 @@ Item {
             var c = getContext("2d"); c.reset()
             var px = root.photo.x, py = root.photo.y, pw = root.photo.width, ph = root.photo.height
             c.save(); c.beginPath(); c.rect(px, py, pw, ph); c.clip()
-            if (root.workspace.selectionTool === "object" && root.hoverId && !root.hoverPreview && !root.editor.viewport.spaceHeld) {
+            if (root.activeHover && !root.hoverPreview && !root.editor.viewport.spaceHeld) {
                 var objects = root.editor.sceneObjects
                 c.strokeStyle = "#ffda78"; c.lineWidth = 2; c.fillStyle = "#3066bba0"
                 for (var i = 0; i < objects.length; i++) {
-                    var o = objects[i]; if (o.id !== root.hoverId) continue
+                    var o = objects[i]; if (o.id !== root.activeHover) continue
                     for (var j = 0; j < o.polygons.length; j++) {
                         var p = o.polygons[j]; c.beginPath(); c.moveTo(px + p[0][0]*pw, py + p[0][1]*ph)
                         for (var k = 1; k < p.length; k++) c.lineTo(px + p[k][0]*pw, py + p[k][1]*ph)
@@ -46,7 +48,7 @@ Item {
                 else {
                     c.moveTo(px+a[0]*pw, py+a[1]*ph)
                     for (var n = 1; n < points.length; n++) c.lineTo(px+points[n][0]*pw, py+points[n][1]*ph)
-                    if (tool === "brush") { c.lineWidth = root.workspace.brushRadius*2*Math.min(pw,ph); c.lineCap = "round"; c.lineJoin = "round" }
+                    if (tool === "brush" || tool === "heal") { c.lineWidth = root.workspace.brushRadius*2*Math.min(pw,ph); c.lineCap = "round"; c.lineJoin = "round" }
                 }
                 c.stroke()
             }

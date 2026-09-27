@@ -8,13 +8,14 @@ from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .ai_settings import AISettings, PROVIDERS, SettingsStore
 from .engine import Recipe
-from .ai_protocol import build_payload, image_data_url, parse_plan
+from .ai_protocol import build_payload, image_data_url, parse_auto, parse_plan
 from .ai_tasks import parse_selection, parse_regions
 from .scene import parse_scene, parse_targets
 
 
 class AIController(QObject):
     changed = Signal()
+    progressChanged = Signal()
     planReady = Signal(object, int)
     failure = Signal(str)
     requestStarted = Signal()
@@ -25,6 +26,8 @@ class AIController(QObject):
         self.settings = self.store.load()
         self._reply = None
         self._context = None
+        self._retry_context = None
+        self._request_started = 0.0
         self._message = self.store.load_error
         self._error = bool(self._message)
         self._connection = "尚未测试"
@@ -41,6 +44,12 @@ class AIController(QObject):
                 f"请求超时（{self.timer.interval() // 1000} 秒），请重试或检查网络；参数未改变"
             )
         )
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self._restart)
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(1000)
+        self._progress_timer.timeout.connect(self.progressChanged.emit)
 
     def _refresh_key(self):
         try:
@@ -67,7 +76,23 @@ class AIController(QObject):
 
     @Property(bool, notify=changed)
     def busy(self):
-        return self._reply is not None
+        return self._reply is not None or self._retry_context is not None
+
+    @Property(str, notify=progressChanged)
+    def requestProgress(self):
+        if self._retry_context is not None:
+            seconds = max(0, (self._retry_timer.remainingTime() + 999) // 1000)
+            attempt = self._retry_context["attempt"] + 2
+            return f"网络连接不稳定，{seconds} 秒后重试（第 {attempt}/{self.MAX_RETRIES + 1} 次）· 可取消"
+        if self._reply is None or self._context is None:
+            return ""
+        elapsed = max(0, int(time.monotonic() - self._request_started))
+        phase = (
+            "AI 首次回复未通过校验，正在修正"
+            if self._context.get("validation_retry")
+            else "正在接收 AI 回复" if self._context["body"] else "请求已发送，等待 AI 回应"
+        )
+        return f"{phase} · 已等待 {elapsed} 秒 · 可取消"
 
     @Property(str, notify=changed)
     def message(self):
@@ -232,8 +257,11 @@ class AIController(QObject):
         testing,
         mode="edit",
         workspace=None,
+        validation_retry=0,
         attempt=0,
     ):
+        if attempt == 0:
+            self._request_started = time.monotonic()
         request = QNetworkRequest(QUrl(settings.base_url + "/chat/completions"))
         request.setHeader(QNetworkRequest.ContentTypeHeader, "application/json")
         request.setRawHeader(b"Authorization", ("Bearer " + secret).encode("ascii"))
@@ -242,7 +270,7 @@ class AIController(QObject):
             QNetworkRequest.RedirectPolicyAttribute,
             QNetworkRequest.ManualRedirectPolicy,
         )
-        timeout_ms = 90_000 if mode == "scene" else 60_000
+        timeout_ms = 90_000 if mode in ("auto", "scene") else 60_000
         request.setTransferTimeout(timeout_ms)
         payload = build_payload(
             settings, text, recipe, locked, image_url, mode, workspace
@@ -255,7 +283,10 @@ class AIController(QObject):
             "generation": generation,
             "testing": testing,
             "mode": mode,
+            "request_text": text,
+            "image_url": image_url,
             "workspace": workspace or {},
+            "validation_retry": validation_retry,
             "attempt": attempt,
             "retry_args": (
                 settings,
@@ -268,6 +299,7 @@ class AIController(QObject):
                 testing,
                 mode,
                 workspace or {},
+                validation_retry,
             ),
             "started": time.monotonic(),
             "body": bytearray(),
@@ -281,6 +313,8 @@ class AIController(QObject):
         reply.readyRead.connect(lambda: self._collect(reply, context))
         reply.finished.connect(lambda: self._finish(reply, context))
         self.timer.start(timeout_ms)
+        self._progress_timer.start()
+        self.progressChanged.emit()
         if not testing:
             if mode != "targets":
                 self._photo_sent = True
@@ -293,6 +327,7 @@ class AIController(QObject):
                 "targets": "AI 正在选择已识别对象，无需重新上传照片…",
                 "selection": "AI 正在直接描绘目标轮廓…",
                 "regions": "AI 正在规划分区图层…",
+                "auto": "AI 正在判断调整范围并规划图层…",
             }.get(mode, "AI 正在看图并生成修图参数…")
         )
 
@@ -300,6 +335,7 @@ class AIController(QObject):
         if reply is not self._reply:
             return
         context["body"].extend(bytes(reply.readAll()))
+        self.progressChanged.emit()
         if len(context["body"]) > 2_000_000:
             self._abort("服务返回内容过大，已停止请求；参数未改变")
 
@@ -308,6 +344,7 @@ class AIController(QObject):
             reply.deleteLater()
             return
         self.timer.stop()
+        self._progress_timer.stop()
         context["body"].extend(bytes(reply.readAll()))
         self._reply = self._context = None
         try:
@@ -353,20 +390,26 @@ class AIController(QObject):
             decoded = (
                 context["body"].decode("utf-8").replace(context["secret"], "[已隐藏]")
             )
-            if context["mode"] == "selection":
-                result = parse_selection(json.loads(decoded))
-            elif context["mode"] == "scene":
-                result = parse_scene(json.loads(decoded))
-            elif context["mode"] == "targets":
-                result = parse_targets(
-                    json.loads(decoded), context["workspace"].get("objects", [])
-                )
-            elif context["mode"] == "regions":
-                result = parse_regions(json.loads(decoded))
-            else:
-                result = parse_plan(
-                    json.loads(decoded), context["recipe"], context["locked"]
-                )
+            try:
+                response = json.loads(decoded)
+                if context["mode"] == "auto":
+                    result = parse_auto(response, context["recipe"], context["locked"])
+                elif context["mode"] == "selection":
+                    result = parse_selection(response)
+                elif context["mode"] == "scene":
+                    result = parse_scene(response)
+                elif context["mode"] == "targets":
+                    result = parse_targets(
+                        response, context["workspace"].get("objects", [])
+                    )
+                elif context["mode"] == "regions":
+                    result = parse_regions(response)
+                else:
+                    result = parse_plan(response, context["recipe"], context["locked"])
+            except ValueError as exc:
+                if self._retry_invalid_result(context, str(exc)):
+                    return
+                raise
             result["mode"] = context["mode"]
             elapsed = time.monotonic() - context["started"]
             self._tested_signature = self._signature(
@@ -396,7 +439,27 @@ class AIController(QObject):
             context["secret"] = ""
             context["body"].clear()
             reply.deleteLater()
+            self.progressChanged.emit()
             self.changed.emit()
+
+    def _retry_invalid_result(self, context, reason):
+        if (
+            context["testing"]
+            or context["mode"] not in {"auto", "scene", "regions"}
+            or context["validation_retry"]
+            or context["abort"]
+        ):
+            return False
+        workspace = dict(context["workspace"])
+        workspace["_validation_feedback"] = reason[:200]
+        self._start(
+            context["settings"], context["secret"], context["request_text"],
+            context["recipe"], context["locked"], context["image_url"],
+            context["generation"], False, context["mode"], workspace,
+            validation_retry=1,
+        )
+        self._show("AI 首次回复未通过校验，正在自动修正一次…")
+        return True
 
     MAX_RETRIES = 2
 
@@ -423,13 +486,20 @@ class AIController(QObject):
         ):
             return False
         delay = 1500 * 2 ** context["attempt"]
-        QTimer.singleShot(delay, lambda: self._restart(context))
+        self._retry_context = context
+        self._retry_timer.start(delay)
+        self._progress_timer.start()
+        self.progressChanged.emit()
         self._show(
             f"网络瞬时错误，{delay / 1000:.1f} 秒后第 {context['attempt'] + 1} 次重试…"
         )
         return True
 
-    def _restart(self, context):
+    def _restart(self):
+        context = self._retry_context
+        if context is None:
+            return
+        self._retry_context = None
         if self._reply is not None:
             return  # A newer request superseded this stale retry.
         self._start(*context["retry_args"], attempt=context["attempt"] + 1)
@@ -438,6 +508,16 @@ class AIController(QObject):
         if self._reply is not None:
             self._context["abort"] = reason
             self._reply.abort()
+        elif self._retry_context is not None:
+            context = self._retry_context
+            self._retry_context = None
+            self._retry_timer.stop()
+            self._progress_timer.stop()
+            self._connection = "请求未完成"
+            self._show(reason, True)
+            if not context["testing"]:
+                self.failure.emit(reason)
+            self.progressChanged.emit()
 
     @Slot()
     def cancel(self):

@@ -81,6 +81,7 @@ def _publish_layer_rows(self):
     rows = display_rows(self._layers)
     if rows != self._layer_rows:
         self._layer_rows = rows
+        self._layer_rows_model.replace(rows)
         self.layersChanged.emit()
 
 
@@ -114,6 +115,7 @@ def _commit(self):
 
 def _mark_dirty(self):
     self._dirty = True
+    self._edit_revision += 1
     self._autosave.start()
 
 

@@ -59,6 +59,9 @@ def test_draft_output_and_region_review_are_separate_from_chat(qt_app,ai_store,t
         assert not window.property("showMask")
         editor.undo();wait_for(lambda:settled(editor))
         assert editor._layers==original
+        if size[1] < 800:
+            assert not window.property("chatOpen")
+            click("chatToggleButton")
         with mock_api(region_completion()) as (url,_):
             configure(editor.ai,url)
             mode=find("chatModeBox");mode.forceActiveFocus()

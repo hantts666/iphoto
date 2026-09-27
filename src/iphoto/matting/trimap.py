@@ -21,13 +21,17 @@ def make_trimap(alpha, radius):
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1,) * 2)
     foreground = cv2.erode(hard, kernel, borderType=cv2.BORDER_REPLICATE) > 0
     background = cv2.erode(1 - hard, kernel, borderType=cv2.BORDER_REPLICATE) > 0
+    del hard
     foreground &= alpha == 255
     background &= alpha == 0
     # A small, already definite hole must not disappear just because the
     # erosion kernel is wider than it. Keep its deepest existing known pixel.
-    for known, definite in ((foreground, alpha == 255), (background, alpha == 0)):
+    # Process each class separately so the full-size component labels from
+    # one class are released before allocating labels for the other.
+    def restore_small_components(known, value):
+        definite = cv2.compare(alpha, value, cv2.CMP_EQ)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(
-            definite.astype(np.uint8), connectivity=8
+            definite, connectivity=8
         )
         for label in range(1, count):
             x, y, w, h, area = stats[label]
@@ -41,6 +45,9 @@ def make_trimap(alpha, radius):
             )[1:-1, 1:-1]
             cy, cx = np.unravel_index(distance.argmax(), distance.shape)
             known[y + cy, x + cx] = True
+
+    restore_small_components(foreground, 255)
+    restore_small_components(background, 0)
     if not foreground.any() or not background.any():
         raise ValueError("缺少可靠的内部或背景，请先补选、减选后再细化")
     trimap = np.full(alpha.shape, 0.5, dtype=np.float32)
