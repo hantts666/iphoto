@@ -18,6 +18,7 @@ from .segmentation.classical import (
 )  # compatibility exports
 from .segmentation.models import available as pixel_available
 from .segmentation.face_models import available as face_available
+from .matting.models import available as detail_available
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 
@@ -126,6 +127,15 @@ def capabilities():
         "status": "可用 · 本地 CPU" if facial_ready else "需要配置面部皮肤模型",
         "license": "MIT / ONNX Runtime MIT", "source": "https://github.com/yakhyo/face-parsing",
         "model_path": str(MODEL_DIR / "face-parsing"),
+    })
+    detail_ready = detail_available()
+    rows.insert(2, {
+        "id": "details", "name": "细节透明度 · ViTMatte-S",
+        "description": "智能选区自动细化原图边缘；有可靠保留/排除点且颜色区分明显时恢复局部细枝孔洞。相近颜色仍需修正。",
+        "available": detail_ready,
+        "status": "可用 · 本地 ONNX" if detail_ready else "需要配置细节模型",
+        "license": "MIT / ONNX Runtime MIT", "source": "https://github.com/hustvl/ViTMatte",
+        "model_path": str(MODEL_DIR / "matting"),
     })
     return rows
 

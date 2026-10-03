@@ -437,6 +437,8 @@ def complete(self, result, context):
         quality += " · 已按原图局部细节重新定位"
     if any(q.get("original_matting") for q in warning_qualities):
         quality += " · 原图透明边缘"
+        if any(q.get("detail_recovery") for q in warning_qualities):
+            quality += " · 局部孔洞细化"
     elif any(q.get("original_edges") for q in warning_qualities):
         quality += " · 原图颜色贴边"
     detail = (

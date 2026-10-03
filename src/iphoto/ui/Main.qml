@@ -131,7 +131,7 @@ ApplicationWindow {
                         }
                     }
                 }
-                Caption { text: "EfficientSAM 用于本地像素选区。发丝抠图模型、SAM 3 和局部重绘尚未集成；不兼容 Photoshop 的 8bf 插件。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Caption { text: "EfficientSAM 识别目标，ViTMatte 估计原图细节透明度；细发丝和相近颜色背景仍需检查。SAM 3 和局部重绘尚未集成。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 Action { text: "重新检测"; onClicked: editor.refreshCapabilities() }
             }
         }

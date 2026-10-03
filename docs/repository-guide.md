@@ -296,3 +296,11 @@ SelectionController分别保留蒙版与修复画笔半径，默认0.025/0.003�
 `worker.py` 的主循环是 op 注册表（`register("open"/"render"/...)`）；新增 worker 操作只需注册一个处理函数。worker 的 `open/render` 响应附 `stats`（通道均值与亮度 1/50/99 分位数，编码空间），供 `controllers/auto_adjust.py` 的本地自动调整使用——它是直方图规则，不是 AI。`document.RASTER_CACHE` 是蒙版栅格的 64 MiB LRU（与预览缓存预算各自独立），`render_nodes` 经 `raster_mask_cached` 复用；worker 在 `open` 时清空。蒙版字典按版本不可变是缓存正确性的前提：任何就地修改蒙版的代码都会造成脏命中。
 
 真实 UI 全流程自测用 `scripts/selftest_live_ui.py --live`（读取 Windows 凭据中的千问配置，参数不接受 Key）；Repeater 委托控件（如 `parameter_exposure`）不在 `QObject.findChild` 可达范围，脚本用视觉树遍历查找。
+
+## 智能选区的原图细节
+
+`matting/models.py` 固定 ViTMatte-S 导出文件、官方权重修订与摘要；`scripts/export_matting.py` 在独立转换环境生成固定640图，`setup_matting.py` 原子安装并验证，本地UI不下载模型。Windows使用DirectML发行包，其他平台CPU包；它们共享导入路径，`setup.ps1`先检查本项目应用已关闭，再清除旧发行包，避免安装冲突。
+
+`matting/neural.py` 是像素进程专属单例session；512原像素核心/64上下文，RGB按官方0.5均值/标准差、trimap按255归一化，不放大输入细节。只输出未知像素，known 0/255保持；固定缓冲、未知像素/块数/超时预算，DirectML失败后同一输入仅重试CPU一次。`segmentation/detail.py` 只在明确正负提示、足够颜色差异与小排除域时重开局部内部结构，按点击颜色簇处理细枝混色，不把单个大背景全部变成unknown。局部范围外保留旧alpha，提示不合规不提交部分结果。无可靠结构条件时采用既有窄带trimap的神经透明度，缺模型/失败时保留此前原图CF与RGB后备；显式PyMatting请求仍严格失败，不偷偷换模型。
+
+前台通用对象进入上述链路，背景catalog仍用代理并在正式选择时升级；皮肤任务有独立分支。对象NDJSON进度新增details与可选tile/tiles：前台ID/代次/对象匹配，1～128块严格校验后只更新状态，不结束任务或发布部分mask。取消终止原独立像素进程；保存、原像素预览及导出复用同一最终bitmap。`test_neural_detail.py`覆盖切块坐标、约束、孔洞、混色、坏模型、安装原子性与CPU重试；自然照片模型质量证据见选区调研第三轮与UX记录第九十一轮。

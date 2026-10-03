@@ -90,11 +90,14 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                 # Background catalog previews stay cheap. Foreground requests
                 # must use the native RGB for refinement, not an enlarged proxy.
                 native = source is not None and not tolerant
-                def report(phase):
+                def report(phase, tile=None, tiles=None):
                     if detail_progress is not None:
-                        detail_progress(phase, index, len(jobs))
+                        if tile is None:
+                            detail_progress(phase,index,len(jobs))
+                        else:
+                            detail_progress(phase,index,len(jobs),tile,tiles)
                 mask, quality = segment(source if native else image, job.get("hint"), job.get("points"),
-                                        progress=report, model_image=image)
+                                        progress=report, model_image=image, native_detail=native)
                 quality["model"] = "EfficientSAM-S"
                 quality["resolution"] = "source" if native else "preview"
             else:
@@ -107,7 +110,7 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
     return {"items": items}
 
 
-def segment(image, hint=None, points=None, *, engine=None, soften=True, progress=None, model_image=None):
+def segment(image, hint=None, points=None, *, engine=None, soften=True, progress=None, model_image=None, native_detail=True):
     started = perf_counter()
     points = validate_points(points or [])
     # Resize before converting/copying so a 60 MP source does not allocate
@@ -147,7 +150,33 @@ def segment(image, hint=None, points=None, *, engine=None, soften=True, progress
     result.update(bitmap=encode_bitmap(alpha), label="所选区域")
     if hint:
         result["label"] = hint["label"]
-    if image.size != proxy.size:
+    from ..matting.models import available as detail_available
+    use_details = native_detail and detail_available()
+    detail_done = False
+    if use_details:
+        if progress is not None:
+            progress("details")
+        try:
+            from .detail import recover
+            from ..matting.neural import refine as neural_refine
+
+            def tile_progress(tile,tiles):
+                if progress is not None:
+                    progress("details",tile,tiles)
+            recovered = recover(image, result, points,progress=tile_progress)
+            if recovered is not None:
+                result, matte_quality = recovered
+                quality["detail_recovery"] = matte_quality
+            else:
+                result, matte_quality = neural_refine(image, result,
+                                                     radius=min(64,max(8,round(8*max(image.size)/1600))),progress=tile_progress)
+            quality["original_matting"] = matte_quality
+            quality["warnings"].extend(matte_quality.get("warnings", []))
+            detail_done = True
+        except (ValueError, ImportError) as exc:
+            quality["detail_fallback"] = str(exc)[:500]
+            quality["warnings"].append("细节模型未能稳定细化，保留轮廓并使用原图边缘；请检查细枝、发丝和孔洞")
+    if image.size != proxy.size and not detail_done:
         from ..matting.service import refine_alpha
 
         if progress is not None:
@@ -166,7 +195,7 @@ def segment(image, hint=None, points=None, *, engine=None, soften=True, progress
             quality["warnings"].append("透明边缘未能稳定估计，已使用原图颜色贴边；请检查细枝、发丝和孔洞")
     quality.update(
         timing,
-        coverage=round(float((np.asarray(alpha) > 0).mean()) * 100, 1),
+        coverage=quality.get("original_matting",{}).get("coverage",round(float((np.asarray(alpha) > 0).mean()) * 100, 1)),
         elapsed_ms=round((perf_counter() - started) * 1000, 1),
         mask_size=[result["bitmap"]["width"], result["bitmap"]["height"]],
     )

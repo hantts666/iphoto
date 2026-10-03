@@ -191,17 +191,24 @@ def _pixel_read(self):
                     self._status = f"正在按原图细节分割身体部位 {progress['part']}/{progress['total']}；全部完成后建立图层…"
                     self.changed.emit()
                 elif (isinstance(progress, dict) and progress.get("kind") == "object"
-                        and progress.get("phase") in ("segment", "edges", "local_edges")
+                        and progress.get("phase") in ("segment", "edges", "local_edges", "details")
                         and type(progress.get("part")) is int and type(progress.get("total")) is int
                         and 1 <= progress["part"] <= progress["total"] <= 16
                         and progress["total"] == len(active.get("jobs", []))
                         and active["jobs"][progress["part"] - 1].get("mask_target", "object") == "object"
                         and response.get("generation") == self._generation
                         and active.get("generation") == self._generation
+                        and (("tile" not in progress and "tiles" not in progress)
+                             or (progress["phase"] == "details" and type(progress.get("tile")) is int
+                                 and type(progress.get("tiles")) is int
+                                 and 1 <= progress["tile"] <= progress["tiles"] <= 128))
                         and not active.get("cancelled") and active.get("priority") != "low"):
                     phase = {"segment": "识别对象范围", "edges": "按原图恢复边缘透明度",
-                             "local_edges": "按原图颜色恢复边缘"}[progress["phase"]]
+                             "local_edges": "按原图颜色恢复边缘",
+                             "details": "恢复细枝、孔洞和透明边缘"}[progress["phase"]]
                     self._status = f"正在{phase} {progress['part']}/{progress['total']}…可随时取消"
+                    if "tile" in progress:
+                        self._status = f"正在细化原图细节 {progress['tile']}/{progress['tiles']} 块（对象 {progress['part']}/{progress['total']}）…可随时取消"
                     self.changed.emit()
                 # Progress is not a result: it cannot release the active job,
                 # publish a partial layer, or mark whole-photo SAM as ready.

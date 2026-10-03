@@ -18,6 +18,13 @@ from test_matting import soft_scene
 from test_object_composition import prepare
 
 
+@pytest.fixture(autouse=True)
+def without_optional_detail_model(monkeypatch):
+    # This module tests the classic native path regardless of local weights.
+    from iphoto.matting import models
+    monkeypatch.setattr(models, "available", lambda: False)
+
+
 @pytest.mark.parametrize("background", [False, True])
 def test_real_alpha_runs_on_source_but_reuses_the_exact_encoding_preview(monkeypatch, background):
     source, truth, _ = soft_scene(1920, 320)
@@ -53,11 +60,19 @@ def test_real_alpha_runs_on_source_but_reuses_the_exact_encoding_preview(monkeyp
         assert quality["original_matting"]["partial_pixels"] > 100
 
 
-@pytest.mark.parametrize("case", ["segment", "edges", "local_edges", "stale", "old_active", "cancelled", "background",
+@pytest.mark.parametrize("case", ["segment", "edges", "local_edges", "details", "detail_tiles", "missing_tiles", "zero_tile", "boolean_tile", "huge_tiles", "wrong_tile_phase", "stale", "old_active", "cancelled", "background",
                                   "bad_total", "bad_part", "boolean", "bad_phase", "wrong_target"])
 def test_object_phase_never_publishes_a_partial_mask_or_releases_a_job(case):
     progress = {"kind": "object", "phase": "edges" if case == "edges" else "segment", "part": 1, "total": 1}
     if case == "local_edges": progress["phase"] = "local_edges"
+    if case == "details": progress["phase"] = "details"
+    if case in ("detail_tiles","missing_tiles","zero_tile","boolean_tile","huge_tiles","wrong_tile_phase"):
+        progress.update(phase="details",tile=2,tiles=3)
+    if case == "missing_tiles": del progress["tiles"]
+    if case == "zero_tile": progress["tile"] = 0
+    if case == "boolean_tile": progress["tile"] = True
+    if case == "huge_tiles": progress["tiles"] = 129
+    if case == "wrong_tile_phase": progress["phase"] = "segment"
     if case == "bad_total": progress["total"] = 2
     if case == "bad_part": progress["part"] = 0
     if case == "boolean": progress["part"] = True
@@ -74,8 +89,9 @@ def test_object_phase_never_publishes_a_partial_mask_or_releases_a_job(case):
                             _pump_pixel=lambda: pytest.fail("Phase is not a completed result"))
     worker_bridge._pixel_read(owner)
     assert owner._pixel_active is active and owner._layers is layers and owner._warm_ready_sha == "unprepared"
-    assert (owner._status != "previous") == (case in ("segment", "edges", "local_edges"))
+    assert (owner._status != "previous") == (case in ("segment", "edges", "local_edges", "details", "detail_tiles"))
     if case == "edges": assert "原图" in owner._status and "取消" in owner._status
+    if case == "detail_tiles": assert "2/3 块" in owner._status and "取消" in owner._status
 
 
 def test_cached_preview_is_recomputed_and_excluded_from_a_native_union(ui, monkeypatch):  # noqa: F811

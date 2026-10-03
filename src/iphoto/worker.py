@@ -54,6 +54,11 @@ def main():
 
     def _warm_matting():
         try:
+            from .matting.models import available as detail_available
+            if detail_available():
+                # Neural native selection does not use Numba. Avoid racing a
+                # large JIT compilation against image decoding and first click.
+                return
             from .matting.solver import warm
 
             warm()

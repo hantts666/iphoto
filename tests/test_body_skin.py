@@ -70,6 +70,17 @@ def test_independent_parts_merge_once_and_preserve_source_and_gap():
     assert raster_mask(overlapping, source.size).tobytes() == raster_mask(single, source.size).tobytes()
 
 
+def test_optional_generic_matte_does_not_replace_the_body_part_route(monkeypatch):
+    from iphoto.matting import models,neural
+    from iphoto.segmentation import detail
+    monkeypatch.setattr(models,"available",lambda:True)
+    monkeypatch.setattr(neural,"refine",lambda *args,**kwargs:pytest.fail("Body part passed to generic matting"))
+    monkeypatch.setattr(detail,"recover",lambda *args,**kwargs:pytest.fail("Body part passed to topology recovery"))
+    mask,quality = body_skin.segment(image(),jobs(),engine=TargetFixture())
+    assert quality["part_count"] == 2 and raster_mask(mask,image().size).getbbox()
+    assert all("original_matting" not in part for part in quality["parts"])
+
+
 def test_large_source_keeps_native_mask_size_and_local_model_budget():
     source = image((2600, 3300))
     mask, quality = body_skin.segment(source, jobs(), engine=TargetFixture())
