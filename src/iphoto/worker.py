@@ -91,6 +91,14 @@ def main():
             "histogram": histogram(next_proxy),
             "stats": stats(next_proxy),
         }
+        from .segmentation.face_detection import available as faces_available, detect
+        result["faces"] = []
+        if faces_available():
+            try:
+                result["faces"] = detect(next_proxy)
+            except Exception:
+                # Optional localization cannot prevent opening a photograph.
+                result["face_detection_warning"] = "本地人脸检测未完成，可使用文字定位或框选人脸"
         # Commit only after decoding, project verification and preview writing succeed.
         source, proxy = next_source, next_proxy
         composition_cache.clear()

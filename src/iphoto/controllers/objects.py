@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from ..scene import combine_masks
+from ..scene import combine_masks, with_local_faces
 from ..document import MAX_LAYERS
 from . import pixel_selections
 
@@ -19,7 +19,12 @@ def _scene_key(self):
 def analyzeScene(self, refresh=False):
     if not self.hasImage or self.busy or self.hasRegionDraft:
         return
+    if not self._ai.ready and self._face_hints:
+        self._scene.set(with_local_faces(self._scene.catalog,self._face_hints))
+        pixel_selections.precache(self,[face["id"] for face in self._face_hints])
+        return self._notify("已在本地定位人脸，可选择人脸或皮肤；其他元素需配置 AI 分析",background=True)
     if not refresh and self._scene.restore(self._scene_key()):
+        self._scene.set(with_local_faces(self._scene.catalog, self._face_hints))
         self.changed.emit()
         # Restored catalogs skip the cloud scene response, so precache must be
         # kicked here or hover previews stay as boxes forever.
@@ -47,6 +52,7 @@ def selectByDescription(self, text):
         self._scene_followup = text.strip()
         self.analyzeScene(False)
     else:
+        self._scene.set(with_local_faces(self._scene.catalog, self._face_hints))
         self.sendMessage(text, "targets")
 
 

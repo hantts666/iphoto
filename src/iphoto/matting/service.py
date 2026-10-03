@@ -20,12 +20,18 @@ def refine_alpha(image, mask, radius=8):
     # A user's feather is an adjustment envelope, not evidence about coverage.
     # Re-estimate the unfeathered edge and output it without extra blur.
     seed["feather"] = 0
-    trimap = make_trimap(raster_mask(seed, rgb.size), radius)
+    original = raster_mask(seed,rgb.size)
+    trimap = make_trimap(original, radius)
+    if seed.get("semantic_target") in ("face","face_skin","body_skin"):
+        trimap[np.asarray(original)==0] = 0
+    del original
     pixels, tiles = solve_alpha(rgb, trimap, byte_output=True)
     unknown_pixels = int(np.count_nonzero(trimap == 0.5))
     del trimap
     partial_pixels = int(np.count_nonzero((pixels > 0) & (pixels < 255)))
     result = empty_mask()
+    if "semantic_target" in seed:
+        result["semantic_target"] = seed["semantic_target"]
     if "edge_protection" in mask:
         result["edge_protection"] = mask["edge_protection"]
     result.update(

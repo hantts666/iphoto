@@ -14,7 +14,7 @@ import math
 import re
 from uuid import uuid4
 
-from ..engine import LABELS, RANGES
+from ..engine import LABELS, RANGES, Recipe
 from ..document import MIN_STROKE_RADIUS
 from . import adjustment_review, heal, matting, objects, pixel_selections, selections
 
@@ -664,6 +664,61 @@ class SelectionController(QObject):
         )
 
     # -- edge refinement ------------------------------------------------------
+
+    @Property("QVariantList",notify=changed)
+    def faces(self):
+        return [{"id":f["id"],"name":f["name"]} for f in self._editor._face_hints]
+
+    @Slot(str,bool)
+    def selectFace(self,lid,skin=False):
+        editor=self._editor
+        if not editor.hasImage or editor.busy or editor.hasRegionDraft:
+            return
+        face=next((f for f in editor._face_hints if f["id"]==lid),None)
+        if face is None:
+            return editor._notify("没有可靠的人脸定位；可用 AI 直接识别或框住可见人脸后描述",True)
+        return pixel_selections.select_hint(editor,deepcopy(face["mask"]),anchor=face["anchor"],
+                         mask_target="face_skin" if skin else "face",crop=face["skin_crop"],
+                         recover_face_anchor=True,
+                         features=face.get('face_features'),
+                         origin={"mode":"selection","model":"BiSeNet（本地 AI）"})
+
+    @Slot(str, str)
+    def retouchFace(self, lid, preset):
+        editor = self._editor
+        presets = {
+            "smooth": {"skin_smoothing": 35},
+            "rosy": {"exposure": .15, "warmth": 4, "tint": 2, "hsl_orange_saturation": 5},
+            "refine": {"skin_smoothing": 25, "exposure": .12, "shadows": 8, "sharpness": 8},
+        }
+        if not editor._can_edit() or preset not in presets:
+            return
+        face = next((f for f in editor._face_hints if f["id"] == lid), None)
+        if face is None:
+            return editor._notify("未可靠定位到该人脸，请重新识别", True)
+        name = face["name"] + " · 面部调整"
+        label = face["mask"]["label"] + " · 面部皮肤"
+        existing = next((layer for layer in reversed(editor._layers)
+                         if layer["name"] == name and layer["kind"] == "adjustment"
+                         and layer["mask"].get("semantic_target") == "face_skin"
+                         and layer["mask"]["label"] == label), None)
+        if existing:
+            editor.selectLayer(existing["id"])
+            previous = dict(editor.parameters)
+            for key, value in presets[preset].items():
+                editor.setParameter(key, value)
+            editor.finishGesture()
+            self.focusChangedParameters(previous)
+            return editor._notify("已调整已有面部图层，可继续微调或撤销" +
+                                  ("；当前效果未显示" if not editor.activeDisplay["enabled"] else ""))
+        region = {"name": name, "reason": "自然平滑与明暗调整；遮挡和五官边缘需检查",
+                  "mask_target": "face_skin", "mask": deepcopy(face["mask"]),
+                  "anchor": list(face["anchor"]), "skin_crop": list(face["skin_crop"]),
+                  "recover_face_anchor": True,
+                  **({'face_features':deepcopy(face['face_features'])} if 'face_features' in face else {}),
+                  "recipe": Recipe.from_dict(presets[preset]).to_dict()}
+        return pixel_selections.select_regions(editor, [region], "仅调整目标人脸的皮肤", True,
+                                               origin={"mode": "auto", "model": "BiSeNet（本地 AI）"})
 
     @Property(str, notify=changed)
     def autoRefineMethod(self):

@@ -15,8 +15,9 @@ import re
 import numpy as np
 from PIL import Image, ImageCms, ImageFilter, ImageOps
 from .storage import atomic_output
+from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors
 
-ENGINE_VERSION = "1.7.2-smoothing-grid"
+ENGINE_VERSION = "1.9.0-color-channels"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),
@@ -32,6 +33,10 @@ RANGES = {
     "sharpness": (0, 100),
     "softness": (0, 100),
     "skin_smoothing": (0, 100),
+    "red_channel": (-100, 100),
+    "green_channel": (-100, 100),
+    "blue_channel": (-100, 100),
+    **HSL_FIELDS,
 }
 LABELS = {
     "exposure": "曝光",
@@ -47,9 +52,13 @@ LABELS = {
     "sharpness": "锐化",
     "softness": "柔化",
     "skin_smoothing": "磨皮",
+    "red_channel": "红通道",
+    "green_channel": "绿通道",
+    "blue_channel": "蓝通道",
+    **HSL_LABELS,
 }
 DETAIL_FIELDS = frozenset(("sharpness", "softness", "skin_smoothing"))
-CHANNEL_FIELDS = frozenset(("exposure", "warmth", "tint"))
+CHANNEL_FIELDS = frozenset(("exposure", "warmth", "tint", "red_channel", "green_channel", "blue_channel"))
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng",
@@ -93,6 +102,33 @@ class Recipe:
     sharpness: float = 0.0
     softness: float = 0.0
     skin_smoothing: float = 0.0
+    red_channel: float = 0.0
+    green_channel: float = 0.0
+    blue_channel: float = 0.0
+    hsl_red_hue: float = 0.0
+    hsl_red_saturation: float = 0.0
+    hsl_red_lightness: float = 0.0
+    hsl_orange_hue: float = 0.0
+    hsl_orange_saturation: float = 0.0
+    hsl_orange_lightness: float = 0.0
+    hsl_yellow_hue: float = 0.0
+    hsl_yellow_saturation: float = 0.0
+    hsl_yellow_lightness: float = 0.0
+    hsl_green_hue: float = 0.0
+    hsl_green_saturation: float = 0.0
+    hsl_green_lightness: float = 0.0
+    hsl_aqua_hue: float = 0.0
+    hsl_aqua_saturation: float = 0.0
+    hsl_aqua_lightness: float = 0.0
+    hsl_blue_hue: float = 0.0
+    hsl_blue_saturation: float = 0.0
+    hsl_blue_lightness: float = 0.0
+    hsl_purple_hue: float = 0.0
+    hsl_purple_saturation: float = 0.0
+    hsl_purple_lightness: float = 0.0
+    hsl_magenta_hue: float = 0.0
+    hsl_magenta_saturation: float = 0.0
+    hsl_magenta_lightness: float = 0.0
 
     @classmethod
     def from_dict(cls, data: dict) -> "Recipe":
@@ -204,6 +240,8 @@ def _transform_linear(rgb, recipe):
     if recipe.tint:
         gain = np.exp2(np.array([0.5, -1, 0.5], np.float32) * (recipe.tint / 100))
         rgb *= gain / np.dot(gain, LUMA)
+    if recipe.red_channel or recipe.green_channel or recipe.blue_channel:
+        rgb *= 1 + np.array([recipe.red_channel, recipe.green_channel, recipe.blue_channel], np.float32) / 100
     y = np.sum(rgb * LUMA, axis=-1, keepdims=True)
     if recipe.whites or recipe.blacks:
         rgb *= np.exp2(
@@ -232,9 +270,10 @@ def _transform_linear(rgb, recipe):
             1 + recipe.vibrance / 100 * (1 - np.clip(spread, 0, 1))
         )
     rgb = np.clip(rgb, 0, 1)
-    return np.where(
+    encoded = np.where(
         rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1 / 2.4) - 0.055
     )
+    return mix_colors(encoded, recipe) if any(getattr(recipe, key) for key in HSL_FIELDS) else encoded
 
 
 @lru_cache(maxsize=12)
@@ -268,7 +307,17 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
     rgb = image if image.mode == "RGB" else image.convert("RGB")
     values = recipe.to_dict()
     color_active = any(value for key, value in values.items() if key not in DETAIL_FIELDS)
-    if color_active and not any(value for key, value in values.items()
+    if any(values[key] for key in HSL_FIELDS):
+        # HSL can rotate saturated colours sharply. A coarse 3D LUT would
+        # introduce colour errors; use bounded exact strips for this path.
+        color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
+        pixels = np.asarray(rgb)
+        corrected = np.empty_like(pixels)
+        for top in range(0, image.height, strip_height):
+            exact = _transform_linear(LINEAR_LUT[pixels[top:top + strip_height]].copy(), color_recipe)
+            corrected[top:top + strip_height] = np.rint(exact * 255).clip(0, 255).astype(np.uint8)
+        result = Image.fromarray(corrected)
+    elif color_active and not any(value for key, value in values.items()
                                 if key not in CHANNEL_FIELDS and key not in DETAIL_FIELDS):
         color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
         result = rgb.point(_channel_lut(color_recipe))

@@ -90,6 +90,23 @@ def test_invalid_or_conflicting_edge_anchors_fail_before_model_inference(points,
         neural.refine(Image.new("RGB",(96,64)),bitmap(seed),4,points=points)
 
 
+def test_face_protected_holes_cannot_be_filled_by_neural_or_classic_edge_refinement(monkeypatch):
+    from iphoto.matting import service as matte_service
+    seed=np.zeros((64,96),np.uint8);seed[10:54,10:86]=255;seed[28:33,45:50]=0
+    mask={**bitmap(seed),'semantic_target':'face_skin'}
+    monkeypatch.setattr(neural,'backend',lambda:ColorEngine())
+    guides=[]
+    def classic(image,guide,**kwargs):
+        guides.append(guide.copy())
+        return np.rint(guide*255).astype(np.uint8),1
+    monkeypatch.setattr(matte_service,'solve_alpha',classic)
+    for result,_ in (neural.refine(Image.new('RGB',(96,64),'gray'),mask,8),
+                     matte_service.refine_alpha(Image.new('RGB',(96,64),'gray'),mask,8)):
+        alpha=np.array(raster_mask(result,(96,64)))
+        assert not alpha[seed==0].any() and result['semantic_target']=='face_skin'
+    assert not guides[0][seed==0].any()
+
+
 @pytest.mark.parametrize("bad",[np.zeros((10,10),np.float32),np.ones((10,10),np.uint8),np.zeros((8,8),np.uint8)])
 def test_invalid_guide_does_not_load_a_model(bad,monkeypatch):
     monkeypatch.setattr(neural,"backend",lambda:pytest.fail("Invalid trimap reached ONNX"))

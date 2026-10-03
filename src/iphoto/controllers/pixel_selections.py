@@ -25,13 +25,13 @@ def reset_prompts(self, refine=False):
 
 
 def start(self, jobs, context, priority=None, composition=None):
-    facial = any(job.get("mask_target") == "face_skin" for job in jobs)
+    facial = any(job.get("mask_target") in ("face", "face_skin") for job in jobs)
     body = any(job.get("mask_target") == "body_skin" for job in jobs)
     if facial:
         from ..segmentation.face_models import available as face_available
 
         if not face_available():
-            self._notify("面部皮肤模型尚未配置：运行 scripts/setup_face_parsing.py 后重新检测图像能力；本次分层未应用。", True)
+            self._notify("面部分区模型尚未配置：运行 scripts/setup_face_parsing.py 后重新检测图像能力；本次范围未应用。", True)
             return False
     if (composition is None or jobs) and (not jobs or any(job.get("mask_target", "object") in ("object", "body_skin") for job in jobs)) and not ready(self):
         return False
@@ -49,7 +49,8 @@ def start(self, jobs, context, priority=None, composition=None):
         if composition is not None and not jobs:
             self._status = f"正在组合 {len(composition['ids'])} 个对象的范围…"
         elif facial:
-            self._status = "正在自动分离面部皮肤、保护眉眼和嘴唇…"
+            self._status = ("正在按原图分离人脸、排除头发帽子和衣物…" if all(job.get("mask_target") == "face" for job in jobs)
+                            else "正在自动分离面部皮肤、保护眉眼和嘴唇…")
         elif body:
             self._status = "正在按原图细节分别生成身体部位范围…"
         elif getattr(self, "_warm_sha", "") == self._sha:
@@ -99,6 +100,10 @@ def precache(self, ids):
             "id": lid,
             "hint": objects[lid]["mask"],
             "points": [[*objects[lid]["anchor"], 1]] if "anchor" in objects[lid] else [],
+            "mask_target": objects[lid].get("mask_target", "object"),
+            "recover_face_anchor": lid in {face["id"] for face in getattr(self,"_face_hints",[])},
+            **({'face_features':objects[lid]['face_features']} if 'face_features' in objects[lid] else {}),
+            **({"skin_crop":objects[lid]["skin_crop"]} if "skin_crop" in objects[lid] else {}),
         }
         for lid in ids
         if lid in objects and lid not in self._scene.precise and lid not in pending
@@ -169,6 +174,10 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
             "points": [[*grounded.get(lid, objects[lid])["anchor"], 1]]
             if "anchor" in grounded.get(lid, objects[lid])
             else [],
+            "mask_target": objects[lid].get("mask_target", "object"),
+            "recover_face_anchor": lid in {face["id"] for face in getattr(self,"_face_hints",[])},
+            **({'face_features':objects[lid]['face_features']} if 'face_features' in objects[lid] else {}),
+            **({"skin_crop":objects[lid]["skin_crop"]} if "skin_crop" in objects[lid] else {}),
         }
         for lid in ids + exclude
         if lid in grounded or lid in previews or lid not in self._scene.precise and lid not in seed_items
@@ -188,10 +197,13 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
         return start(self, jobs, context)
 
 
-def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None):
+def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None):
     return start(
         self,
-        [{"id": "target", "hint": hint, "points": [[*anchor, 1]] if anchor else []}],
+        [{"id": "target", "hint": hint, "points": [[*anchor, 1]] if anchor else [],"mask_target":mask_target,
+          "recover_face_anchor": recover_face_anchor,
+          **({'face_features':features} if features is not None else {}),
+          **({"skin_crop":crop} if crop is not None else {})}],
         {"purpose": "hint", "hint": deepcopy(hint), "summary": summary,
          "detail_grounded_ids": ["target"] if detail_grounded else [],
          **({"origin": deepcopy(origin)} if origin else {})},
@@ -212,6 +224,8 @@ def select_regions(self, regions, summary, auto_apply=False, *, detail_ids=None,
                 "hint": r["mask"],
                 "points": [[*r["anchor"], 1]] if "anchor" in r else [],
                 "mask_target": r.get("mask_target", "object"),
+                "recover_face_anchor": r.get("recover_face_anchor",False),
+                **({'face_features':r['face_features']} if 'face_features' in r else {}),
                 **({"skin_crop": r["skin_crop"]} if "skin_crop" in r else {}),
                 **({"parts": [{"hint": p["mask"], "points": [[*p["anchor"], 1]],
                               **({"skin_crop": p["skin_crop"]} if "skin_crop" in p else {})}

@@ -18,6 +18,7 @@ from .segmentation.classical import (
 )  # compatibility exports
 from .segmentation.models import available as pixel_available
 from .segmentation.face_models import available as face_available
+from .segmentation.face_detection import available as face_detection_available
 from .matting.models import available as detail_available
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
@@ -120,6 +121,15 @@ def capabilities():
         },
     )
     facial_ready = face_available()
+    detection_ready = face_detection_available()
+    rows.append({
+        "id": "face_detection", "name": "人脸定位 · YuNet",
+        "description": "打开照片时在本地定位可见人脸，配合面部分区选择五官或皮肤；侧脸与遮挡可能漏检。",
+        "available": detection_ready,
+        "status": "可用 · 本地 CPU" if detection_ready else "需要配置人脸检测模型：scripts/setup_face_detection.py",
+        "license": "MIT / OpenCV Apache-2.0", "source": "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
+        "model_path": str(MODEL_DIR / "face-detection"),
+    })
     rows.insert(1, {
         "id": "face_skin", "name": "面部皮肤 · BiSeNet",
         "description": "AI 定位单个人脸后自动分离皮肤，保护眉眼嘴唇、头发和衣物；遮挡与边缘仍需检查。",

@@ -11,6 +11,8 @@ ColumnLayout {
     readonly property var reviewedRepair: selection.reviewedRepair
     property bool compactHeader: false
     property string paramMenuKey: ""
+    property int mixIndex: 0
+    readonly property var mixColors: ["red","orange","yellow","green","aqua","blue","purple","magenta"]
     signal parameterRevealRequested(Item row, Item section)
     function commitText() {
         for (var i = 0; i < toolGroups.count; ++i)
@@ -18,9 +20,15 @@ ColumnLayout {
         return true
     }
     function revealParameter(key) {
+        if (key.indexOf("hsl_") === 0) {
+            mixIndex = mixColors.indexOf(key.split("_")[1])
+            Qt.callLater(function() { revealParameterRow(key) })
+        } else revealParameterRow(key)
+    }
+    function revealParameterRow(key) {
         for (var i = 0; i < toolGroups.count; ++i) {
             var group = toolGroups.itemAt(i)
-            if (group.modelData.keys.indexOf(key) < 0) continue
+            if (group.parameterKeys.indexOf(key) < 0) continue
             group.expanded = true
             var row = group.parameterRow(key)
             if (row) parameterRevealRequested(row, group)
@@ -109,8 +117,13 @@ ColumnLayout {
     Repeater { id: toolGroups; model: editor.activeIsGroup ? [] : [
         {title:"明暗",keys:["exposure","contrast","highlights","shadows","whites","blacks"],open:true},
         {title:"色彩",keys:["warmth","tint","saturation","vibrance"],open:false},
-        {title:"细节与人像",keys:["skin_smoothing","sharpness","softness"],open:false}]
+        {title:"细节与人像",keys:["skin_smoothing","sharpness","softness"],open:false},
+        {title:"RGB 通道",keys:["red_channel","green_channel","blue_channel"],open:false},
+        {title:"分色调色 · HSL",keys:[],open:false,mixer:true}]
         delegate: FoldSection { id: toolGroup; required property var modelData; required property int index; title: modelData.title; expanded: modelData.open; objectName: "adjustmentSection_"+index
+            readonly property var parameterKeys: modelData.mixer
+                ? ["hue","saturation","lightness"].map(function(k) {return "hsl_"+adjustRoot.mixColors[adjustRoot.mixIndex]+"_"+k})
+                : modelData.keys
             function commitText() {
                 for (var i = 0; i < toolRows.count; ++i)
                     if (!toolRows.itemAt(i).commitText()) return false
@@ -123,7 +136,18 @@ ColumnLayout {
                 }
                 return null
             }
-    Repeater { id: toolRows; model: toolGroup.modelData.keys.map(function(key) { return editor.tools.find(function(t) { return t.key===key }) })
+            SelectBox {
+                objectName:"colorMixerChoice"; visible:toolGroup.modelData.mixer || false
+                model:["红色","橙色","黄色","绿色","青色","蓝色","紫色","洋红"]
+                currentIndex:adjustRoot.mixIndex; Layout.fillWidth:true
+                onActivated:function(index) {
+                    if (toolGroup.commitText()) adjustRoot.mixIndex=index
+                    else currentIndex=adjustRoot.mixIndex
+                }
+            }
+            Caption { visible:toolGroup.index===3; text:"独立调整红、绿、蓝通道；0 为原值，-100 移除此通道。"; font.pixelSize:10; wrapMode:Text.Wrap; Layout.fillWidth:true }
+            Caption { visible:toolGroup.modelData.mixer || false; text:"选择颜色后调整色相、饱和度与明度，相邻颜色平滑过渡；灰色保持。"; font.pixelSize:10; wrapMode:Text.Wrap; Layout.fillWidth:true }
+    Repeater { id: toolRows; model: toolGroup.parameterKeys.map(function(key) { return editor.tools.find(function(t) { return t.key===key }) })
         delegate: Item {
             required property var modelData
             objectName: "parameterRow_"+modelData.key

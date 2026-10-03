@@ -199,6 +199,8 @@ def applyDescription(self, text):
 def _spatial_context(self):
     return {
         "face_skin_available": face_skin_available(),
+        "detected_faces": [{k: face[k] for k in ("name", "anchor", "skin_crop")}
+                           for face in self._face_hints],
         "body_skin_available": pixel_selections.available(),
         "objects": [
             {k: o[k] for k in ("id", "name", "category")}
@@ -414,6 +416,8 @@ def sendMessage(self, text, mode):
             "active_is_group": self.activeIsGroup,
             "repair_available": repair_available(),
             "face_skin_available": face_skin_available(),
+            "detected_faces": [{k: face[k] for k in ("name", "anchor", "skin_crop")}
+                               for face in self._face_hints],
             "body_skin_available": pixel_selections.available(),
         },
     )
@@ -617,7 +621,17 @@ def _cloud_plan(self, result, generation):
         mode == "regions" and pending.get("auto_fallback", False)
     )
     if auto_layering and result["status"] != "unsupported" and not pending.get("skin_grounded"):
-        skin_indices = [i for i, r in enumerate(result["regions"]) if r["recipe"]["skin_smoothing"] > 0]
+        from ..segmentation.face_detection import match_hint
+        result['regions'] = deepcopy(result['regions'])
+        for region in result['regions']:
+            face = match_hint(region['mask'],self._face_hints) if region.get('mask_target')=='face_skin' else None
+            if face:
+                region.update(mask=deepcopy(face['mask']),anchor=list(face['anchor']),
+                              skin_crop=list(face['skin_crop']),recover_face_anchor=True)
+                if 'face_features' in face:
+                    region['face_features'] = deepcopy(face['face_features'])
+        skin_indices = [i for i, r in enumerate(result["regions"])
+                        if r["recipe"]["skin_smoothing"] > 0 and not r.get('recover_face_anchor')]
         if skin_indices and len(self._layers) + len(result["regions"]) <= MAX_LAYERS:
             pending["skin_grounding"] = {
                 "regions": deepcopy(result["regions"]), "summary": result["summary"],
@@ -636,14 +650,15 @@ def _cloud_plan(self, result, generation):
         self._message("assistant", result["summary"], state="unsupported")
         self._scene_followup = ""
     elif mode == "scene":
-        self._scene.set({"summary": result["summary"], "objects": result["objects"]})
+        from ..scene import with_local_faces
+        self._scene.set(with_local_faces({"summary": result["summary"], "objects": result["objects"]},self._face_hints))
         self._scene.remember(self._scene_key())
         self._message(
             "assistant",
             result["summary"] + "\n已建立元素清单，可按类别勾选或在画布点选。",
             state="catalog",
         )
-        pixel_selections.precache(self, [o["id"] for o in result["objects"]])
+        pixel_selections.precache(self, [o["id"] for o in self._scene.catalog["objects"]])
     elif mode == "targets":
         pixel_selections.select_objects(
             self,
@@ -656,8 +671,14 @@ def _cloud_plan(self, result, generation):
     elif mode == "selection":
         mask = result["mask"]
         mask["label"] = ("AI · " + self._conversation[-1]["text"])[:200]
+        from ..segmentation.face_detection import match_hint
+        target = result.get('mask_target','object')
+        face = match_hint(mask,self._face_hints) if target in ('face','face_skin') else None
         pixel_selections.select_hint(
-            self, mask, result["summary"], result.get("anchor")
+            self, deepcopy(face['mask']) if face else mask, result["summary"],
+            face['anchor'] if face else result.get("anchor"),mask_target=target,
+            crop=face['skin_crop'] if face else None,recover_face_anchor=bool(face),
+            features=face.get('face_features') if face else None
         )
     elif mode == "regions":
         if not pixel_selections.select_regions(

@@ -74,6 +74,26 @@ ColumnLayout {
                 }
             }
             Field { id: selectionPrompt; objectName: "selectionDescriptionInput"; Layout.fillWidth: true; implicitHeight: 30; placeholderText: "或用文字描述：天空，不要树枝"; onAccepted: selection.selectByText(text) }
+            RowLayout {
+                visible: selection.faces.length>0; Layout.fillWidth: true; spacing: 4
+                SelectBox { id: faceChoice; objectName:"faceChoiceBox"; model: selection.faces; textRole:"name"; Layout.fillWidth:true; implicitHeight:26; enabled:!editor.busy }
+                Action { objectName:"selectFaceButton"; text:"选人脸"; implicitHeight:26; hint:"本地 AI 分离完整人脸，包括五官，排除头发帽子和衣物"; enabled:!editor.busy && faceChoice.currentIndex>=0; onClicked:selection.selectFace(selection.faces[faceChoice.currentIndex].id,false) }
+                Action { objectName:"selectFaceSkinButton"; text:"只选皮肤"; implicitHeight:26; hint:"用于磨皮与气色调整，保护眉眼嘴唇"; enabled:!editor.busy && faceChoice.currentIndex>=0; onClicked:selection.selectFace(selection.faces[faceChoice.currentIndex].id,true) }
+            }
+            RowLayout {
+                visible: selection.faces.length>0; Layout.fillWidth: true; spacing: 4
+                Repeater {
+                    model: [{key:"smooth",label:"磨皮"},{key:"rosy",label:"提气色"},{key:"refine",label:"自然精修"}]
+                    delegate: Action {
+                        required property var modelData
+                        objectName: "faceRetouch_"+modelData.key; text:modelData.label; Layout.fillWidth:true; implicitHeight:26
+                        enabled:!editor.busy && !editor.hasSelectionDraft && !editor.hasRegionDraft && faceChoice.currentIndex>=0
+                        hint:"自动分离面部皮肤并建立调整层；重复使用会调整已有面部层，可一步撤销。精修不改变脸型，不代替祛痘。"
+                        onClicked:selection.retouchFace(selection.faces[faceChoice.currentIndex].id,modelData.key)
+                    }
+                }
+            }
+            Caption { visible:editor.hasImage && selection.faces.length===0; text:"尚未可靠定位人脸，可用 AI 直接识别可见面部；侧脸和遮挡仍可能失败。"; font.pixelSize:10; wrapMode:Text.Wrap; Layout.fillWidth:true }
             RowLayout { Layout.fillWidth: true; implicitWidth: 0
                 Action { objectName: "aiSelectionButton"; text: "按描述识别"; Layout.fillWidth: true; implicitHeight: 28; hint: "有元素清单时从清单匹配（快、可复核）；无清单先分析画面"; enabled: editor.hasImage && !editor.busy && selectionPrompt.text.trim().length>0; onClicked: selection.selectByText(selectionPrompt.text) }
                 Action { objectName: "directSelectionButton"; text: "AI 直接识别"; subtle: true; Layout.fillWidth: true; implicitHeight: 28; hint: "跳过清单，AI 直接在图中识别目标（云端）"; enabled: editor.hasImage && !editor.busy && selectionPrompt.text.trim().length>0; onClicked: selection.selectByTextDirect(selectionPrompt.text) }

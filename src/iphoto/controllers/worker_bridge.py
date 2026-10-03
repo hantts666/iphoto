@@ -502,12 +502,13 @@ def _read(self):
                 self._preview_generation = -1
                 self._histogram = value["histogram"]
                 self._stats = value.get("stats")
+                self._face_hints = value.get("faces", [])
                 self._recipe = Recipe().to_dict()
                 self._locked = set()
                 self._history = [(dict(self._recipe), set())]
                 self._cursor = 0
                 self._summary = "原图已就绪。输入你的要求，或先试试左侧的调色预设。"
-                self._status = value["warning"] or "原图已保留 · 编辑不会覆盖原文件"
+                self._status = value["warning"] or value.get("face_detection_warning") or "原图已保留 · 编辑不会覆盖原文件"
                 if self._sample:
                     self._recipe = Recipe.from_dict(PRESETS["natural"]).to_dict()
                     self._summary = "示例已应用「自然通透」预设：轻提暗部、收敛高光，保留湖水与山林的层次。拖动分割线查看变化。"

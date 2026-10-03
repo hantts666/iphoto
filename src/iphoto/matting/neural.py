@@ -127,9 +127,13 @@ def refine(image, mask, radius=8, *, points=None, progress=None):
 
     started = perf_counter()
     points = validate_points([] if points is None else points)
-    guide = make_trimap(raster_mask({**mask, "feather": 0}, image.size), radius)
+    original = raster_mask({**mask, "feather": 0}, image.size)
+    guide = make_trimap(original, radius)
     trimap = np.rint(guide * 255).astype(np.uint8)
     del guide
+    if mask.get("semantic_target") in ("face", "face_skin", "body_skin"):
+        trimap[np.asarray(original)==0] = 0
+    del original
     anchors = {}
     for x, y, label in points:
         coordinate = (round(y * (image.height - 1)), round(x * (image.width - 1)))
@@ -145,6 +149,8 @@ def refine(image, mask, radius=8, *, points=None, progress=None):
     result.update(bitmap=encode_bitmap(Image.fromarray(pixels), sampling="alpha", preserve_resolution=True), label=mask["label"])
     if "edge_protection" in mask:
         result["edge_protection"] = mask["edge_protection"]
+    if "semantic_target" in mask:
+        result["semantic_target"] = mask["semantic_target"]
     model = backend()
     return result, {"backend": "ViTMatte-S · ONNX", "provider": model.provider,
                     "elapsed_ms": round((perf_counter()-started)*1000, 1), "radius": radius,

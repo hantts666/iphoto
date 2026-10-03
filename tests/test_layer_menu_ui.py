@@ -1,4 +1,5 @@
 """Context menus read and mutate the clicked target without navigation side effects."""
+# ruff: noqa: F811 -- imported pytest fixture parameters
 
 from copy import deepcopy
 import time
@@ -12,7 +13,7 @@ from test_ai import wait_for
 from test_ai_hidden_effects import preview
 from test_ai_layer_edits import setup_layers
 from test_editor import settled
-from test_selection_ui_modes import ui, click
+from test_selection_ui_modes import ui, click  # noqa: F401 -- shared pytest fixture
 
 
 def grouped(editor):
@@ -30,6 +31,15 @@ def grouped(editor):
 def show_menu(window, find, lid):
     row = find("layerSelect_" + lid)
     viewport = find("layerList")
+    # A clicked, non-active row can be partially below the viewport. Scroll
+    # it into view without selecting it; menu tests still assert no navigation
+    # or document mutation before the requested action.
+    top = row.mapToItem(viewport,QPointF()).y()
+    bottom = top + row.height()
+    if top < 3 or bottom > viewport.height()-3:
+        delta = top-3 if top<3 else bottom-viewport.height()+3
+        viewport.setProperty('contentY',viewport.property('contentY')+delta)
+        QTest.qWait(40)
     point = row.mapToScene(QPointF(row.width()/2, row.height()/2))
     assert 0 < viewport.mapFromScene(point).y() < viewport.height()
     QTest.mouseClick(window, Qt.RightButton, Qt.NoModifier, point.toPoint())

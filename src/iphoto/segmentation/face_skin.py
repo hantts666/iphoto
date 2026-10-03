@@ -12,15 +12,47 @@ import numpy as np
 from PIL import Image
 
 from ..ai_grounding import crop_pixels, region_crop
-from ..document import empty_mask, validate_mask
+from ..document import empty_mask, validate_mask, raster_mask
 from ..masks import encode_bitmap
 from .face_models import verified_path
+from .face_detection import validate_features
 from .prompts import validate_points
 from .runtime import prepare_runtime
 
-SKIN_CLASSES = (1, 7, 8, 10, 14)  # skin, ears, nose, neck
-PROTECTED_CLASSES = (2, 3, 4, 5, 6, 9, 11, 12, 13, 15, 16, 17, 18)
+SKIN_CLASSES = (1, 7, 8, 10)  # face skin, ears and nose; neck is a separate region
+PROTECTED_CLASSES = (2, 3, 4, 5, 6, 9, 11, 12, 13, 14, 15, 16, 17, 18)
 _backend = None
+
+
+def feature_guard_pixels(features, labels):
+    """Conservative landmark guards supplement ambiguous parsing under a hat."""
+    guard = np.zeros((512,512),np.uint8)
+    for name,points in features.items():
+        points = np.asarray(points,np.float64)
+        span = np.linalg.norm(points[1]-points[0])
+        if span < 1:
+            continue
+        center = points.mean(0)
+        angle = float(np.degrees(np.arctan2(*(points[1]-points[0])[::-1])))
+        # A small oriented disk at each eye; the mouth uses both corners as a
+        # capsule. These are protections, not replacement face boundaries.
+        if name=='eyes':
+            centers = points
+            axes = (max(1,round(span*.28)),max(1,round(span*.18)))
+        else:
+            centers = [center]
+            axes = (max(1,round(span*.68)),max(1,round(span*.32)))
+        for x,y in centers:
+            if 0 <= x < 512 and 0 <= y < 512:
+                # Occluded landmark guesses can fall on the nose or hat. Only
+                # protect a visible plausible feature/skin centre, not those
+                # guesses or background; semantic features remain protected.
+                label = labels[min(511,round(y)),min(511,round(x))]
+                plausible = (1,2,3,4,5,6) if name=='eyes' else (1,11,12,13)
+                if label not in plausible:
+                    continue
+                cv2.ellipse(guard,(round(x),round(y)),axes,angle,0,360,255,-1)
+    return guard>0
 
 
 class FaceParser:
@@ -55,7 +87,7 @@ def backend():
     return _backend
 
 
-def segment(image, hint, points, *, crop=None, engine=None):
+def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None):
     started = perf_counter()
     hint = validate_mask(hint)
     points = validate_points(points or [])
@@ -74,7 +106,20 @@ def segment(image, hint, points, *, crop=None, engine=None):
     py = round((y * image.height - top) / patch.height * 511)
     if not (0 <= px < 512 and 0 <= py < 512):
         raise ValueError("面部定位点不在放大范围内，照片未改变")
-    hard = np.isin(labels, SKIN_CLASSES).astype(np.uint8)
+    if target not in ("face", "face_skin"):
+        raise ValueError("面部目标类型无效")
+    hard = np.isin(labels, tuple(range(1,14)) if target == "face" else SKIN_CLASSES).astype(np.uint8)
+    recovered = False
+    if not hard[py,px] and recover_anchor:
+        # A detector's nose landmark can lie under a hat. Recover only from
+        # the parser's visible nose pixels inside this detector's face hint;
+        # never choose an arbitrary skin-coloured region elsewhere in the crop.
+        support = raster_mask(hint,image.size).crop(box).resize((512,512),Image.Resampling.NEAREST)
+        ys,xs = np.nonzero((labels==10)&(np.asarray(support)>0))
+        if len(xs):
+            closest = np.argmin((xs-px)**2+(ys-py)**2)
+            px,py = int(xs[closest]),int(ys[closest])
+            recovered = True
     if not hard[py, px]:
         raise ValueError("面部定位点未落在可识别的皮肤上，照片未改变；请重新描述目标")
     # Keep only the face connected to the requested anchor; another face in
@@ -83,8 +128,13 @@ def segment(image, hint, points, *, crop=None, engine=None):
     selected = components == components[py, px]
     if selected.mean() < .005 or not np.any(selected & (labels == 10)):
         raise ValueError("未可靠识别到目标面部，照片未改变；请框住单个人脸再试")
-    protected = np.isin(labels, PROTECTED_CLASSES).astype(np.uint8)
+    protected = np.isin(labels, (14,15,16,17,18) if target == "face" else PROTECTED_CLASSES).astype(np.uint8)
     protected = cv2.dilate(protected, np.ones((3, 3), np.uint8)) > 0
+    if target=='face_skin' and features is not None:
+        features = validate_features(features)
+        mapped = {name:[[(x*image.width-left)/patch.width*511,(y*image.height-top)/patch.height*511]
+                        for x,y in points] for name,points in features.items()}
+        protected |= feature_guard_pixels(mapped,labels)
     hard = (selected & ~protected).astype(np.uint8)
     # An inward transition preserves exact zeros on eyes, lips, hair, clothes
     # and background. RGB-guided outward expansion could fill those holes.
@@ -97,13 +147,16 @@ def segment(image, hint, points, *, crop=None, engine=None):
     full.paste(alpha, (left, top))
     result = empty_mask()
     result.update(bitmap=encode_bitmap(full, sampling="alpha", preserve_resolution=True),
-                  label=(hint["label"] + " · 面部皮肤")[:200])
+                  label=(hint["label"] + (" · 人脸" if target == "face" else " · 面部皮肤"))[:200],
+                  semantic_target=target)
     quality = {
-        "model": "BiSeNet · 面部皮肤", "semantic_target": "face_skin",
-        "protected_features": ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
-        "warnings": ["面部皮肤已自动分区，请放大检查遮挡与边缘"],
+        "model": "BiSeNet · 人脸" if target == "face" else "BiSeNet · 面部皮肤", "semantic_target": target,
+        "protected_features": ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
+        "warnings": [("人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "mask_size": list(image.size), "crop_size": list(patch.size),
         "coverage": round(float(hard.mean()) * patch.width * patch.height / (image.width * image.height) * 100, 2),
+        "anchor_recovered": recovered,
+        "landmark_protection": target=='face_skin' and features is not None,
     }
     return result, quality

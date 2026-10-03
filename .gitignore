@@ -9,4 +9,5 @@ codex.exe_*.log
 logs/
 models/segmentation/*.onnx
 models/face-parsing/*.onnx
+models/face-detection/*.onnx
 models/matting/*.onnx

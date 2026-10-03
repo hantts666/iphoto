@@ -74,6 +74,7 @@ class Editor(QObject):
         self._width = self._height = 0
         self._histogram = []
         self._stats = None
+        self._face_hints = []
         self._summary = "写下想调整的地方，让照片更接近你眼中的样子。"
         self._status = "正在启动本地引擎…"
         self._notification_scope = ""

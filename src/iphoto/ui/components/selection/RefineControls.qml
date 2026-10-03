@@ -61,12 +61,6 @@ ColumnLayout {
     }
     ColumnLayout { visible: !root.regionMode; Layout.fillWidth: true; spacing: 6
         RowLayout { Layout.fillWidth: true
-            Caption { text: "边缘色彩保护" }
-            FineSlider { objectName: root.prefix+"edgeProtectionSlider"; from: 0; to: 100; stepSize: 10; value: root.editor.edgeProtection; Layout.fillWidth: true; enabled: root.active && !root.editor.busy; onMoved: root.editor.setEdgeProtection(value); onPressedChanged: if(!pressed) root.editor.finishSelectionGesture() }
-            Caption { text: Math.round(root.editor.edgeProtection)+"%" }
-        }
-        Caption { text: "上色后有亮边，可适当提高色彩保护；默认关闭。不会修复选错的对象。"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 10 }
-        RowLayout { Layout.fillWidth: true
             Caption { text: "内羽化" }
             FineSlider { from: 0; to: 5; stepSize: .1; value: root.editor.draftFeather; Layout.fillWidth: true; enabled: root.active && !root.editor.busy; onMoved: root.editor.setDraftFeather(value); onPressedChanged: if(!pressed) root.editor.finishSelectionGesture() }
             Caption { text: root.editor.draftFeather.toFixed(1)+"%" }

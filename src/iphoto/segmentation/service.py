@@ -78,10 +78,15 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
     items = []
     for index, job in enumerate(jobs, 1):
         try:
-            if job.get("mask_target", "object") == "face_skin":
+            if job.get("mask_target", "object") in ("face", "face_skin"):
                 from .face_skin import segment as face_segment
 
-                mask, quality = face_segment(source or image, job.get("hint"), job.get("points"), crop=job.get("skin_crop"))
+                options = {"target":"face"} if job.get("mask_target") == "face" else {}
+                if job.get("recover_face_anchor") is True:
+                    options["recover_anchor"] = True
+                if job.get('face_features') is not None:
+                    options['features'] = job['face_features']
+                mask, quality = face_segment(source or image, job.get("hint"), job.get("points"), crop=job.get("skin_crop"), **options)
             elif job.get("mask_target") == "body_skin":
                 from .body_skin import segment as body_segment
 

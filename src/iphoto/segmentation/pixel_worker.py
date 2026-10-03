@@ -40,7 +40,7 @@ def main():
             composition = request.get("composition")
             source = None
             jobs = request.get("jobs", [])
-            if (any(job.get("mask_target") in ("face_skin", "body_skin") for job in jobs)
+            if (any(job.get("mask_target") in ("face", "face_skin", "body_skin") for job in jobs)
                     or jobs and request.get("priority") != "low"):
                 source = load_native(request)
             if composition is not None and not request.get("jobs"):

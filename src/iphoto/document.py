@@ -79,6 +79,8 @@ def validate_mask(mask, *, cache_bitmap=False):
     if not isinstance(mask.get("inverted"), bool):
         raise ValueError("选区反选标记无效")
     number(mask.get("feather"), 0, 0.05)
+    if "semantic_target" in mask and mask["semantic_target"] not in ("face", "face_skin", "body_skin"):
+        raise ValueError("选区语义目标无效")
     shift = mask.get("edge_shift", 0)
     if isinstance(shift, bool) or not isinstance(shift, int) or not -5 <= shift <= 5:
         raise ValueError("边缘位移应为 -5～5 的整数（短边百分比）")
@@ -125,6 +127,7 @@ def validate_mask(mask, *, cache_bitmap=False):
         "base": mask["base"],
         "inverted": mask["inverted"],
         "label": mask["label"],
+        **({"semantic_target":mask["semantic_target"]} if "semantic_target" in mask else {}),
         **({"bitmap": validate_bitmap(mask["bitmap"], cache_decoded=cache_bitmap)} if "bitmap" in mask else {}),
         "feather": float(mask["feather"]),
         **({"edge_shift": mask["edge_shift"]} if mask.get("edge_shift") else {}),
@@ -576,7 +579,7 @@ def _validate_project(payload):
             "active_layer": layer["id"],
             "conversation": [],
         }
-    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8"):
+    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"):
         raise ValueError("不支持此项目版本")
     if (
         not isinstance(payload.get("source"), str)
@@ -613,7 +616,7 @@ def _validate_project(payload):
     from .scene import validate_catalog
 
     return {
-        "schema_version": "1.8",
+        "schema_version": "1.9",
         "engine_version": ENGINE_VERSION,
         "source": payload["source"],
         "source_sha256": payload["source_sha256"].lower(),
