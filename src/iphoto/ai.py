@@ -10,6 +10,7 @@ from .ai_settings import AISettings, PROVIDERS, SettingsStore
 from .engine import Recipe
 from .ai_protocol import build_payload, image_data_url, parse_auto, parse_plan
 from .ai_tasks import parse_selection, parse_regions
+from .ai_repair import parse_repair_spots
 from .scene import parse_scene, parse_targets
 
 
@@ -87,11 +88,14 @@ class AIController(QObject):
         if self._reply is None or self._context is None:
             return ""
         elapsed = max(0, int(time.monotonic() - self._request_started))
-        phase = (
-            "AI 首次回复未通过校验，正在修正"
-            if self._context.get("validation_retry")
-            else "正在接收 AI 回复" if self._context["body"] else "请求已发送，等待 AI 回应"
-        )
+        if self._context.get("validation_retry"):
+            phase = "AI 首次回复未通过校验，正在修正"
+        elif self._context["workspace"].get("_grounding_label"):
+            phase = "正在精定位：" + self._context["workspace"]["_grounding_label"]
+        else:
+            task = {"scene": "分析画面", "selection": "定位范围", "targets": "选择对象",
+                    "regions": "规划分区", "advice": "修图建议", "auto": "智能修图"}.get(self._context["mode"], "AI 修图")
+            phase = task + ("：正在接收 AI 回复" if self._context["body"] else "：请求已发送，等待 AI 回应")
         return f"{phase} · 已等待 {elapsed} 秒 · 可取消"
 
     @Property(str, notify=changed)
@@ -228,7 +232,9 @@ class AIController(QObject):
                 text,
                 recipe,
                 locked,
-                "" if mode == "targets" else image_data_url(image_path),
+                "" if mode == "targets" else image_data_url(
+                    image_path, (workspace or {}).get("_image_crop")
+                ),
                 generation,
                 False,
                 mode,
@@ -328,6 +334,7 @@ class AIController(QObject):
                 "selection": "AI 正在直接描绘目标轮廓…",
                 "regions": "AI 正在规划分区图层…",
                 "auto": "AI 正在判断调整范围并规划图层…",
+                "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
             }.get(mode, "AI 正在看图并生成修图参数…")
         )
 
@@ -393,9 +400,16 @@ class AIController(QObject):
             try:
                 response = json.loads(decoded)
                 if context["mode"] == "auto":
-                    result = parse_auto(response, context["recipe"], context["locked"])
+                    result = parse_auto(
+                        response, context["recipe"], context["locked"],
+                        context["workspace"].get("current_scope"),
+                        context["workspace"].get("existing_layers"),
+                        context["workspace"].get("current_display_enabled", True),
+                    )
                 elif context["mode"] == "selection":
                     result = parse_selection(response)
+                elif context["mode"] == "repair":
+                    result = parse_repair_spots(response, context["workspace"])
                 elif context["mode"] == "scene":
                     result = parse_scene(response)
                 elif context["mode"] == "targets":
@@ -445,7 +459,7 @@ class AIController(QObject):
     def _retry_invalid_result(self, context, reason):
         if (
             context["testing"]
-            or context["mode"] not in {"auto", "scene", "regions"}
+            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair"}
             or context["validation_retry"]
             or context["abort"]
         ):

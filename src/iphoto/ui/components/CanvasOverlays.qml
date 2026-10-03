@@ -3,24 +3,55 @@ import QtQuick
 // Screen-sized overlays: zoom never allocates an image-sized Canvas texture.
 Item {
     id: root
+    objectName: "canvasOverlayGroup"
     required property var workspace
     required property var editor
     required property var photo
     required property var input
     property string hoverId: ""
     property string hoverPreview: ""
-    readonly property string activeHover: hoverId !== "" ? hoverId : (workspace.sceneHoverId || "")
+    readonly property bool objectPreviewEnabled: workspace.objectPreviewEnabled && root.visible
+    readonly property int sceneRevision: editor.sceneRevision
+    readonly property string selectionTool: workspace.selectionTool
+    readonly property string activeHover: !objectPreviewEnabled ? ""
+                                         : hoverId !== "" && workspace.selectionTool === "object" ? hoverId : (workspace.sceneHoverId || "")
     function repaint() { outlines.requestPaint() }
     Connections { target: editor; function onChanged() { root.syncHover() } }
     Connections { target: editor.viewport; function onChanged() { root.repaint() } }
-    function syncHover() { var row=editor.sceneObjects.find(function(o) { return o.id===root.activeHover }); hoverPreview=row ? row.maskPreview : ""; repaint() }
+    function syncHover() {
+        if (!activeHover) { hoverPreview=""; repaint(); return }
+        var row=editor.sceneObjects.find(function(o) { return o.id===root.activeHover })
+        hoverPreview=row ? row.maskPreview : ""; repaint()
+    }
+    onObjectPreviewEnabledChanged: {
+        hoverId = ""
+        if (!objectPreviewEnabled) workspace.sceneHoverId = ""
+    }
+    onSelectionToolChanged: { hoverId=""; repaint() }
+    onSceneRevisionChanged: { hoverId=""; syncHover() }
     onHoverIdChanged: syncHover()
     onActiveHoverChanged: syncHover()
-    Image { x: root.photo.x; y: root.photo.y; width: root.photo.width; height: root.photo.height; source: root.hoverPreview; visible: root.activeHover!=="" && !root.editor.viewport.spaceHeld; fillMode: Image.Stretch }
+    Rectangle {
+        id: footprint
+        objectName: "brushFootprint"
+        readonly property point center: root.input.mapToItem(root, root.input.mouseX, root.input.mouseY)
+        visible: root.input.enabled && (root.input.containsMouse || root.input.pressed)
+            && ["brush", "heal"].includes(root.workspace.selectionTool)
+            && !root.editor.viewport.spaceHeld && !root.editor.viewport.temporaryZoom
+        width: Math.max(2, root.workspace.brushRadius * 2 * Math.min(root.photo.width, root.photo.height))
+        height: width; radius: width / 2
+        x: center.x - width / 2; y: center.y - height / 2
+        color: "transparent"; border.width: 1
+        border.color: root.workspace.selectionTool === "brush" && (root.input.pressed ? root.input.strokeMode : root.editor.viewport.altHeld ? "subtract" : root.editor.viewport.shiftHeld ? "add" : root.workspace.selectionMode) === "subtract" ? "#ffad8d" : "#d7fff1"
+        Rectangle { anchors.fill: parent; anchors.margins: -1; radius: width / 2; color: "transparent"; border.width: 1; border.color: "#25282c"; z: -1 }
+    }
+    Image { objectName: "objectHoverPreview"; x: root.photo.x; y: root.photo.y; width: root.photo.width; height: root.photo.height; source: root.hoverPreview; visible: root.activeHover!=="" && !root.editor.viewport.spaceHeld; fillMode: Image.Stretch }
     Canvas {
         id: outlines
         objectName: "canvasOverlays"
         anchors.fill: parent
+        visible: root.activeHover !== "" || root.input.points.length > 0
+                 || (root.workspace.selectionTool === "smart" && root.editor.pixelPoints.length > 0)
         onWidthChanged: requestPaint()
         onHeightChanged: requestPaint()
         onPaint: {

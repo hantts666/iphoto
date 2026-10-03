@@ -5,9 +5,35 @@ from PIL import Image, ImageStat
 from PySide6.QtCore import QPointF, QProcess, QUrl
 from PySide6.QtGui import QImage
 
+from iphoto.controllers import detail_tiles
 from test_ai import wait_for
 from test_canvas_ui import canvas  # noqa: F401
 from test_editor import settled
+
+
+def test_first_native_zoom_dispatches_without_waiting_for_the_viewport_debounce(canvas, monkeypatch):  # noqa: F811
+    ui = canvas
+    requests = []
+    original_request = detail_tiles.request
+
+    def observe(editor):
+        requests.append((editor.viewport.zoom, list(editor.viewport.visibleRect)))
+        return original_request(editor)
+
+    monkeypatch.setattr(detail_tiles, "request", observe)
+    assert not ui.find("canvasViewport").property("detailWanted")
+    before = (ui.e._cursor, ui.e._generation, ui.e.dirty)
+    ui.click("actualSizeButton")
+    # The initial request is scheduled in the next event turn, without a
+    # fixed settling delay; ui.click delivers input and processes 40ms.
+    assert requests and requests[0][0] == 1
+    count = len(requests)
+    for zoom in (1.25, 1.5, 1.75):
+        ui.n.setZoom(zoom)
+        ui.app.processEvents()
+    assert len(requests) == count
+    wait_for(lambda: ui.w.property("detailReady") and settled(ui.e), seconds=20)
+    assert before == (ui.e._cursor, ui.e._generation, ui.e.dirty)
 
 
 def test_zoom_100_loads_true_photo_pixels_and_fit_releases_worker(canvas, tmp_path):  # noqa: F811

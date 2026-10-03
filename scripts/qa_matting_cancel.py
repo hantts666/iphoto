@@ -169,7 +169,7 @@ def main():
                       f"ui_private_working_mb={memory_mb(os.getpid())}")
             return
         started = monotonic()
-        click("cancelTaskButton")
+        click("cancelAiRequest")
         cancelled_at = monotonic()
         app.processEvents()
         print(f"cancel_click_s={cancelled_at-started:.2f} "

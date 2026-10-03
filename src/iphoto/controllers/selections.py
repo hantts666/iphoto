@@ -44,10 +44,17 @@ def beginSelection(self, source="empty"):
         return
     self._commit()
     self._draft_history, self._draft_cursor = [], 0
+    # A correction belongs to its original layer, even across project reloads.
+    self._selection_target_id = self._selected if source == "current" else ""
     self._set_candidate(
         deepcopy(self._layer()["mask"]) if source == "current" else empty_mask()
     )
-    self._notify("已进入暂存范围：接下来的修改只影响暂存，输出到图层后才会改变照片")
+    self._notify(
+        f"正在修正“{self.activeLayerName}”的范围；完成后点击“保存范围修改”"
+        if self._selection_target_id
+        else "选好范围后点击“开始调整此范围”，即可调整照片",
+        scope="draft",
+    )
 
 
 def drawDraft(self, kind, mode, points, radius):
@@ -159,6 +166,7 @@ def selectionToLayer(self):
     self._layers.append(layer)
     self._selected = layer["id"]
     self._candidate = None
+    self._selection_target_id = ""
     self._pixel_points, self._pixel_hint = [], None
     self._draft_history = []
     self._load_layer()
@@ -169,6 +177,7 @@ def selectionToLayer(self):
     self._message("event", "已从选区建立独立调整层。调整参数只影响此层蒙版内的内容。")
     self._commit()
     self._change()
+    self._notify("已开始局部调整；右侧可调参数，点图层蒙版缩略图可修边")
 
 
 def inpaintToLayer(self):
@@ -189,6 +198,7 @@ def inpaintToLayer(self):
     self._layers.append(layer)
     self._selected = layer["id"]
     self._candidate = None
+    self._selection_target_id = ""
     self._pixel_points, self._pixel_hint = [], None
     self._draft_history = []
     self._load_layer()
@@ -202,6 +212,7 @@ def inpaintToLayer(self):
     )
     self._commit()
     self._change()
+    self._notify("已创建内容感知填充层；可继续调整，Ctrl+Z 可撤销")
 
 
 def selectRegion(self, index):
@@ -255,6 +266,7 @@ def acceptRegions(self):
     )
     self._commit()
     self._change()
+    self._notify(f"已开始 {len(layers)} 个分区调整；右侧可调参数，Ctrl+Z 可撤销")
 
 
 def discardRegions(self):
@@ -269,12 +281,16 @@ def discardRegions(self):
     self._generation += 1
     self._schedule_render()
     self.changed.emit()
+    self._notify("已取消分区方案，原有图层保留")
 
 
 def acceptSelection(self):
     if self._candidate is None or self.busy:
         return
+    if self._selection_target_id and self._selection_target_id != self._selected:
+        return self._notify("原图层已变化，未保存范围修改", True)
     self._layer()["mask"], self._candidate = self._candidate, None
+    self._selection_target_id = ""
     self._pixel_points, self._pixel_hint = [], None
     self._draft_history = []
     for message in reversed(self._conversation):
@@ -288,13 +304,14 @@ def acceptSelection(self):
     )
     self._commit()
     self._change()
-    self._notify("已确认选区；隐藏蒙版即可查看照片效果")
+    self._notify("已保存此层的范围，可继续调整照片；Ctrl+Z 可撤销")
 
 
 def discardSelection(self):
     if self._candidate is None or self.busy:
         return
     self._candidate = None
+    self._selection_target_id = ""
     self._pixel_points, self._pixel_hint = [], None
     self._draft_history = []
     for message in reversed(self._conversation):

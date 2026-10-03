@@ -8,6 +8,8 @@ from time import perf_counter
 from .document import overlay_mask_tile, render_detail_tile, validate_layers, validate_mask
 from .engine import SRGB_PROFILE, load_source
 
+DETAIL_PNG_COMPRESSION = 3
+
 
 def main():
     sys.stdin.reconfigure(encoding="utf-8")
@@ -16,6 +18,7 @@ def main():
     directory.mkdir(parents=True, exist_ok=True)
     source = None
     assets = []
+    original_tile = None
     for line in sys.stdin:
         request = {}
         try:
@@ -25,7 +28,7 @@ def main():
             if request.get("op") != "detail":
                 raise ValueError("未知细节操作")
             path = Path(request["source_path"])
-            if source is None or source.path != path:
+            if source is None or source.path != path or source.digest != request["source_sha"]:
                 next_source = load_source(path)
                 if next_source.digest != request["source_sha"]:
                     raise ValueError("源照片已变化，细节视图未更新")
@@ -36,8 +39,23 @@ def main():
                 source.image, validate_layers(request["layers"]), box
             )
             target = directory / f"detail-{request['id']}.png"
-            tile.save(target, icc_profile=SRGB_PROFILE)
+            # Interactive delivery favors less CPU work over slightly smaller
+            # temporary files; pixels/profile and export encoding stay intact.
+            tile.save(target, icc_profile=SRGB_PROFILE, compress_level=DETAIL_PNG_COMPRESSION)
             assets.append(target)
+            original_key = (source.digest, tuple(box))
+            if original_tile and original_tile[0] == original_key and original_tile[1].is_file():
+                original_target = original_tile[1]
+                # Keep the current pair alive when repeated parameter changes
+                # reuse the source crop within the bounded temporary assets.
+                assets.remove(original_target)
+            else:
+                original_target = directory / f"detail-original-{request['id']}.png"
+                source.image.crop(box).save(
+                    original_target, icc_profile=SRGB_PROFILE, compress_level=DETAIL_PNG_COMPRESSION
+                )
+                original_tile = (original_key, original_target)
+            assets.append(original_target)
             mask_target = None
             if "mask" in request:
                 mode = request.get("mask_view", "overlay")
@@ -46,7 +64,7 @@ def main():
                 mask_target = directory / f"detail-mask-{request['id']}.png"
                 overlay_mask_tile(
                     validate_mask(request["mask"]), source.image.size, box, mode
-                ).save(mask_target)
+                ).save(mask_target, compress_level=DETAIL_PNG_COMPRESSION)
                 assets.append(mask_target)
             while len(assets) > 8:
                 assets.pop(0).unlink(missing_ok=True)
@@ -54,6 +72,7 @@ def main():
                 "id": request["id"], "op": "detail",
                 "generation": request["generation"], "ok": True,
                 "result": {"path": str(target), "box": box,
+                           "original": str(original_target),
                            "mask": str(mask_target) if mask_target else "",
                            "elapsed_ms": round((perf_counter() - started) * 1000)},
             }

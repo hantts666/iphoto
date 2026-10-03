@@ -21,10 +21,17 @@ def main():
         request = json.loads(line)
         if request.get("op") != "export":
             raise ValueError("未知导出操作")
+        layers = validate_layers(request["layers"])
+        def progress(phase):
+            print(json.dumps({"id": request["id"], "type": "progress", "phase": phase}), flush=True)
+
+        progress(1)
         source = load_source(Path(request["source_path"]))
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，导出已停止")
-        rendered = render_layers(source.image, validate_layers(request["layers"]))
+        progress(2)
+        rendered = render_layers(source.image, layers)
+        progress(3)
         staged = export_image(
             source,
             Recipe(),

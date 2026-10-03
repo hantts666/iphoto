@@ -53,6 +53,11 @@ def pixel_protocol_stub(monkeypatch):
         if op != "segment":
             return original(self, op, **data)
         items = [{"id": job["id"], "mask": bitmap_mask(raster_mask(job["hint"], (600, 420)), "protocol fixture"), "quality": {}} for job in data["jobs"]]
-        pixel_selections.complete(self, {"items": items}, data["context"])
+        result = {"items": items}
+        if "composition" in data:
+            from iphoto.segmentation.object_composition import compose
+
+            result["mask"] = compose(data["composition"], items)
+        pixel_selections.complete(self, result, data["context"])
 
     monkeypatch.setattr(Editor, "_request", request)

@@ -1,5 +1,7 @@
 """SelectionController facade: tool state, task routing, refine routing, apply branches."""
 
+from copy import deepcopy
+
 import pytest
 from PIL import Image
 
@@ -56,10 +58,11 @@ def test_tool_state_choose_tool_and_draft_signals(editor):
     assert sel.mode == "add"
     sel.setMode("replace")
     sel.adjustBrush(1)
-    assert sel.brushRadius == pytest.approx(0.025 + 0.005)
+    assert sel.brushDiameter == 10
     for _ in range(80):
         sel.adjustBrush(-1)
-    assert sel.brushRadius == pytest.approx(0.003)
+    assert sel.brushDiameter == 2
+    assert sel.brushRadius == pytest.approx(1 / 160)
     for _ in range(200):
         sel.adjustBrush(1)
     assert sel.brushRadius == pytest.approx(0.15)
@@ -82,6 +85,96 @@ def test_review_mask_loads_current_layer(editor):
     assert sel.showMask
     editor.discardSelection()
     wait_for(lambda: settled(editor))
+
+
+def test_mask_edit_intent_survives_project_reload(editor, tmp_path):
+    from iphoto.document import read_project
+
+    editor.setParameter("sharpness", 37)
+    editor.finishGesture()
+    original = deepcopy(editor._layer())
+    editor.selection.reviewMask()
+    editor.drawDraft("rect", "subtract", [[0.1, 0.1], [0.6, 0.6]], 0)
+    wait_for(lambda: settled(editor))
+    revised = deepcopy(editor._candidate)
+    project = tmp_path / "mask-correction.iphoto"
+    editor.saveProject(str(project))
+    assert project.exists()
+    assert read_project(project)["selection_target_id"] == original["id"]
+    editor.selection.discard()
+    wait_for(lambda: settled(editor))
+    editor.openProject(str(project))
+    wait_for(lambda: editor._pending_project is None and settled(editor))
+    assert editor.selection.editingLayerMask
+    assert editor.selection.maskEditLayerName == original["name"]
+    assert editor._candidate == revised
+    editor.selection.applyDefault()
+    wait_for(lambda: settled(editor))
+    assert len(editor.layers) == 1
+    assert editor.activeLayerId == original["id"]
+    assert editor._layer()["mask"] == revised
+    assert editor._layer()["recipe"] == original["recipe"]
+    assert read_project(project)["selection_target_id"] == original["id"]
+    editor.undo()
+    wait_for(lambda: settled(editor))
+    assert editor._layer() == original
+    assert editor._payload()["selection_target_id"] == ""
+
+
+def test_legacy_range_draft_keeps_new_layer_default(editor):
+    from iphoto.document import validate_project
+
+    editor.beginSelection("empty")
+    editor.draftAction("all")
+    payload = deepcopy(editor._payload())
+    payload["schema_version"] = "1.7"
+    payload.pop("selection_target_id")
+    assert validate_project(payload)["selection_target_id"] == ""
+    assert not editor.selection.editingLayerMask
+    editor.selection.applyDefault()
+    assert len(editor.layers) == 2
+
+
+@pytest.mark.parametrize("target", ["missing", None, [], 3])
+def test_project_rejects_invalid_mask_edit_target(editor, target):
+    from iphoto.document import validate_project
+
+    editor.selection.reviewMask()
+    payload = deepcopy(editor._payload())
+    payload["selection_target_id"] = target
+    with pytest.raises(ValueError, match="目标图层无效"):
+        validate_project(payload)
+
+
+def test_project_rejects_target_without_draft_or_for_inactive_layer(editor):
+    from iphoto.document import validate_project
+
+    editor.addGlobalLayer()
+    editor.selection.reviewMask()
+    payload = deepcopy(editor._payload())
+    payload["selection_draft"] = None
+    with pytest.raises(ValueError, match="目标图层无效"):
+        validate_project(payload)
+    payload = deepcopy(editor._payload())
+    payload["selection_target_id"] = editor._layers[0]["id"]
+    with pytest.raises(ValueError, match="目标图层无效"):
+        validate_project(payload)
+
+
+def test_mask_review_prevents_switching_layer_or_rebinding_new_range(editor):
+    editor.addGlobalLayer()
+    other = editor._layers[0]["id"]
+    editor.selection.reviewMask()
+    selected = editor.activeLayerId
+    editor.selection.pickLayer(other)
+    assert editor.activeLayerId == selected and editor.selection.pickedLayerId == ""
+    editor.selection.discard()
+    wait_for(lambda: settled(editor))
+    assert editor.selection.pickedLayerId == selected
+    editor.beginSelection("empty")
+    editor.selection.reviewMask()
+    assert not editor.selection.editingLayerMask
+    assert editor._selection_target_id == ""
 
 
 def test_refine_routing_and_methods(editor, monkeypatch):
@@ -235,3 +328,27 @@ def test_layer_parameter_rejects_groups_and_bad_keys(editor):
     e.selectLayer(e._layers[0]["id"])
     e.selection.setLayerParameter(e.activeLayerId, "nope", 1.0)
     assert "nope" not in e._recipe
+
+
+def test_focusing_current_child_reveals_ancestors_without_render_or_undo(editor):
+    from iphoto.document import new_layer
+
+    e = editor
+    target = e._layer()
+    outer = new_layer("外组", True, kind="group")
+    inner = new_layer("内组", True, outer["id"], "group")
+    outer["collapsed"] = inner["collapsed"] = True
+    target["parent_id"] = inner["id"]
+    e._layers.extend([outer, inner])
+    e._commit()
+    e._change()
+    wait_for(lambda: settled(e))
+    before = (e._cursor, e._generation, e._serial)
+    content = [{k: v for k, v in layer.items() if k != "collapsed"} for layer in deepcopy(e._layers)]
+    e.selection.pickLayer(target["id"])
+    assert not outer["collapsed"] and not inner["collapsed"]
+    assert e.selection.pickedLayerId == target["id"]
+    assert target["id"] in {row["id"] for row in e.layers}
+    assert (e._cursor, e._generation, e._serial) == before
+    assert not e._timer.isActive()
+    assert [{k: v for k, v in layer.items() if k != "collapsed"} for layer in e._layers] == content

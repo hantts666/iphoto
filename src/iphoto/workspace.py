@@ -20,6 +20,7 @@ from .plugins import capabilities
 from .scene import SceneIndex
 from .layer_tree import descendants
 from .layer_rows_model import LayerRowsModel
+from .scene_rows_model import SceneRowsModel
 from .conversation_rows_model import ConversationRowsModel
 from .viewport import Viewport
 
@@ -69,14 +70,18 @@ class Editor(QObject):
         self._history = [(dict(self._recipe), set())]
         self._cursor = 0
         self._original = self._preview = self._path = self._name = self._sha = ""
+        self._preview_generation = -1
         self._width = self._height = 0
         self._histogram = []
         self._stats = None
         self._summary = "写下想调整的地方，让照片更接近你眼中的样子。"
         self._status = "正在启动本地引擎…"
+        self._notification_scope = ""
         self._status_epoch = 0
         self._elapsed = 0
+        self._last_render_metrics = {}
         self._generation = self._serial = 0
+        self._parameter_preview_span = None
         self._active = None
         self._queue = deque()
         self._pixel_active = None
@@ -87,8 +92,10 @@ class Editor(QObject):
         self._detail_buffer = b""
         self._detail_url = ""
         self._detail_mask_url = ""
+        self._detail_original_url = ""
         self._detail_box = None
         self._detail_generation = -1
+        self._detail_frame_version = -1
         self._detail_failed_generation = -1
         self._detail_version = 0
         self._detail_serial = 0
@@ -99,6 +106,9 @@ class Editor(QObject):
         self._matte_fresh = False
         self._export_request = self._export_cancelled = None
         self._export_buffer = b""
+        self._export_line_offset = 0
+        self._export_phase = 0
+        self._export_final_seen = False
         self._export_aborting = False
         self._export_serial = 0
         self._export_cleanup_pending = []
@@ -184,6 +194,10 @@ class Editor(QObject):
     def previewUrl(self):
         return self._preview or self._original
 
+    @Property(int, notify=changed)
+    def previewGeneration(self):
+        return self._preview_generation
+
     @Property(str, notify=changed)
     def imageName(self):
         return "山湖之间" if self._sample else self._name
@@ -233,7 +247,7 @@ class Editor(QObject):
         return f"{self._elapsed} ms" if self._elapsed else "—"
 
     @Property(bool, notify=changed)
-    def busy(self):
+    def imageWorkBusy(self):
         operations = (
             list(self._queue)
             + list(self._pixel_queue)
@@ -243,8 +257,8 @@ class Editor(QObject):
             + ([self._matte_pending] if self._matte_pending else [])
             + ([self._export_request] if self._export_request else [])
         )
-        return self._export_aborting or self._ai.busy or any(
-            request["op"] in {"open", "export", "interpret", "selection", "matte"}
+        return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or any(
+            request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop"}
             or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations
         )
@@ -271,7 +285,13 @@ class Editor(QObject):
     def historyLabel(self):
         return f"编辑步骤 {self._cursor}"
 
-    def _base_notify(self, message, error=False):
+    @Property(str, notify=changed)
+    def notificationScope(self):
+        return self._notification_scope
+
+    def _base_notify(self, message, error=False, *, scope=""):
+        # Errors always remain ordinary notices, independent of draft endings.
+        self._notification_scope = "" if error else scope
         self._status = message
         self.changed.emit()
         self.notification.emit(message, error)
@@ -355,6 +375,30 @@ class Editor(QObject):
     def detailLoading(self):
         return bool(self._detail_active or self._detail_pending)
 
+    @Property(int, notify=changed)
+    def documentGeneration(self):
+        return self._generation
+
+    @Property(int, notify=changed)
+    def detailGeneration(self):
+        return self._detail_generation
+
+    @Property(int, notify=changed)
+    def detailRevision(self):
+        return self._detail_frame_version
+
+    @Property(int, notify=changed)
+    def detailVersion(self):
+        return self._detail_version
+
+    @Property(bool, notify=changed)
+    def detailFailed(self):
+        return self._detail_failed_generation == (self._generation, self._detail_version)
+
+    @Slot(float, "QVariantList", result=bool)
+    def wantsDetail(self, zoom, visible_rect):
+        return detail_tiles.wanted(self, zoom, visible_rect)
+
     @Property("QVariantList", notify=changed)
     def detailRect(self):
         if self._detail_box is None or not self._width or not self._height:
@@ -363,8 +407,23 @@ class Editor(QObject):
         return [left / self._width, top / self._height,
                 (right - left) / self._width, (bottom - top) / self._height]
 
+    @Property(str, notify=changed)
+    def detailOriginalUrl(self):
+        return self._detail_original_url
+
     def _start_warm(self):
         return worker_bridge._start_warm(self)
+
+    @Property(bool, notify=changed)
+    def photoPreparing(self):
+        return (
+            self.hasImage and self._warm_sha == self._sha and not self._warm_abandoned
+            and self._warm_process.state() != QProcess.NotRunning
+        )
+
+    @Property(bool, notify=changed)
+    def busy(self):
+        return self._ai.busy or self.imageWorkBusy
 
     def _stop_warm(self):
         return worker_bridge._stop_warm(self)
@@ -405,10 +464,10 @@ class Editor(QObject):
     def _export_retry_cleanup(self):
         return export_process.retry_cleanup(self)
 
-    def _base_change(self):
-        self._generation += 1
-        self._timer.start()
-        self.changed.emit()
+    def _base_change(self, *, parameter=False):
+        from .controllers import preview_updates
+
+        return preview_updates.changed(self, parameter=parameter)
 
     @Slot(str)
     def _base_openImage(self, url):
@@ -460,6 +519,7 @@ class Editor(QObject):
         self._conversation_draft_key = ""
         self._mask_url = ""
         self._candidate = None
+        self._selection_target_id = ""
         self._pending_request = None
         self._draft_history, self._draft_cursor = [], 0
         self._selection_quality = ""
@@ -469,6 +529,9 @@ class Editor(QObject):
         self._pixel_points = []
         self._pixel_hint = None
         self._scene = SceneIndex()
+        self._scene_rows_model = SceneRowsModel(self)
+        self.changed.connect(self._publish_scene_rows)
+        self._publish_scene_rows()
         self._scene_followup = ""
         self._mask_thumbnails = {}
         self._pending_project = None
@@ -544,6 +607,10 @@ class Editor(QObject):
     def activeLayerName(self):
         return self._layer()["name"]
 
+    @Property("QVariantMap", notify=changed)
+    def activeDisplay(self):
+        return layers.activeDisplay(self)
+
     @Property(bool, notify=changed)
     def activeIsGroup(self):
         return self._layer().get("kind") == "group"
@@ -561,9 +628,28 @@ class Editor(QObject):
             if l.get("kind") == "group" and l["id"] not in excluded
         ]
 
+    @Slot(str, result="QVariantMap")
+    def layerContext(self, lid):
+        return layers.layerContext(self, lid)
+
+    @Slot(str, str, str, result=bool)
+    def runLayerAction(self, lid, action, parent_id=""):
+        return layers.runLayerAction(self, lid, action, parent_id)
+
     @Property("QVariantList", notify=changed)
     def sceneObjects(self):
         return self._scene.rows()
+
+    def _publish_scene_rows(self):
+        self._scene_rows_model.replace(self._scene.rows(), self._scene.revision)
+
+    @Property(QObject, constant=True)
+    def sceneRowsModel(self):
+        return self._scene_rows_model
+
+    @Property(int, notify=changed)
+    def sceneRevision(self):
+        return self._scene.revision
 
     @Property(bool, notify=changed)
     def pixelAvailable(self):
@@ -717,6 +803,36 @@ class Editor(QObject):
     def drawHeal(self, points, radius):
         return heal.drawHeal(self, points, radius)
 
+    @Property("QVariantMap", notify=changed)
+    def activeRepairInfo(self):
+        return heal.activeRepairInfo(self)
+
+    @Slot(str, result="QVariantList")
+    def conversationAdjustmentLayers(self, message_id):
+        return conversation.conversationAdjustmentLayers(self, message_id)
+
+    @Property(bool, notify=changed)
+    def canReviewAdjustment(self):
+        from .controllers.adjustment_review import reviewable
+
+        return self.hasImage and reviewable(self._layer())
+
+    @Slot(str, result="QVariantList")
+    def conversationRepairLayers(self, message_id):
+        return conversation.conversationRepairLayers(self, message_id)
+
+    @Slot(str, result="QVariantMap")
+    def failedPromptInfo(self, message_id):
+        return conversation.failedPromptInfo(self, message_id)
+
+    @Slot(str, result=bool)
+    def restoreFailedPrompt(self, message_id):
+        return conversation.restoreFailedPrompt(self, message_id)
+
+    @Slot(str, result=bool)
+    def retryFailedPrompt(self, message_id):
+        return conversation.retryFailedPrompt(self, message_id)
+
     @Slot(str, int, result=bool)
     def exportWithQuality(self, url, quality):
         return session.exportImage(self, url, quality)
@@ -724,6 +840,10 @@ class Editor(QObject):
     @Slot()
     def cancelExport(self):
         return export_process.cancel(self)
+
+    @Property(str, notify=changed)
+    def exportProgress(self):
+        return export_process.PHASES[self._export_phase] if self._export_request else ""
 
     @Slot(int, result=str)
     def suggestExportPath(self, format_index):
@@ -880,6 +1000,24 @@ class Editor(QObject):
         return self._project_save_future is not None
 
     @Property(bool, notify=changed)
+    def aiRepairPreparing(self):
+        return bool((self._pending_request or {}).get("repair_grounding", {}).get("preparing"))
+
+    @Slot()
+    def cancelRepairPreparation(self):
+        return conversation.cancelRepairPreparation(self)
+
+    @Property(bool, notify=changed)
+    def aiObjectPreparing(self):
+        return bool((self._pending_request or {}).get("object_grounding", {}).get("preparing"))
+
+    @Slot()
+    def cancelObjectPreparation(self):
+        from .controllers.object_grounding import cancel_preparation
+
+        return cancel_preparation(self)
+
+    @Property(bool, notify=changed)
     def exportingConversation(self):
         return self._conversation_export_future is not None
 
@@ -909,20 +1047,25 @@ class Editor(QObject):
     def _mark_dirty(self):
         return layers._mark_dirty(self)
 
-    def _change(self):
-        return layers._change(self)
+    def _change(self, *, parameter=False):
+        return layers._change(self, parameter=parameter)
 
     def _schedule_render(self):
         return worker_bridge._schedule_render(self)
 
-    def _notify(self, message, error=False, *, background=False):
+    def _notify(self, message, error=False, *, background=False, scope=""):
+        if (scope == "draft" and not error
+                and not self.hasSelectionDraft and not self.hasRegionDraft):
+            # A synchronous auto-output may have consumed the draft before
+            # its creator finishes emitting the initial guidance.
+            return
         if not background:
             self._status_epoch += 1
         if error and getattr(self, "_pending_request", None):
             self._scene_followup = ""
             self._message("error", message, state="failed")
             self._pending_request = None
-        self._base_notify(message, error)
+        self._base_notify(message, error, scope=scope)
 
     @Slot(str)
     def openImage(self, url):
@@ -1020,6 +1163,10 @@ class Editor(QObject):
     @Slot(str)
     def toggleLayer(self, lid):
         return layers.toggleLayer(self, lid)
+
+    @Slot(result=bool)
+    def restoreLayerDisplay(self):
+        return layers.restoreLayerDisplay(self)
 
     @Slot(int)
     def moveLayer(self, direction):

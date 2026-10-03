@@ -53,8 +53,17 @@ def canvas(qt_app, ai_store, tmp_path, request):
 
         def find(self, name):
             item = self.w.findChild(QObject, name)
-            assert item is not None, name
-            return item
+            if item is not None:
+                return item
+            # Repeater delegates can have a different QObject parent while
+            # still belonging to this window's visual tree.
+            stack = [self.w.contentItem()]
+            while stack:
+                item = stack.pop()
+                if item.objectName() == name:
+                    return item
+                stack.extend(item.childItems())
+            raise AssertionError(name)
 
         def point(self, name, x=0.5, y=0.5):
             item = self.find(name)

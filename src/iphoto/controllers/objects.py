@@ -1,5 +1,7 @@
 """Objects actions. ``self`` is the owning Editor, passed explicitly."""
 
+from copy import deepcopy
+
 from ..scene import combine_masks
 from ..document import MAX_LAYERS
 from . import pixel_selections
@@ -22,7 +24,7 @@ def analyzeScene(self, refresh=False):
         # Restored catalogs skip the cloud scene response, so precache must be
         # kicked here or hover previews stay as boxes forever.
         pixel_selections.precache(self, [o["id"] for o in self.sceneObjects])
-        return self._notify("已载入这张照片的元素清单，无需再次调用 AI")
+        return self._notify("已载入这张照片的元素清单，无需再次调用 AI", background=True)
     # The cloud scene request and local photo encoding use different resources.
     # Start the low-priority encode while the cloud request is in flight so
     # object previews can reuse its embedding when the catalog arrives.
@@ -85,7 +87,9 @@ def _objects_mask(self, ids, mode="replace", base=None):
         if o["id"] in ids
     ]
     size = (self._width, self._height)
-    result = combine_masks(masks, size, base, mode)
+    # A single object already has a portable mask. Re-rasterizing it at source
+    # size only adds allocation, PNG work and another interpolation step.
+    result = deepcopy(masks[0]) if len(masks) == 1 and mode == "replace" else combine_masks(masks, size, base, mode)
     names = [o["name"] for o in self._scene.catalog["objects"] if o["id"] in ids]
     label = "对象 · " + "、".join(names)
     if base and mode != "replace":
@@ -106,7 +110,7 @@ def combineObjects(self, mode):
     if mode != "replace" and self._candidate is None:
         return self._notify("请先新建选区，再添加、减去或相交")
     try:
-        pixel_selections.select_objects(self, self._scene.selected, mode)
+        pixel_selections.select_objects(self, self._scene.selected, mode, local_only=True)
     except ValueError as exc:
         self._notify(str(exc), True)
 
@@ -124,7 +128,7 @@ def adjustCheckedObjects(self):
             self, self._scene.selected, "replace", auto_apply=True
         )
     except ValueError as exc:
-        self._notify(str(exc), True)
+        pixel_selections.failed_result(self, {"origin": {"mode": "selection", "model": "EfficientSAM-S（本地）"}}, exc)
 
 
 def objectAt(self, x, y):

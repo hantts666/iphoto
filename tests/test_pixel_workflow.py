@@ -99,7 +99,7 @@ def test_queued_pixel_click_is_visible_and_cancellable(canvas, monkeypatch):  # 
             request["op"] == "segment" and request.get("priority") != "low"
             for request in editor._pixel_queue
         )
-        button = ui.find("cancelTaskButton")
+        button = ui.find("cancelAiRequest")
         assert button.property("visible") and button.property("text") == "取消等待中的点选"
         editor.selection.cancelTask()
         assert not editor.busy and editor.selection.taskKind == "none"

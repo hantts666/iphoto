@@ -30,7 +30,7 @@ def refine_alpha(image, mask, radius=8):
         result["edge_protection"] = mask["edge_protection"]
     result.update(
         bitmap=encode_bitmap(Image.fromarray(pixels), sampling="alpha", preserve_resolution=True),
-        label="透明边缘 · " + mask["label"][:180],
+        label=mask["label"],
     )
     return result, {
         "backend": "PyMatting · Closed-form",

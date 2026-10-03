@@ -39,6 +39,11 @@ ApplicationWindow {
     property bool modalActive: aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
     property bool menuActive: fileMenu.opened || editMenu.opened || selectionMenu.opened || viewMenu.opened || extensionsMenu.opened
     property bool navigationShortcutsEnabled: editor.hasImage && !textFocus && !modalActive && !menuActive
+    readonly property bool objectPreviewEnabled: editor.hasImage && !editor.busy && selection.pickedLayerId === ""
+                                                && !regionModal && !compare && !modalActive && !menuActive
+    readonly property int sceneRevision: editor.sceneRevision
+    onObjectPreviewEnabledChanged: sceneHoverId = ""
+    onSceneRevisionChanged: sceneHoverId = ""
     readonly property bool navigationTool: selection.navigationTool
     onTextFocusChanged: if(textFocus) editor.viewport.resetKeys()
     onModalActiveChanged: if(modalActive) editor.viewport.resetKeys()
@@ -51,8 +56,9 @@ ApplicationWindow {
     palette.button: "#363c44"; palette.buttonText: ink; palette.highlight: "#467e71"; palette.highlightedText: "white"
     // Basic-style delegates use light/mid for hovered+highlighted rows; keep them dark.
     palette.light: "#343b43"; palette.mid: "#3a4149"; palette.midlight: "#3a4149"; palette.dark: "#22262b"
-    function commitPendingText() { inspectorPane.commitText() }
-    function saveProject() { commitPendingText(); if(editor.projectPath) editor.saveProjectAsync(editor.projectPath); else projectSaveDialog.start() }
+    function commitPendingText() { return inspectorPane.commitText() }
+    function saveProject() { if (!commitPendingText()) return; if(editor.projectPath) editor.saveProjectAsync(editor.projectPath); else projectSaveDialog.start() }
+    function exportPhoto() { if (commitPendingText()) exportDialog.open() }
 
     function chooseTool(tool) { selection.chooseTool(tool) }
     function openAISettings() { aiSettings.open() }
@@ -60,6 +66,29 @@ ApplicationWindow {
     function openChatExport() { conversationExportDialog.start() }
     function focusSelectionInput() { inspectorPane.focusSelectionInput() }
     function reviewMask() { selection.reviewMask() }
+    function correctMask(mode) {
+        inspectorPane.rememberMaskPosition()
+        if (selection.correctMask(mode)) {
+            compare = false
+            sceneHoverId = ""
+            canvasPane.focusCanvas()
+        } else inspectorPane.clearMaskPosition()
+    }
+    function reviewAdjustments(ids) {
+        if (selection.reviewAdjustments(ids)) {
+            compare = false
+            sceneHoverId = ""
+            canvasPane.focusCanvas()
+        }
+    }
+    function reviewRepairs(ids) {
+        if (selection.reviewRepairs(ids)) {
+            compare = false
+            sceneHoverId = ""
+            canvasPane.focusCanvas()
+        }
+    }
+    function deleteReviewedRepair(token) { if (commitPendingText()) selection.deleteReviewedRepair(token) }
     onClosing: function(close) { commitPendingText(); if(!discardOnClose) close.accepted=editor.prepareClose() }
 
 
@@ -117,10 +146,10 @@ ApplicationWindow {
         Menu { id: fileMenu; title: "文件"
             MenuItem { text: "打开照片…    Ctrl+O"; enabled: !editor.busy && !editor.savingProject; onTriggered: importDialog.open() }
             MenuItem { text: "打开项目…"; enabled: !editor.busy && !editor.savingProject; onTriggered: projectDialog.open() }
-            MenuItem { text: "保存项目    Ctrl+S"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: saveProject() }
-            MenuItem { text: "项目另存为…"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: { commitPendingText(); projectSaveDialog.start() } }
+            MenuItem { objectName: "saveProjectMenuAction"; text: "保存项目    Ctrl+S"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: saveProject() }
+            MenuItem { objectName: "saveAsProjectMenuAction"; text: "项目另存为…"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: { if (commitPendingText()) projectSaveDialog.start() } }
             MenuSeparator {}
-            MenuItem { text: "导出照片…    Ctrl+E"; enabled: editingEnabled; onTriggered: exportDialog.open() }
+            MenuItem { objectName: "exportMenuAction"; text: "导出照片…    Ctrl+E"; enabled: editingEnabled; onTriggered: exportPhoto() }
             MenuItem { text: "恢复最近会话"; enabled: editor.canRecover && !editor.busy && !editor.savingProject; onTriggered: editor.recoverLatest() }
         }
         Menu { id: editMenu; title: "编辑"
@@ -154,8 +183,8 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Ctrl+O"; enabled: !modalActive && !editor.busy && !editor.savingProject; onActivated: importDialog.open() }
     Shortcut { sequence: "Ctrl+S"; enabled: !modalActive && editor.hasImage && !editor.busy && !editor.savingProject; onActivated: saveProject() }
-    Shortcut { sequence: "Ctrl+Shift+S"; enabled: !modalActive && editor.hasImage && !editor.busy && !editor.savingProject; onActivated: { commitPendingText(); projectSaveDialog.start() } }
-    Shortcut { sequence: "Ctrl+E"; enabled: !modalActive && editingEnabled; onActivated: exportDialog.open() }
+    Shortcut { sequence: "Ctrl+Shift+S"; enabled: !modalActive && editor.hasImage && !editor.busy && !editor.savingProject; onActivated: { if (commitPendingText()) projectSaveDialog.start() } }
+    Shortcut { sequence: "Ctrl+E"; enabled: !modalActive && editingEnabled; onActivated: exportPhoto() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !textFocus && !modalActive; onActivated: editor.undo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !textFocus && !modalActive; onActivated: editor.redo() }
     Shortcut { sequence: "Ctrl+A"; enabled: !textFocus && !modalActive; onActivated: editor.draftAction("all") }
@@ -195,7 +224,7 @@ ApplicationWindow {
                 Action { objectName: "recoverSessionButton"; text: "恢复未保存"; hint: "找回上次未保存的图层与选区"; visible: editor.canRecover; enabled: !editor.busy && !editor.savingProject; onClicked: editor.recoverLatest() }
                 Action { text: "打开照片"; enabled: !editor.busy && !editor.savingProject; onClicked: importDialog.open() }
                 Action { objectName: "saveProjectButton"; text: editor.savingProject ? "保存中…" : editor.dirty ? "保存项目 •" : "保存项目"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onClicked: saveProject() }
-                Action { objectName: "exportButton"; text: "导出照片 ↗"; primary: true; enabled: editingEnabled; onClicked: exportDialog.open() }
+                Action { objectName: "exportButton"; text: "导出照片 ↗"; primary: true; enabled: editingEnabled; onClicked: exportPhoto() }
             }
         }
         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 43; color: "#30353c"
@@ -207,6 +236,7 @@ ApplicationWindow {
                 Action { objectName: "chatToggleButton"; text: "AI 助手"; primary: chatOpen; onClicked: chatOpen=!chatOpen }
             }
         }
+        TaskStatusBar { id: foregroundTask; editor: window.editorContext }
         RowLayout { Layout.fillWidth: true; Layout.fillHeight: true; spacing: 1
             ToolRail { workspace: window; editor: editorContext }
             CanvasPane { id: canvasPane; workspace: window; editor: editorContext }
@@ -221,14 +251,16 @@ ApplicationWindow {
             }
         }
     }
-    Rectangle { id: toast; property string message: ""; property bool isError: false; visible: toastTimer.running; anchors.horizontalCenter: parent.horizontalCenter; y: 100; z: 30; width: Math.min(window.width-120,toastText.implicitWidth+34); height: toastText.height+24; radius: 5; color: isError ? "#8b5144" : "#3e6859"
+    Rectangle { id: toast; objectName: "workspaceToast"; property string message: ""; property bool isError: false; visible: toastTimer.running; anchors.horizontalCenter: parent.horizontalCenter; y: foregroundTask.visible ? foregroundTask.y+foregroundTask.height+8 : 100; z: 30; width: Math.min(window.width-120,toastText.implicitWidth+34); height: toastText.height+24; radius: 5; color: isError ? "#8b5144" : "#3e6859"
+        property string scope: ""
+        function expireDraft() { if (scope === "draft" && !isError) toastTimer.stop() }
         Text { id: toastText; x: 17; y: 12; width: Math.min(implicitWidth,window.width-154); text: toast.message; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: "white"; font.pixelSize: 12 }
         Timer { id: toastTimer; interval: 4400 }
     }
     Connections { target: editor
-        function onNotification(message,error) { toast.message=message; toast.isError=error; toastTimer.restart() }
+        function onNotification(message,error) { toast.message=message; toast.isError=error; toast.scope=editor.notificationScope; toastTimer.restart() }
         function onRecoverySaveFailed() { recoveryFailure.open() }
-        function onImageOpened() { compare=false; split=.5 }
+        function onImageOpened() { compare=false; split=.5; sceneHoverId=""; toast.expireDraft() }
         function onAiSettingsRequested() { aiSettings.open() }
     }
     Connections { target: editor.selection
@@ -237,6 +269,8 @@ ApplicationWindow {
             if (!["inspect","hand","zoom"].includes(tool)) compare=false
         }
         function onDraftBegan(kind) { compare=false }
+        function onDraftEnded() { toast.expireDraft() }
+        function onResultApplied() { compare=false; toast.expireDraft() }
     }
 }
 

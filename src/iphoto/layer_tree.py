@@ -53,6 +53,30 @@ def descendants(layers, lid):
     return result
 
 
+def display_states(layers):
+    """Display controls through every ancestor; independent of mask coverage."""
+    by_id = {layer["id"]: layer for layer in layers}
+    states = {}
+
+    def resolve(lid):
+        if lid in states:
+            return states[lid]
+        layer = by_id[lid]
+        parent = layer.get("parent_id", "")
+        inherited = resolve(parent) if parent else {"opacity": 1.0, "blockers": []}
+        opacity = inherited["opacity"] * layer["opacity"]
+        blockers = list(inherited["blockers"])
+        if not layer["visible"] or layer["opacity"] == 0:
+            blockers.append(lid)
+        states[lid] = {"enabled": not blockers and opacity > 0,
+                       "opacity": opacity, "blockers": blockers}
+        return states[lid]
+
+    for lid in by_id:
+        resolve(lid)
+    return states
+
+
 def display_rows(layers):
     rows = []
 

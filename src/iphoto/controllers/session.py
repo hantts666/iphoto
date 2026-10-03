@@ -63,6 +63,8 @@ def _base_close(self):
 
 
 def _opened(self):
+    # Clear the previous document's focus before publishing restored layers.
+    self._selection._reset_document_focus()
     clear_decode_cache()
     self._pixel_points, self._pixel_hint = [], None
     self._mask_thumbnails.clear()
@@ -72,6 +74,7 @@ def _opened(self):
     layer["recipe"], layer["locked"] = dict(self._recipe), sorted(self._locked)
     self._layers, self._selected = [layer], layer["id"]
     self._conversation, self._candidate, self._mask_url = [], None, ""
+    self._selection_target_id = ""
     self._draft_history, self._draft_cursor = [], 0
     self._region_candidate, self._region_index = None, 0
     self._selection_quality = ""
@@ -98,6 +101,7 @@ def _opened(self):
             self._project_path = "" if recovered else path
             self._recovered_from = Path(path) if recovered else None
             self._candidate = payload.get("selection_draft")
+            self._selection_target_id = payload.get("selection_target_id", "")
             self._region_candidate = payload.get("region_draft")
             self._scene.set(payload.get("scene_catalog"))
             if self._scene.catalog:
@@ -148,7 +152,7 @@ def openImage(self, url):
 def _payload(self):
     self._sync_layer()
     return {
-        "schema_version": "1.7",
+        "schema_version": "1.8",
         "engine_version": ENGINE_VERSION,
         "source": self._path,
         "source_sha256": self._sha,
@@ -158,6 +162,7 @@ def _payload(self):
         "conversation_draft": self._safe_text(self.conversationDraft),
         "conversation_draft_mode": self.conversationDraftMode,
         "selection_draft": self._candidate,
+        "selection_target_id": self._selection_target_id,
         "region_draft": self._region_candidate,
         "scene_catalog": self._scene.catalog,
     }

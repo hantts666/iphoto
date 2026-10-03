@@ -105,7 +105,21 @@ Dialog {
             wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 10
         }
         Caption { objectName: "exportErrorText"; visible: root.errorText !== ""; text: root.errorText; color: "#edb4a6"; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Caption { visible: root.pending; text: "正在按原图尺寸合成并写入文件；可随时取消。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        RowLayout {
+            visible: root.pending; Layout.fillWidth: true; spacing: 8
+            BusyIndicator {
+                objectName: "exportBusyIndicator"
+                running: root.pending
+                implicitWidth: 24; implicitHeight: 24
+                Layout.preferredWidth: 24; Layout.preferredHeight: 24
+            }
+            Caption {
+                objectName: "exportProgressText"
+                text: root.editor ? root.editor.exportProgress : ""
+                wrapMode: Text.Wrap; Layout.fillWidth: true; color: "#c6eadb"
+            }
+        }
+        Caption { visible: root.pending; text: "完成后自动关闭；可随时取消。"; wrapMode: Text.Wrap; Layout.fillWidth: true }
     }
     footer: RowLayout {
         Layout.fillWidth: true; spacing: 8

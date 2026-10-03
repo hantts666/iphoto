@@ -43,7 +43,19 @@ def test_draft_output_and_region_review_are_separate_from_chat(qt_app,ai_store,t
         QTest.mousePress(window,Qt.LeftButton,Qt.NoModifier,a);QTest.mouseMove(window,b,80);QTest.mouseRelease(window,Qt.LeftButton,Qt.NoModifier,b)
         wait_for(lambda:settled(editor) and window.property("selectionPreviewReady"))
         assert editor._layers==original
-        assert not find("applyDescriptionButton").property("enabled")
+        # A completed range can now go straight to smart AI. Advice and region
+        # preview still wait for this draft; opening chat must not edit it.
+        with mock_api() as (url, requests):
+            configure(editor.ai,url)
+            find("descriptionInput").setProperty("text","只提亮当前范围")
+            wait_for(lambda:find("applyDescriptionButton").property("enabled"))
+            assert find("applyDescriptionButton").property("text") == "AI 修此范围"
+            for mode in (1,2):
+                find("chatModeBox").setProperty("currentIndex",mode)
+                assert not find("applyDescriptionButton").property("enabled")
+            find("chatModeBox").setProperty("currentIndex",0)
+            find("descriptionInput").setProperty("text","")
+            assert not requests and editor._layers==original and editor.hasSelectionDraft
         QTest.keyClick(window,Qt.Key_D,Qt.ControlModifier)
         assert not editor.hasSelectionDraft and editor._layers==original
         click("tool_rect")

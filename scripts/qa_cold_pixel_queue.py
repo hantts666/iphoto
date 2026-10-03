@@ -120,13 +120,13 @@ def main():
                 click(window, "selectionMouse", 0.30, 0.5)
                 wait(app, lambda: editor._pixel_active is not None and editor._pixel_active["op"] == "segment")
                 QTest.qWait(800)
-                button = window.findChild(QObject, "cancelTaskButton")
+                button = window.findChild(QObject, "cancelAiRequest")
                 assert button and button.property("visible")
                 cancelled = monotonic()
                 if args.cancel_via_escape:
                     QTest.keyClick(window, Qt.Key_Escape)
                 else:
-                    click(window, "cancelTaskButton")
+                    click(window, "cancelAiRequest")
                 if args.cancel_via_escape:
                     QTest.qWait(20)
                     assert not editor.busy, "Escape did not cancel the active selection"
@@ -162,7 +162,7 @@ def main():
                 for request in editor._pixel_queue
                 if request["op"] == "segment" and request.get("priority") != "low"
             ]
-            button = window.findChild(QObject, "cancelTaskButton")
+            button = window.findChild(QObject, "cancelAiRequest")
             guide = window.findChild(QObject, "selectionGuideRoot")
             print(
                 f"queued={len(queued)} warm_state={editor._warm_process.state().name} "
@@ -186,7 +186,7 @@ def main():
             if args.cancel_via_escape:
                 QTest.keyClick(window, Qt.Key_Escape)
             else:
-                click(window, "cancelTaskButton")
+                click(window, "cancelAiRequest")
             wait(app, lambda: editor._warm_process.state() == QProcess.NotRunning, seconds=3)
             assert not editor.hasSelectionDraft
             print(f"cancel_release_s={monotonic() - cancel_started:.2f}", flush=True)

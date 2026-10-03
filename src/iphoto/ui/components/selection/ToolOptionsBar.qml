@@ -13,12 +13,13 @@ RowLayout {
     readonly property var selection: editor.selection
     spacing: 8
     Caption { text: ({smart:"像素点选",object:"对象点选",inspect:"浏览 / 平移",hand:"抓手 / 平移",zoom:"缩放工具",rect:"矩形选框",ellipse:"椭圆选框",polygon:"自由套索",brush:"蒙版画笔",wand:"颜色魔棒",heal:"修复画笔"})[root.selection.tool]; Layout.preferredWidth: 104; color: root.workspace.ink }
-    RowLayout { visible: !root.selection.navigationTool && root.selection.tool!=="smart" && root.selection.tool!=="heal"; spacing: 5
+    RowLayout { visible: !root.selection.navigationTool && root.selection.tool!=="smart"; spacing: 5
         Repeater { model: [{key:"replace",label:"新选区"},{key:"add",label:"＋ 添加"},{key:"subtract",label:"－ 减去"}]
-            delegate: Action { required property var modelData; text: modelData.label; primary: root.selection.mode===modelData.key; onClicked: root.selection.setMode(modelData.key) }
+            delegate: Action { required property var modelData; visible: root.selection.tool!=="heal"; text: modelData.key==="replace" && root.selection.editingLayerMask ? "重选范围" : modelData.label; primary: root.selection.mode===modelData.key; onClicked: root.selection.setMode(modelData.key) }
         }
-        Caption { visible: root.selection.tool==="brush"; text: "笔刷" }
-        FineSlider { visible: root.selection.tool==="brush" || root.selection.tool==="heal"; Layout.preferredWidth: 85; from: .003; to: .15; value: root.selection.brushRadius; onMoved: root.selection.setBrushRadius(value) }
+        Caption { visible: root.selection.tool==="brush" || root.selection.tool==="heal"; text: "大小" }
+        SpinBox { objectName: "brushDiameterInput"; visible: root.selection.tool==="brush" || root.selection.tool==="heal"; from: root.selection.minBrushDiameter; to: root.selection.maxBrushDiameter; value: root.selection.brushDiameter; stepSize: root.selection.brushDiameterStep; editable: true; implicitHeight: 30; implicitWidth: 124; Layout.minimumWidth: 124; enabled: !root.editor.busy; onValueModified: root.selection.setBrushDiameter(value) }
+        Caption { visible: root.selection.tool==="brush" || root.selection.tool==="heal"; text: "px" }
         Caption { visible: root.selection.tool==="wand"; text: "容差" }
         SpinBox { visible: root.selection.tool==="wand"; from: 0; to: 100; value: root.selection.wandTolerance; implicitHeight: 30; implicitWidth: 88; onValueModified: root.selection.setWandTolerance(value) }
     }

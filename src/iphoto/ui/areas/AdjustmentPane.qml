@@ -8,7 +8,42 @@ ColumnLayout {
     required property var workspace
     required property var editor
     readonly property var selection: editor.selection
+    readonly property var reviewedRepair: selection.reviewedRepair
+    property bool compactHeader: false
     property string paramMenuKey: ""
+    signal parameterRevealRequested(Item row, Item section)
+    function commitText() {
+        for (var i = 0; i < toolGroups.count; ++i)
+            if (!toolGroups.itemAt(i).commitText()) return false
+        return true
+    }
+    function revealParameter(key) {
+        for (var i = 0; i < toolGroups.count; ++i) {
+            var group = toolGroups.itemAt(i)
+            if (group.modelData.keys.indexOf(key) < 0) continue
+            group.expanded = true
+            var row = group.parameterRow(key)
+            if (row) parameterRevealRequested(row, group)
+            return
+        }
+    }
+    Connections {
+        target: selection
+        function onParameterFocusRequested(lid, key) {
+            Qt.callLater(function() {
+                if (selection.pickedLayerId === lid && editor.activeLayerId === lid
+                        && !editor.hasSelectionDraft && !editor.hasRegionDraft)
+                    adjustRoot.revealParameter(key)
+            })
+        }
+        function onRepairFocusRequested(lid) {
+            Qt.callLater(function() {
+                if (selection.pickedLayerId === lid && editor.activeLayerId === lid
+                        && !editor.hasSelectionDraft && !editor.hasRegionDraft && repairControls.visible)
+                    adjustRoot.parameterRevealRequested(repairControls, repairControls)
+            })
+        }
+    }
     Layout.fillWidth: true; spacing: 10
     RowLayout { Layout.fillWidth: true
         Text { text: editor.activeLayerName; color: workspace.ink; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
@@ -17,25 +52,82 @@ ColumnLayout {
         Action { text: "重置"; subtle: true; enabled: workspace.editingEnabled && !editor.activeIsGroup; onClicked: editor.reset() }
     }
     Caption { text: editor.hasSelectionDraft ? "请先将选区输出到图层。" : "蒙版："+editor.selectionLabel; wrapMode: Text.Wrap; Layout.fillWidth: true }
-    Canvas { id: histogram; visible: !editor.activeIsGroup; Layout.fillWidth: true; Layout.preferredHeight: 45
+    ColumnLayout {
+        id: repairControls; objectName: "repairControls"
+        visible: editor.activeRepairInfo.count > 0
+        Layout.fillWidth: true; spacing: 4
+        Caption {
+            objectName: "repairStrengthCaption"
+            text: "修复笔画 " + editor.activeRepairInfo.count + (adjustRoot.reviewedRepair.index ? " · 当前第" + adjustRoot.reviewedRepair.index + "笔" : "")
+                  + " · " + (editor.activeRepairInfo.isolated ? "修复强度 " : "图层强度 ") + Math.round(editor.activeRepairInfo.strength || 0) + "%"
+                  + (!editor.activeRepairInfo.displayed ? " · 效果未显示" : editor.activeRepairInfo.effective_strength < editor.activeRepairInfo.strength ? " · 受所属组强度限制" : "")
+            wrapMode: Text.Wrap; Layout.fillWidth: true
+        }
+        FineSlider {
+            objectName: "repairStrengthSlider"; Layout.fillWidth: true; implicitHeight: 22
+            visible: editor.activeRepairInfo.isolated || false
+            from: 0; to: 100; stepSize: 1; value: editor.layerOpacity
+            enabled: workspace.editingEnabled
+            onMoved: editor.setOpacity(value)
+            onPressedChanged: if (!pressed) editor.finishGesture()
+        }
+        Action {
+            objectName: "reviewLayerRepairsButton"; text: editor.activeRepairInfo.count > 1 ? "逐笔查看修复" : "查看修复细节"
+            Layout.fillWidth: true; enabled: workspace.editingEnabled
+            hint: "定位到实际修复笔画，放大至100%或适应笔画；再次点击查看下一笔。不会新增修复。"
+            onClicked: workspace.reviewRepairs([editor.activeLayerId])
+        }
+    }
+    Rectangle {
+        objectName: "inactiveLayerNotice"
+        visible: editor.hasImage && !editor.activeDisplay.enabled
+        Layout.fillWidth: true; implicitHeight: displayNoticeContent.implicitHeight + 16
+        color: "#3d3930"; radius: 4; border.color: "#76674b"
+        ColumnLayout {
+            id: displayNoticeContent
+            anchors.fill: parent; anchors.margins: 8; spacing: 6
+            Text { text: editor.activeDisplay.reason; textFormat: Text.PlainText; color: "#e2d1aa"; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Action {
+                objectName: "restoreLayerDisplayButton"; text: "显示当前效果"
+                Layout.fillWidth: true; enabled: workspace.editingEnabled
+                hint: "显示当前层及所属组；将不透明度为 0% 的层或组设为 100%。所属组中的其他可见图层也会显示。可一步撤销。"
+                onClicked: editor.restoreLayerDisplay()
+            }
+        }
+    }
+    Canvas { id: histogram; visible: !editor.activeIsGroup; Layout.fillWidth: true; Layout.preferredHeight: adjustRoot.compactHeader ? 32 : 45
         onPaint: { var c=getContext("2d"); c.reset(); c.fillStyle="#23272c"; c.fillRect(0,0,width,height); c.fillStyle="#77998b"; var a=editor.histogram; for(var i=0;i<a.length;i++) c.fillRect(i*width/64,height-a[i]*height,width/64-.7,a[i]*height) }
         Connections { target: editor; function onChanged() { histogram.requestPaint() } }
     }
-    Caption { visible: !editor.activeIsGroup; text: "快捷效果 · 可 Ctrl+Z 撤销"; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Caption { visible: !editor.activeIsGroup && !adjustRoot.compactHeader; text: "快捷效果 · 可 Ctrl+Z 撤销"; wrapMode: Text.Wrap; Layout.fillWidth: true }
     RowLayout { visible: !editor.activeIsGroup; Layout.fillWidth: true
         Repeater { model: [{key:"natural",label:"自然"},{key:"warm",label:"暖光"},{key:"cool",label:"冷调"}]
             delegate: Action { required property var modelData; text: modelData.label; Layout.fillWidth: true; enabled: workspace.editingEnabled && !editor.activeIsGroup; onClicked: editor.applyPreset(modelData.key) }
         }
-        Action { objectName: "skinSmoothPresetButton"; text: "轻磨皮"; Layout.fillWidth: true; hint: "将当前图层范围的磨皮设为 35；建议先选中面部皮肤，可撤销"; enabled: workspace.editingEnabled && !editor.activeIsGroup; onClicked: { editor.setParameter("skin_smoothing", 35); editor.finishGesture() } }
+        Action { objectName: "skinSmoothPresetButton"; text: "轻磨皮"; Layout.fillWidth: true; hint: "将当前图层范围的磨皮设为 35，并打开强度微调；建议先选中面部皮肤，可撤销"; enabled: workspace.editingEnabled && !editor.activeIsGroup; onClicked: { editor.setParameter("skin_smoothing", 35); editor.finishGesture(); adjustRoot.revealParameter("skin_smoothing") } }
     }
-    Repeater { model: editor.activeIsGroup ? [] : [
+    Repeater { id: toolGroups; model: editor.activeIsGroup ? [] : [
         {title:"明暗",keys:["exposure","contrast","highlights","shadows","whites","blacks"],open:true},
         {title:"色彩",keys:["warmth","tint","saturation","vibrance"],open:false},
         {title:"细节与人像",keys:["skin_smoothing","sharpness","softness"],open:false}]
         delegate: FoldSection { id: toolGroup; required property var modelData; required property int index; title: modelData.title; expanded: modelData.open; objectName: "adjustmentSection_"+index
-    Repeater { model: editor.tools.filter(function(t) { return toolGroup.modelData.keys.indexOf(t.key)>=0 })
+            function commitText() {
+                for (var i = 0; i < toolRows.count; ++i)
+                    if (!toolRows.itemAt(i).commitText()) return false
+                return true
+            }
+            function parameterRow(key) {
+                for (var i = 0; i < toolRows.count; ++i) {
+                    var row = toolRows.itemAt(i)
+                    if (row.modelData.key === key) return row
+                }
+                return null
+            }
+    Repeater { id: toolRows; model: toolGroup.modelData.keys.map(function(key) { return editor.tools.find(function(t) { return t.key===key }) })
         delegate: Item {
             required property var modelData
+            objectName: "parameterRow_"+modelData.key
+            function commitText() { return valueInput.submit(true) }
             Layout.fillWidth: true
             implicitHeight: paramRow.implicitHeight
             MouseArea {
@@ -50,7 +142,12 @@ ColumnLayout {
                 RowLayout { Layout.fillWidth: true
                     Text { text: modelData.label; color: workspace.ink; font.pixelSize: 11 }
                     Item { Layout.fillWidth: true }
-                    Caption { text: Number(editor.parameters[modelData.key] || 0).toFixed(modelData.key==="exposure" ? 2 : 0); font.family: "Consolas" }
+                    ParameterValueField {
+                        id: valueInput; objectName: "parameterValue_"+modelData.key
+                        editor: adjustRoot.editor; parameterKey: modelData.key
+                        enabled: workspace.editingEnabled && !editor.activeIsGroup
+                        Layout.preferredWidth: 56
+                    }
                 }
                 FineSlider { objectName: "parameter_"+modelData.key; Layout.fillWidth: true; implicitHeight: 22; from: modelData.from; to: modelData.to; stepSize: modelData.step; value: editor.parameters[modelData.key] || 0; enabled: workspace.editingEnabled && !editor.activeIsGroup; onMoved: editor.setParameter(modelData.key,value); onPressedChanged: { if(!pressed) editor.finishGesture() } }
                 Caption { visible: modelData.key==="skin_smoothing"; text: "只作用于当前图层范围；选中面部皮肤后效果更准确。"; font.pixelSize: 9; wrapMode: Text.Wrap; Layout.fillWidth: true }

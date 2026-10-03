@@ -20,6 +20,7 @@ ColumnLayout {
 
     Menu {
         id: elementMenu
+        objectName: "sceneElementMenu"
         MenuItem { objectName: "elemMenuReplace"; text: "设为当前范围"; onTriggered: selection.rowSelect(guide.elementMenuId, "replace") }
         MenuItem { objectName: "elemMenuAdd"; text: "加入当前范围"; onTriggered: selection.rowSelect(guide.elementMenuId, "add") }
         MenuItem { objectName: "elemMenuSubtract"; text: "从当前范围减去"; enabled: editor.hasSelectionDraft; onTriggered: selection.rowSelect(guide.elementMenuId, "subtract") }
@@ -30,15 +31,15 @@ ColumnLayout {
             objectName: "draftStateCaption"
             Layout.fillWidth: true
             text: editor.hasSelectionDraft
-                ? "当前范围：" + editor.draftLabel + " · 尚未落到图层"
+                ? selection.editingLayerMask
+                    ? "正在修正“" + selection.maskEditLayerName + "”的范围 · 修改尚未保存"
+                    : "当前范围：" + editor.draftLabel + " · 尚未开始调整"
                 : editor.hasRegionDraft ? "分区预览中" : "悬停元素行可在画布预览范围；点击即设为当前范围。"
             color: editor.hasSelectionDraft ? "#c6d9ca" : Theme.muted
             wrapMode: Text.Wrap
         }
-        Action { text: "清空范围"; subtle: true; implicitHeight: 24; font.pixelSize: 10; visible: editor.hasSelectionDraft; enabled: !editor.busy; hint: "丢弃当前范围，图层保持不变"; onClicked: selection.discard() }
+        Action { text: selection.editingLayerMask ? "取消修改" : "取消选择"; subtle: true; implicitHeight: 24; font.pixelSize: 10; visible: editor.hasSelectionDraft; enabled: !editor.busy; hint: "丢弃当前范围，图层保持不变"; onClicked: selection.discard() }
     }
-    TaskStatusBar { editor: guide.editor }
-
     Rectangle {
         Layout.fillWidth: true
         implicitHeight: sourceCol.implicitHeight + 20
@@ -87,9 +88,10 @@ ColumnLayout {
                 Action { objectName: "checkCategoryButton"; text: "选同类"; implicitHeight: 26; font.pixelSize: 10; enabled: !editor.busy; onClicked: editor.checkSceneCategory(category.currentText,true) }
             }
             Repeater {
-                model: editor.sceneObjects
+                model: editor.sceneRowsModel
                 delegate: Rectangle {
-                    required property var modelData
+                    required property var sceneRow
+                    readonly property var modelData: sceneRow
                     objectName: "sceneRow_" + modelData.id
                     Layout.fillWidth: true; implicitHeight: 30; radius: 4
                     color: modelData.pixelReady ? "#2c3a34" : "#252b31"
@@ -104,20 +106,44 @@ ColumnLayout {
                             onClicked: editor.checkSceneObject(modelData.id, checked)
                         }
                         Action {
-                            text: modelData.name; subtle: true; Layout.fillWidth: true; implicitHeight: 26; font.pixelSize: 11
-                            hint: modelData.category + " · " + (modelData.pixelStatus === "ready" ? "真实轮廓已就绪" : modelData.pixelStatus === "pending" ? "真实轮廓预计算中，悬停暂显示定位框" : modelData.pixelStatus === "unavailable" ? "暂未可靠贴边；点击可重试，或用框选 / 画笔" : "尚无真实轮廓；点击时尝试贴边") + "；点击设为当前范围，右键加入/减去"
+                            id: objectButton
+                            objectName: "sceneSelect_" + modelData.id
+                            readonly property bool needsReview: modelData.pixelWarnings.length > 0
+                            text: modelData.name; subtle: true; Layout.fillWidth: true; implicitWidth: 0; implicitHeight: 26; font.pixelSize: 11
+                            hint: modelData.category + " · " + (modelData.pixelStatus === "ready" ? needsReview ? modelData.pixelWarnings.join("；") + "；选中后可补点 / 排除点" : "真实轮廓已就绪，请检查边缘" : modelData.pixelStatus === "pending" ? "真实轮廓预计算中，悬停暂显示定位框" : modelData.pixelStatus === "unavailable" ? "暂未可靠贴边；点击可重试，或用框选 / 画笔" : "尚无真实轮廓；点击时尝试贴边") + "；点击设为当前范围，右键加入/减去"
+                            contentItem: RowLayout {
+                                spacing: 6
+                                Text { text: objectButton.text; font: objectButton.font; color: Theme.ink; Layout.fillWidth: true; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                                Caption {
+                                    objectName: "sceneStatus_" + modelData.id
+                                    text: modelData.pixelStatus === "ready" ? objectButton.needsReview ? "需检查" : "可选" : modelData.pixelStatus === "pending" ? "准备中" : modelData.pixelStatus === "unavailable" ? "需重选" : "待准备"
+                                    color: objectButton.needsReview || modelData.pixelStatus === "unavailable" ? "#e4bd7d" : Theme.muted
+                                    font.pixelSize: 10
+                                }
+                            }
                             enabled: !editor.busy
                             onClicked: selection.rowSelect(modelData.id, "replace")
                         }
                     }
-                    MouseArea {
+                    // Observe movement without covering the Button/CheckBox.
+                    HoverHandler {
                         objectName: "sceneRowHover_" + modelData.id
-                        anchors.fill: parent
+                        readonly property string objectId: modelData.id
+                        enabled: workspace.objectPreviewEnabled
+                        blocking: false
+                        signal entered()
+                        signal exited()
+                        onHoveredChanged: hovered ? entered() : exited()
+                        function clearHover() { if (workspace && workspace.sceneHoverId === objectId) workspace.sceneHoverId = "" }
+                        onEntered: if (enabled) workspace.sceneHoverId = objectId
+                        onExited: clearHover()
+                        onEnabledChanged: if (!enabled) clearHover()
+                        Component.onDestruction: clearHover()
+                    }
+                    TapHandler {
                         acceptedButtons: Qt.RightButton
-                        hoverEnabled: true
-                        onEntered: workspace.sceneHoverId = modelData.id
-                        onExited: if (workspace.sceneHoverId === modelData.id) workspace.sceneHoverId = ""
-                        onClicked: function(mouse) { guide.elementMenuId = modelData.id; elementMenu.popup() }
+                        enabled: workspace.objectPreviewEnabled
+                        onTapped: { guide.elementMenuId = modelData.id; elementMenu.popup() }
                     }
                 }
             }
@@ -169,6 +195,7 @@ ColumnLayout {
                 SpinBox { id: matteRadius; objectName: "matteRadiusBox"; from: 1; to: 64; value: 8; enabled: !editor.busy; implicitWidth: 88; implicitHeight: 28 }
             }
             Action { objectName: "refineMatteButton"; text: "按原图细化透明边缘"; Layout.fillWidth: true; hint: "保留发丝等半透明过渡"; enabled: !editor.busy && editor.matteAvailable; onClicked: selection.refine("matte", matteRadius.value) }
+            Action { objectName: "correctPixelPointsButton"; text: "补点 / 排除点"; Layout.fillWidth: true; hint: "点击目标内部保留，Alt＋点击排除漏选的背景；可叠加提示点"; enabled: !editor.busy; onClicked: selection.refinePixelPoints() }
             RowLayout { Layout.fillWidth: true
                 Caption { text: "羽化" }
                 FineSlider { from: 0; to: 5; stepSize: .1; value: editor.draftFeather; Layout.fillWidth: true; enabled: !editor.busy; onMoved: editor.setDraftFeather(value); onPressedChanged: if(!pressed) editor.finishSelectionGesture() }

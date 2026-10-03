@@ -27,7 +27,14 @@ ColumnLayout {
         Layout.fillWidth: true; Layout.preferredHeight: 32; color: editor.hasSelectionDraft || editor.hasRegionDraft ? "#3c483e" : "#2c373b"
         RowLayout {
             anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14
-            Text { objectName: "editingContextLabel"; text: editor.hasRegionDraft ? "分区方案预览 · 逐区检查后创建图层" : editor.hasSelectionDraft ? "独立选区草稿 · 尚未改变图层" : "调整对象："+editor.activeLayerName+"  /  "+editor.selectionLabel; color: "#c4d9cf"; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
+            Text {
+                objectName: "editingContextLabel"
+                text: editor.hasRegionDraft ? "分区方案预览 · 逐区检查后创建图层"
+                    : editor.selection.editingLayerMask ? "正在修正："+editor.selection.maskEditLayerName+" · 保存后生效"
+                    : editor.hasSelectionDraft ? "已选好范围 · 点击开始调整此范围"
+                    : (!editor.activeDisplay.enabled ? "效果未显示 · " : "调整对象：")+editor.activeLayerName+"  /  "+editor.selectionLabel
+                color: "#c4d9cf"; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight
+            }
             Action { text: editor.hasRegionDraft ? "取消方案" : "取消选区"; visible: editor.hasSelectionDraft || editor.hasRegionDraft; enabled: !editor.busy; implicitHeight: 24; subtle: true; onClicked: editor.hasRegionDraft ? editor.discardRegions() : editor.discardSelection() }
         }
     }
@@ -68,7 +75,7 @@ ColumnLayout {
         Action { objectName: "actualSizeButton"; text: "100%"; hint: "原图尺寸比例 Ctrl+1"; enabled: editor.hasImage; implicitHeight: 27; onClicked: { editor.viewport.setZoom(1); canvasRoot.focusCanvas() } }
         Action { objectName: "navigatorToggle"; text: "导航"; hint: "显示 / 隐藏角落导航图"; primary: viewport.showNavigator; implicitHeight: 27; onClicked: { viewport.showNavigator=!viewport.showNavigator; canvasRoot.focusCanvas() } }
         Item { Layout.fillWidth: true }
-        Action { id: holdOriginal; text: "按住看原图"; subtle: true; implicitHeight: 27; font.pixelSize: 10 }
+        Action { id: holdOriginal; objectName: "holdOriginalButton"; text: "按住看原图"; subtle: true; implicitHeight: 27; font.pixelSize: 10 }
         Action {
             objectName: "canvasHelpButton"; text: "?"; hint: "画布操作与滚轮设置"; subtle: true; implicitHeight: 27
             onClicked: canvasMenu.popup()
@@ -90,7 +97,7 @@ ColumnLayout {
     }
     RowLayout {
         Layout.fillWidth: true; Layout.preferredHeight: 22; Layout.leftMargin: 14; Layout.rightMargin: 14
-        Caption { text: editor.imageInfo + (editor.detailLoading ? " · 正在载入当前区域细节…" : editor.detailUrl.length ? " · 原图细节已加载" : " · 快速预览 1600px") + " · 导出按原图像素"; font.pixelSize: 10 }
+        Caption { objectName: "detailStatusCaption"; text: editor.imageInfo + " · " + viewport.detailStatus + " · 导出按原图像素"; font.pixelSize: 10 }
         Caption { text: "空格拖动 · Alt＋滚轮缩放"; font.pixelSize: 10; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight; elide: Text.ElideRight }
     }
     ConversationPane { workspace: canvasRoot.workspace; editor: canvasRoot.editor }

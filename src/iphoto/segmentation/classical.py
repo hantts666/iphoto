@@ -3,7 +3,7 @@
 from pathlib import Path
 import numpy as np
 from PIL import Image, ImageChops
-from ..document import empty_mask, raster_mask
+from ..document import empty_mask, raster_mask, raster_mask_cached
 from ..masks import encode_bitmap
 
 MODEL_DIR = Path(__file__).resolve().parents[3] / "models"
@@ -28,7 +28,7 @@ def bitmap_mask(image, label):
 
 
 def assess(mask, size=(256, 256)):
-    pixels = np.asarray(raster_mask(mask, size))
+    pixels = np.asarray(raster_mask_cached(mask, size))
     coverage = float(np.mean(pixels > 0))
     warnings = []
     if coverage < 0.001:

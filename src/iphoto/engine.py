@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageCms, ImageFilter, ImageOps
 from .storage import atomic_output
 
-ENGINE_VERSION = "1.7.0-original-alpha"
+ENGINE_VERSION = "1.7.2-smoothing-grid"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),
@@ -49,6 +49,7 @@ LABELS = {
     "skin_smoothing": "磨皮",
 }
 DETAIL_FIELDS = frozenset(("sharpness", "softness", "skin_smoothing"))
+CHANNEL_FIELDS = frozenset(("exposure", "warmth", "tint"))
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng",
@@ -151,7 +152,11 @@ def load_source(path: str | Path) -> Source:
         for tag in (271, 272, 306, 315, 33432):
             if tag in exif:
                 kept[tag] = exif[tag]
-        oriented = ImageOps.exif_transpose(raw)
+        # The decoder is owned by this load. Normalize its pixels in place,
+        # then convert into the detached RGB result rather than retaining
+        # another full-resolution image until conversion has finished.
+        ImageOps.exif_transpose(raw, in_place=True)
+        oriented = raw
         has_alpha = "A" in oriented.getbands() or "transparency" in raw.info
         alpha = oriented.convert("RGBA").getchannel("A") if has_alpha else None
         icc = raw.info.get("icc_profile")
@@ -176,7 +181,8 @@ def load_source(path: str | Path) -> Source:
                 warning = "此 CMYK 图片没有 ICC，颜色仅作近似显示"
         if alpha is not None:
             rgb.putalpha(alpha)
-        image = rgb.copy()
+        # convert/profileToProfile already returned an independent image.
+        image = rgb
     return Source(path, image, file_hash(path), kept.tobytes(), warning)
 
 
@@ -245,12 +251,28 @@ def _color_lut(recipe):
     return ImageFilter.Color3DLUT(65, table, channels=3, target_mode="RGB")
 
 
+@lru_cache(maxsize=12)
+def _channel_lut(recipe):
+    # These controls are separable: each output channel depends only on its
+    # input byte. Compile the exact float reference at all 256 byte levels.
+    # Detail controls have already been removed from this cache key.
+    linear = np.repeat(LINEAR_LUT[:, None], 3, axis=1)
+    encoded = np.rint(_transform_linear(linear, recipe) * 255).clip(0, 255).astype(np.uint8)
+    return tuple(encoded.T.reshape(-1).tolist())
+
+
 def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=None) -> Image.Image:
     """Versioned LUT renderer. The reference renderer below checks interpolation error."""
     if not any(recipe.to_dict().values()):
         return image.copy()
     rgb = image if image.mode == "RGB" else image.convert("RGB")
-    if any(value for key, value in recipe.to_dict().items() if key not in DETAIL_FIELDS):
+    values = recipe.to_dict()
+    color_active = any(value for key, value in values.items() if key not in DETAIL_FIELDS)
+    if color_active and not any(value for key, value in values.items()
+                                if key not in CHANNEL_FIELDS and key not in DETAIL_FIELDS):
+        color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
+        result = rgb.point(_channel_lut(color_recipe))
+    elif color_active:
         color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
         filtered = rgb.filter(_color_lut(color_recipe))
         # LUT interpolation near a clipped channel is inaccurate when tint and
@@ -277,10 +299,58 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
         del pixels
         result = Image.fromarray(corrected)
     else:
-        result = rgb.copy()
+        # Every active detail filter creates its own result. Keep the input
+        # through that read-only stage instead of copying the whole photo.
+        result = rgb
     result = _detail(result, recipe, detail_size)
     if image.mode == "RGBA":
         result.putalpha(image.getchannel("A"))
+    return result
+
+
+def smoothing_step(size):
+    """Nearest integer sampling interval at the photographic preview scale.
+
+    Whole images and source crops use cells anchored at source (0, 0). An
+    integer interval keeps down/up sampling independent of crop dimensions.
+    """
+    return max(1, round(max(size) / 1600))
+
+
+def render_masked(image, recipe, mask, *, detail_size=None, origin=(0, 0)):
+    """Apply an adjustment with source-aligned context around its actual mask.
+
+    Color operations are pointwise. Detail filters need nearby source pixels;
+    include their combined support before trimming back to the mask bounds.
+    Inpainting, healing and group composition keep their separate render paths.
+    """
+    bounds = mask.getbbox()
+    if bounds is None:
+        return image.copy()
+    size = detail_size or image.size
+    radius = max(size) / 1600
+    step = smoothing_step(size) if recipe.skin_smoothing else 1
+    margin = math.ceil(
+        (6 * step if recipe.skin_smoothing else 0)
+        + (4 * max(.25, radius * 3) if recipe.softness else 0)
+        + (4 * max(.3, radius) if recipe.sharpness else 0)
+        + (8 if any((recipe.skin_smoothing, recipe.softness, recipe.sharpness)) else 0)
+    )
+    x, y = origin
+    left, top, right, bottom = bounds
+    outer = (
+        max(0, ((left - margin + x) // step) * step - x),
+        max(0, ((top - margin + y) // step) * step - y),
+        min(image.width, ((right + margin + x + step - 1) // step) * step - x),
+        min(image.height, ((bottom + margin + y + step - 1) // step) * step - y),
+    )
+    # Large ranges gain little from allocating cropped images as well.
+    if (outer[2] - outer[0]) * (outer[3] - outer[1]) >= image.width * image.height * .8:
+        return Image.composite(render(image, recipe, detail_size=size), image, mask)
+    adjusted = render(image.crop(outer), recipe, detail_size=size)
+    core = adjusted.crop((left - outer[0], top - outer[1], right - outer[0], bottom - outer[1]))
+    result = image.copy()
+    result.paste(core, bounds, mask.crop(bounds))
     return result
 
 
@@ -293,23 +363,33 @@ def _detail(image, recipe, detail_size=None):
         # a large original. The layer mask limits the final affected area.
         import cv2
 
-        original = np.asarray(image.convert("RGB"))
+        original = np.asarray(image if image.mode == "RGB" else image.convert("RGB"))
         strength = recipe.skin_smoothing / 100
         diameter = 5 if strength < 0.35 else 7 if strength < 0.75 else 9
-        scale = max(1.0, radius)
-        if scale > 1:
-            working_size = (
-                max(1, round(image.width / scale)),
-                max(1, round(image.height / scale)),
+        step = smoothing_step(detail_size or image.size)
+        if step > 1:
+            # Source crops are aligned to this grid by render_detail_tile.
+            # Only the true right/bottom photo edge may have partial cells.
+            # Extend those cells consistently, then use the exact same integer
+            # interval for downsampling and reconstruction at every viewport.
+            pad_x, pad_y = (-image.width) % step, (-image.height) % step
+            padded = (cv2.copyMakeBorder(original, 0, pad_y, 0, pad_x, cv2.BORDER_REPLICATE)
+                      if pad_x or pad_y else original)
+            working = cv2.resize(
+                padded, (padded.shape[1] // step, padded.shape[0] // step),
+                interpolation=cv2.INTER_AREA,
             )
-            working = cv2.resize(original, working_size, interpolation=cv2.INTER_AREA)
+            del padded  # The reduced image owns its pixels; release real edge padding now.
         else:
             working = original
         smooth = cv2.bilateralFilter(
             working, diameter, 16 + 52 * strength, 3 + 5 * strength
         )
-        if scale > 1:
-            smooth = cv2.resize(smooth, image.size, interpolation=cv2.INTER_LINEAR)
+        if step > 1:
+            smooth = cv2.resize(
+                smooth, (working.shape[1] * step, working.shape[0] * step),
+                interpolation=cv2.INTER_LINEAR,
+            )[:image.height, :image.width]
         image = Image.fromarray(cv2.addWeighted(original, 1 - strength, smooth, strength, 0))
     if recipe.softness:
         softened = image.filter(ImageFilter.GaussianBlur(max(0.25, radius * 3)))

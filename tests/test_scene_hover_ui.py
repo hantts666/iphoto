@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QObject, QPointF, Qt, QUrl
+from PySide6.QtCore import QPointF, QUrl
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtTest import QTest
@@ -59,7 +59,7 @@ def test_row_hover_previews_and_switches_without_race(qt_app, ai_store, tmp_path
         ids = [row["id"] for row in editor.sceneObjects][:2]
         assert len(ids) == 2
         row1, row2 = find("sceneRow_" + ids[0]), find("sceneRow_" + ids[1])
-        overlays = find("canvasOverlays")
+        overlays = find("canvasOverlayGroup")
 
         def center(item):
             return item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()

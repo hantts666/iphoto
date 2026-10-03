@@ -53,3 +53,36 @@ def guided_edge(image, hard, radius=4):
     alpha[foreground > 0] = 1
     alpha[support == 0] = 0
     return Image.fromarray(np.rint(alpha * 255).astype(np.uint8))
+
+
+def native_edge(image, mask, radius=4):
+    """Source RGB edges with bounded working RGB buffers and overlapping context.
+
+    This preserves the rough topology. It is a fallback when alpha matting
+    cannot be solved, not evidence that missing hairs or holes were recovered.
+    """
+    from ..document import empty_mask, raster_mask
+    from ..masks import encode_bitmap
+
+    radius = max(1, min(12, int(radius)))
+    seed = raster_mask(mask, image.size)
+    pixels = np.empty((image.height, image.width), dtype=np.uint8)
+    # The color window and morphological band fit inside this halo even at
+    # radius 12. Retain only the core, avoiding artificial tile-edge colors.
+    halo, tile_size = 64, 512
+    for y in range(0, image.height, tile_size):
+        for x in range(0, image.width, tile_size):
+            right, bottom = min(x + tile_size, image.width), min(y + tile_size, image.height)
+            left, top = max(0, x - halo), max(0, y - halo)
+            far_right, far_bottom = min(image.width, right + halo), min(image.height, bottom + halo)
+            box = (left, top, far_right, far_bottom)
+            hard = np.asarray(seed.crop(box)) > 127
+            if not hard.any() or hard.all():
+                pixels[y:bottom, x:right] = hard[y-top:bottom-top, x-left:right-left].astype(np.uint8)*255
+                continue
+            local = guided_edge(image.crop(box), hard, radius)
+            pixels[y:bottom, x:right] = np.asarray(local)[y-top:bottom-top, x-left:right-left]
+    result = empty_mask()
+    result.update(bitmap=encode_bitmap(Image.fromarray(pixels), sampling="alpha", preserve_resolution=True),
+                  label=mask["label"])
+    return result
