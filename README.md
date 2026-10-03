@@ -1,8 +1,8 @@
-# iPhoto 1.9.0
+# iPhoto 1.9.1
 
 基于 Qt 6 / PySide6 的 Windows 原生修图工作室。采用独立选区、调整图层和 AI 助手的操作方式，无需 Electron 或 WebView。
 
-双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.9.0**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
+双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.9.1**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
 
 ## 人脸与颜色调整 · 1.9
 
@@ -13,6 +13,8 @@
 选中调整层后，展开 **RGB 通道**独立控制红、绿、蓝增益，展开 **分色调色 · HSL**选择红、橙、黄、绿、青、蓝、紫、洋红，再调色相、饱和度、明度。所有颜色控制均遵守当前图层范围，可精确输入、锁定、撤销、保存与导出，AI 也能使用。RGB 增益不是曲线工具。HSL 对灰色不生效；同色物体要分别调整时，先选定空间范围。
 
 项目协议升级为 **1.9**，可读取此前项目；包含新颜色参数的项目需使用新版打开。已有窗口需重新打开才能加载新版代码。
+
+1.9.1 优化大图 HSL 的连续调色和导出。安装脚本会准备调色缓存；已有环境可单独运行 `.venv\Scripts\python.exe scripts/setup_color.py`。没有缓存时首次 HSL 调整需短暂准备，后续操作复用；预览仍显示更新状态。加速失败时继续使用原计算路径，照片可正常编辑。
 
 ## 透明边缘与调色预览
 

@@ -18,5 +18,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 Write-Host 'Preparing the edge solver once; the first compilation can take several minutes.'
 & '.\.venv\Scripts\python.exe' -c 'import os; os.environ["NUMBA_NUM_THREADS"]="4"; import pymatting'
 if ($LASTEXITCODE -ne 0) { throw 'Edge solver initialization failed.' }
+Write-Host 'Preparing the colour engine cache.'
+& '.\.venv\Scripts\python.exe' scripts/setup_color.py
+if ($LASTEXITCODE -ne 0) { Write-Warning 'Colour acceleration was not prepared; standard rendering remains available.' }
 Write-Host 'Ready. Double-click start-iphoto.cmd.'
 

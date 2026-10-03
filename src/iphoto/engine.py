@@ -15,9 +15,9 @@ import re
 import numpy as np
 from PIL import Image, ImageCms, ImageFilter, ImageOps
 from .storage import atomic_output
-from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors
+from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors, mix_fast as mix_colors_fast
 
-ENGINE_VERSION = "1.9.0-color-channels"
+ENGINE_VERSION = "1.9.1-fused-colors"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),
@@ -228,7 +228,7 @@ def preview(image: Image.Image, edge=1600) -> Image.Image:
     return result
 
 
-def _transform_linear(rgb, recipe):
+def _transform_linear(rgb, recipe, *, accelerate_hsl=False):
     """Reference float32 math; receives linear RGB and returns encoded sRGB."""
     if recipe.warmth:
         # A relative creative warm/cool control, not calibrated RAW Kelvin.
@@ -273,7 +273,17 @@ def _transform_linear(rgb, recipe):
     encoded = np.where(
         rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1 / 2.4) - 0.055
     )
-    return mix_colors(encoded, recipe) if any(getattr(recipe, key) for key in HSL_FIELDS) else encoded
+    if any(getattr(recipe, key) for key in HSL_FIELDS):
+        return (mix_colors_fast if accelerate_hsl else mix_colors)(encoded, recipe)
+    return encoded
+
+
+@lru_cache(maxsize=12)
+def _channel_float_lut(recipe):
+    # Preserve the encoded float values before HSL. Rounding a byte lookup here
+    # would make combined channel and HSL adjustments depend on the render path.
+    linear = np.repeat(LINEAR_LUT[:, None], 3, axis=1)
+    return _transform_linear(linear, recipe)
 
 
 @lru_cache(maxsize=12)
@@ -311,10 +321,17 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
         # HSL can rotate saturated colours sharply. A coarse 3D LUT would
         # introduce colour errors; use bounded exact strips for this path.
         color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
+        separable = not any(value for key, value in values.items()
+                            if key not in CHANNEL_FIELDS and key not in HSL_FIELDS and key not in DETAIL_FIELDS)
+        channel_table = (_channel_float_lut(replace(color_recipe, **dict.fromkeys(HSL_FIELDS, 0)))
+                         if separable else None)
         pixels = np.asarray(rgb)
         corrected = np.empty_like(pixels)
         for top in range(0, image.height, strip_height):
-            exact = _transform_linear(LINEAR_LUT[pixels[top:top + strip_height]].copy(), color_recipe)
+            strip = pixels[top:top + strip_height]
+            exact = (mix_colors_fast(channel_table[strip, np.arange(3)], color_recipe)
+                     if channel_table is not None else
+                     _transform_linear(LINEAR_LUT[strip].copy(), color_recipe, accelerate_hsl=True))
             corrected[top:top + strip_height] = np.rint(exact * 255).clip(0, 255).astype(np.uint8)
         result = Image.fromarray(corrected)
     elif color_active and not any(value for key, value in values.items()

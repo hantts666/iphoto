@@ -13,6 +13,7 @@ FIELDS = {f"hsl_{name}_{control}": (-180, 180) if control == "hue" else (-100, 1
 LABELS = {f"hsl_{name}_{control}": f"{label}色{title}"
           for name, label, _ in COLORS
           for control, title in (("hue", "色相"), ("saturation", "饱和度"), ("lightness", "明度"))}
+_accelerator_failed = False
 
 
 def rgb_to_hsl(rgb):
@@ -67,4 +68,28 @@ def mix(rgb, recipe):
     # Unaffected colours, including exact greys, retain their original floats.
     unaffected = (shifts[0] == 0) & (shifts[1] == 0) & (shifts[2] == 0)
     result[unaffected] = rgb[unaffected]
+    return result
+
+
+def mix_fast(rgb, recipe):
+    """Use the fused kernel for strips; retain the reference at byte rounding ties."""
+    global _accelerator_failed
+    if _accelerator_failed or rgb.dtype != np.float32 or rgb.size < 3 * 4096:
+        return mix(rgb, recipe)
+    try:
+        from .color_accel import run
+        controls = np.array([[getattr(recipe, f"hsl_{name}_{field}")
+                              for field in ("hue", "saturation", "lightness")]
+                             for name, _, _ in COLORS], dtype=np.float32)
+        result = run(rgb, controls)
+    except Exception:
+        # Optional acceleration must not block editing, original pixels or export.
+        _accelerator_failed = True
+        return mix(rgb, recipe)
+    # libm cos can differ by an ulp from the vector implementation. Recompute
+    # pixels near an 8-bit half value with the reference before quantization.
+    scaled = result * 255
+    ambiguous = np.any(np.abs(scaled - np.floor(scaled) - .5) < .003, axis=-1)
+    if ambiguous.any():
+        result[ambiguous] = mix(rgb[ambiguous], recipe)
     return result
