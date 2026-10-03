@@ -518,6 +518,17 @@ def _cloud_plan(self, result, generation):
         from .object_grounding import planned
 
         return planned(self, result)
+    if pending.get("face_grounding") and result.get("mode") == "selection":
+        active = pending.pop("face_grounding")
+        pending["face_grounded"] = True
+        if result["status"] != "unsupported":
+            try:
+                mapped = map_grounding(result, active["crop"], active["size"], {"mask": active["mask"]})
+            except ValueError as exc:
+                return self._notify(str(exc), True)
+            result = {**result, "mask": mapped["mask"], "anchor": mapped["anchor"],
+                      "mask_target": active["target"], "face_scope": "region",
+                      "face_part": active["part"]}
     repair = pending.get("repair_grounding")
     if repair and result.get("mode") == "repair":
         try:
@@ -622,10 +633,14 @@ def _cloud_plan(self, result, generation):
         from ..segmentation.face_detection import match_hint
         result['regions'] = deepcopy(result['regions'])
         for region in result['regions']:
-            face = match_hint(region['mask'],face_inventory.current(self)) if region.get('mask_target')=='face_skin' else None
+            partial = region.get('face_scope') == 'region'
+            face = match_hint(region['mask'],face_inventory.current(self), partial=partial,
+                              anchor=region.get('anchor')) if region.get('mask_target')=='face_skin' else None
             if face:
-                region.update(mask=deepcopy(face['mask']),anchor=list(face['anchor']),
+                region.update(mask=region['mask'] if partial else deepcopy(face['mask']),anchor=list(face['anchor']),
                               skin_crop=list(face['skin_crop']),recover_face_anchor=True)
+                if partial:
+                    region['face_context'] = deepcopy(face['mask'])
                 if 'face_features' in face:
                     region['face_features'] = deepcopy(face['face_features'])
         skin_indices = [i for i, r in enumerate(result["regions"])
@@ -671,21 +686,43 @@ def _cloud_plan(self, result, generation):
         mask["label"] = ("AI · " + self._conversation[-1]["text"])[:200]
         from ..segmentation.face_detection import match_hint
         target = result.get('mask_target','object')
-        face = match_hint(mask,face_inventory.current(self)) if target in ('face','face_skin') else None
+        scope = result.get('face_scope', 'full')
+        partial = scope == 'region'
+        face = match_hint(mask,face_inventory.current(self), partial=partial,
+                          anchor=result.get('anchor')) if target in ('face','face_skin') else None
+        if partial and not face and not pending.get('face_grounded'):
+            context = face_inventory.grounding_context(self, result.get('anchor'))
+            if context:
+                crop = region_crop(context['mask'], (384,384))
+                pending['face_grounding'] = {"crop": crop, "size": (self._width,self._height),
+                                             "mask": deepcopy(mask), "target": target,
+                                             "part": result.get('face_part','all')}
+                self._status = "AI 正在放大定位面部部位…"
+                self.changed.emit()
+                if self._ai.plan(
+                    "图片是同一张照片中完整人脸的放大图。请重新定位用户指定的局部部位，"
+                    "box仅包住该部位，不要返回整脸。必须使用face_scope=region。用户要求：" + pending['text'],
+                    Recipe().to_dict(), [], QUrl(self._original).toLocalFile(), self._generation,
+                    'selection', {"_image_crop": crop, "_grounding_label": "面部局部"},
+                ):
+                    return
+                return self._notify("面部部位放大定位未能启动，照片未改变", True)
         # Remember a full face only after the local parser succeeds. A skin
         # patch, failed prediction or cancelled request cannot become a face.
         face_hint = None
-        if target == 'face' and (face or result.get('anchor')):
+        if target == 'face' and not partial and (face or result.get('anchor')):
             face_hint = deepcopy(face) if face else {
                 'name': 'AI 人脸', 'mask': deepcopy(mask), 'anchor': list(result['anchor']),
             }
             if not face:
                 face_hint['mask']['label'] = 'AI 人脸'
         pixel_selections.select_hint(
-            self, deepcopy(face['mask']) if face else mask, result["summary"],
+            self, deepcopy(face['mask']) if face and not partial else mask, result["summary"],
             face['anchor'] if face else result.get("anchor"),mask_target=target,
             crop=face['skin_crop'] if face else None,recover_face_anchor=bool(face),
-            features=face.get('face_features') if face else None, face_hint=face_hint
+            features=face.get('face_features') if face else None, face_hint=face_hint,
+            face_scope=scope, face_context=face['mask'] if face and partial else None,
+            face_part=result.get('face_part','all')
         )
     elif mode == "regions":
         if not pixel_selections.select_regions(

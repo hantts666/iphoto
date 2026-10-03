@@ -86,6 +86,12 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                     options["recover_anchor"] = True
                 if job.get('face_features') is not None:
                     options['features'] = job['face_features']
+                if 'face_scope' in job:
+                    options['scope'] = job['face_scope']
+                if 'face_context' in job:
+                    options['context_hint'] = job['face_context']
+                if 'face_part' in job:
+                    options['part'] = job['face_part']
                 mask, quality = face_segment(source or image, job.get("hint"), job.get("points"), crop=job.get("skin_crop"), **options)
             elif job.get("mask_target") == "body_skin":
                 from .body_skin import segment as body_segment

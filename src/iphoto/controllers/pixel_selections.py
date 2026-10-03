@@ -197,11 +197,14 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
         return start(self, jobs, context)
 
 
-def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None, face_hint=None):
+def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None, face_hint=None, face_scope="full", face_context=None, face_part="all"):
     return start(
         self,
         [{"id": "target", "hint": hint, "points": [[*anchor, 1]] if anchor else [],"mask_target":mask_target,
           "recover_face_anchor": recover_face_anchor,
+          **({'face_scope': face_scope} if mask_target in ('face','face_skin') else {}),
+          **({'face_part': face_part} if face_part != 'all' else {}),
+          **({'face_context': deepcopy(face_context)} if face_context is not None else {}),
           **({'face_features':features} if features is not None else {}),
           **({"skin_crop":crop} if crop is not None else {})}],
         {"purpose": "hint", "hint": deepcopy(hint), "summary": summary,
@@ -226,6 +229,9 @@ def select_regions(self, regions, summary, auto_apply=False, *, detail_ids=None,
                 "points": [[*r["anchor"], 1]] if "anchor" in r else [],
                 "mask_target": r.get("mask_target", "object"),
                 "recover_face_anchor": r.get("recover_face_anchor",False),
+                **({'face_scope': r['face_scope']} if 'face_scope' in r else {}),
+                **({'face_part': r['face_part']} if 'face_part' in r else {}),
+                **({'face_context': r['face_context']} if 'face_context' in r else {}),
                 **({'face_features':r['face_features']} if 'face_features' in r else {}),
                 **({"skin_crop": r["skin_crop"]} if "skin_crop" in r else {}),
                 **({"parts": [{"hint": p["mask"], "points": [[*p["anchor"], 1]],

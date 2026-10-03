@@ -28,3 +28,17 @@ def current(editor):
 def spatial_context(editor):
     return [{k: face[k] for k in ("name", "anchor", "skin_crop")}
             for face in current(editor)]
+
+
+def grounding_context(editor, anchor):
+    """A unique face containing a point can guide a second visual lookup.
+
+    This is only a crop proposal; it never supplies the edited pixel extent.
+    """
+    from ..document import raster_mask
+    if anchor is None:
+        return None
+    x, y = (min(383, round(v * 384)) for v in anchor)
+    matches = [face for face in current(editor)
+               if raster_mask(face['mask'], (384, 384)).getpixel((x, y)) > 0]
+    return matches[0] if len(matches) == 1 else None

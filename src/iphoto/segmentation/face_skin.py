@@ -151,9 +151,14 @@ def backend():
     return _backend
 
 
-def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None):
+def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None, scope="full", context_hint=None, part="all"):
     started = perf_counter()
     hint = validate_mask(hint)
+    if scope not in ('full', 'region'):
+        raise ValueError("面部编辑范围无效")
+    if part not in ('all','nose') or part == 'nose' and (target != 'face_skin' or scope != 'region'):
+        raise ValueError("面部部位类型无效")
+    context_hint = validate_mask(context_hint) if context_hint is not None else hint
     points = validate_points(points or [])
     if len(points) != 1 or points[0][2] != 1:
         raise ValueError("面部皮肤分区需要一个有效的内部定位点，照片未改变")
@@ -183,7 +188,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         # A detector's nose landmark can lie under a hat. Recover only from
         # the parser's visible nose pixels inside this detector's face hint;
         # never choose an arbitrary skin-coloured region elsewhere in the crop.
-        support = raster_mask(hint,image.size).crop(box).resize((grid_width,grid_height),Image.Resampling.NEAREST)
+        support = raster_mask(context_hint,image.size).crop(box).resize((grid_width,grid_height),Image.Resampling.NEAREST)
         ys,xs = np.nonzero((labels==10)&(np.asarray(support)>0))
         if len(xs):
             closest = np.argmin((xs-px)**2+(ys-py)**2)
@@ -206,6 +211,27 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         face_width = cv2.boundingRect(selected.astype(np.uint8))[2]
         protected |= feature_guard_pixels(mapped,labels,face_width)
     hard = (selected & ~protected).astype(np.uint8)
+    if part == 'nose':
+        hard &= (labels == 10).astype(np.uint8)
+    scope_alpha = None
+    scope_feather = 0
+    if scope == 'region':
+        # Context identifies the complete face. Only the requested part may be
+        # edited; even a recovered nose anchor cannot expand this boundary.
+        scope_alpha = raster_mask(hint, image.size).crop(box)
+        grid_scope = np.asarray(scope_alpha.resize((grid_width,grid_height), Image.Resampling.NEAREST))
+        hard &= (grid_scope > 0).astype(np.uint8)
+        if not hard.any():
+            raise ValueError("指定部位内未识别到面部皮肤，照片未改变；请调整描述")
+        # Local complexion/light edits need a soft transition inside their
+        # spatial limit, without widening semantic eye/lip protection holes.
+        bounds = scope_alpha.getbbox()
+        scope_feather = max(2,min(48,round(min(bounds[2]-bounds[0],bounds[3]-bounds[1])*.12)))
+        extent = (np.asarray(scope_alpha)>0).astype(np.uint8)
+        inside = cv2.distanceTransform(np.pad(extent,1),cv2.DIST_L2,5)[1:-1,1:-1]
+        from PIL import ImageChops
+        fade = Image.fromarray(np.rint(np.minimum(inside/scope_feather,1)*255).astype(np.uint8))
+        scope_alpha = ImageChops.multiply(scope_alpha,fade)
     # Production scores are classified on the original crop. Protection and
     # inward feathering are now measured in source pixels, not scaled 512px
     # cells that can eat a narrow nose/eye boundary on a large photograph.
@@ -216,11 +242,14 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     alpha = alpha.resize(patch.size, Image.Resampling.BILINEAR)
     support = Image.fromarray(hard * 255).resize(patch.size, Image.Resampling.NEAREST)
     alpha.paste(0, mask=support.point(lambda v: 255 - v))
+    if scope_alpha is not None:
+        from PIL import ImageChops
+        alpha = ImageChops.multiply(alpha, scope_alpha)
     full = Image.new("L", image.size)
     full.paste(alpha, (left, top))
     result = empty_mask()
     result.update(bitmap=encode_bitmap(full, sampling="alpha", preserve_resolution=True),
-                  label=(hint["label"] + (" · 人脸" if target == "face" else " · 面部皮肤"))[:200],
+                  label=(hint["label"] + (" · 鼻部皮肤" if part == 'nose' else " · 面部局部" if scope == 'region' else " · 人脸" if target == "face" else " · 面部皮肤"))[:200],
                   semantic_target=target)
     quality = {
         "model": "BiSeNet · 人脸" if target == "face" else "BiSeNet · 面部皮肤", "semantic_target": target,
@@ -232,5 +261,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         "coverage": round(float(hard.mean()) * patch.width * patch.height / (image.width * image.height) * 100, 2),
         "anchor_recovered": recovered,
         "landmark_protection": target=='face_skin' and features is not None,
+        "face_scope": scope,
+        "face_part": part,
+        "scope_feather_px": scope_feather,
     }
     return result, quality

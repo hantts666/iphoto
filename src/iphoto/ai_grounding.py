@@ -78,4 +78,7 @@ def map_grounding(result, crop, size, region):
     mask["label"] = region["mask"]["label"]
     if "anchor" not in result:
         raise ValueError("局部定位缺少目标内部点，照片未改变")
-    return {**deepcopy(region), "mask": validate_mask(mask), "anchor": point(result["anchor"])}
+    # A closer view may improve the point, but cannot expand a bounded facial
+    # edit beyond the original requested part.
+    edit_mask = region["mask"] if region.get("face_scope") == "region" else mask
+    return {**deepcopy(region), "mask": validate_mask(edit_mask), "anchor": point(result["anchor"])}

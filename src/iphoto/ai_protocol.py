@@ -75,6 +75,8 @@ action=update_layers、scope=existing_layers：用户点名已有图层、要求
 action=global、scope=whole_image：用户要求整张照片统一提亮、调色，而 current_scope 不是 whole_image 或 current_display_enabled=false 时优先使用。程序会在最外层建立独立全图调整层，原来的局部层、磨皮、隐藏状态和参数都不变。recipe 是这个新全图层的全部参数绝对值，未用的值为0，不得复制当前局部层的配方；skin_smoothing 必须为0，regions=[]。新全图层不继承局部层的锁定。只有 current_scope=whole_image 且 current_display_enabled=true 时，整图微调才可用 adjust 保留已有参数。max_new_layers=0 时不能新建全图层，也不能用局部或隐藏层 adjust 假装完成全图修改。
 action=layers：要求针对人物、皮肤、天空、背景等局部目标，且当前范围是全图或不匹配时使用。给1～max_new_layers个区域（最多4个），各区有 name、reason、mask_target、parts、box、point、recipe。单个人脸皮肤使用mask_target=face_skin，本地专用分区保留脸颊鼻子，排除眉眼嘴唇头发帽子，point落在脸颊等皮肤内部；裸露手臂/腿等身体皮肤用body_skin，本地对原图局部分割；其他物体用object。face_skin_available=false时不能声称能自动分离面部皮肤，body_skin_available=false时不能生成身体皮肤范围，应说明需要配置图像能力。普通单一区域parts=[]；body_skin同时处理左右手臂等分开的部位时，parts给1～4个{box:[左,上,右,下],point:[x,y]}，每项只定位一个裸露部位，主box覆盖所有parts、主point用其中一个皮肤内部点。各部位分别定位后合成一个层的范围，不重复叠加效果；不要用包含衣服的大框替代。face_skin/object的parts必须为[]。程序随后用本地像素模型生成蒙版并自动建立独立调整层；不需要用户再点确认。recipe 为新图层的绝对参数，未用的值为0。不要给全零的无效果图层。max_new_layers=0 时不能返回 layers。
 action=layers 时 scope=regions。action=answer：摄影问题或仅询问建议时使用，不修改图片，regions=[]；action=unsupported：超出能力且无可执行部分时使用，regions=[]。这两种 action 的 scope=none，recipe 保持 current_recipe。
+每区还需face_scope：完整面部皮肤用full；只修某侧脸颊、鼻子或额头时必须用face_skin和region，box仅包住用户指定部位，是实际编辑范围上限。不能用整脸替代局部要求。object/body_skin用full。detected_faces是归一化0～1的整脸定位上下文，不是可直接复制的局部编辑框。
+仅修鼻子皮肤时face_part=nose，其他情况face_part=all；nose需要face_skin与region，程序按鼻部语义类别排除框内脸颊。不要承诺局部框能自动准确区分没有专用类别的每一块脸颊或额头。
 action=repair、scope=regions：用户要求修复明显小瑕疵、祛痘、小污点或划痕时，repair_available=true且有剩余图层位置可使用。repairs给1～3个对象，每个{name:修复层名,reason:要检查的小瑕疵,box:[左,上,右,下]}。box按原图0～999，框住单个部位（如面颊或衣服局部），留出周围纹理，不是小点本身的极小框，也不能覆盖大半照片。程序会放大这个部位，再检查并精定位具体小点，最后调用本地修复画笔自动建立独立修复层。此阶段不需要你猜微小点坐标，也不需要用户先选区。recipe保持current_recipe，regions=[]、layer_edits=[]、group=null，不改变曝光或加磨皮。summary只能说将检查修复，不能提前声称瑕疵已去除。max_new_layers=0或repair_available=false则说明不支持，不用磨皮/柔化代替修复。多个部位共用一次撤销；看不清或找不到的点会保留照片并说明。
 action=group、scope=existing_layers：用户要求把已有层编组、统一控制整体强度时使用。group={name:组名,layer_ids:[已有id],visible:true,opacity:0～1}；50%写为0.5，未要求减弱时默认1。只把同一父组下相邻的已有层放入新组，按 existing_layers 清单从下到上的原顺序排列，不改子层的参数、锁定、蒙版、显示状态和不透明度；不能夹带其他层、跨父组或跨越中间图层。可以包含已有组，但不能超过四级嵌套。已有层编组不需要重新分割照片。max_new_layers=0 时不能新建组。顶层 recipe 保持 current_recipe，regions=[]、layer_edits=[]。不能把子层各设为50%来替代用户要求的组整体50%，二者叠加结果不同。编组条件不满足时用 unsupported 说明原因，不擅自调整子层来假装完成。
 update_layers 也可以修改已有图层组的显示状态和整体不透明度，此时 recipe 必须为null，不改子层参数。选中组仍可用此动作，不能用 adjust 给组调色。例如要求人像组整体80%时给该组id、recipe=null、visible=null、opacity=0.8；要求隐藏/恢复组时只改该组visible，保留子层状态。对组的“整体效果强度”指组不透明度。
@@ -96,6 +98,8 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
                 {
                     "name": "面部皮肤",
                     "mask_target": "face_skin",
+                    "face_scope": "full",
+                    "face_part": "all",
                     "parts": [],
                     "reason": "平滑皮肤细纹",
                     "box": [300, 200, 700, 800],
@@ -185,6 +189,8 @@ def build_payload(
             context["existing_layers"] = (workspace or {}).get("existing_layers", [])
             context["face_skin_available"] = (workspace or {}).get("face_skin_available", False)
             context["body_skin_available"] = (workspace or {}).get("body_skin_available", False)
+        if mode in ("selection", "regions") and not (workspace or {}).get("_image_crop"):
+            context["detected_faces"] = (workspace or {}).get("detected_faces", [])
         if mode == "repair":
             for key in ("crop_size", "allowed_box", "radius_bounds"):
                 context[key] = (workspace or {})[key]

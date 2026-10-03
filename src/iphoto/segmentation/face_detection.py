@@ -27,7 +27,7 @@ def validate_features(features):
     return clean
 
 
-def match_hint(hint, faces):
+def match_hint(hint, faces, *, partial=False, anchor=None):
     """Associate only one overlapping local face; ambiguous requests keep AI grounding."""
     from ..document import raster_mask
     bounds = raster_mask(hint,(384,384)).getbbox()
@@ -37,11 +37,22 @@ def match_hint(hint, faces):
     for face in faces:
         other = raster_mask(face['mask'],(384,384)).getbbox()
         x,y = np.array(face['anchor'])*384
-        if not other or not (bounds[0] <= x < bounds[2] and bounds[1] <= y < bounds[3]):
+        if not other:
+            continue
+        if partial:
+            # A cheek box need not contain the nose landmark. Require its
+            # supplied point and most of its extent to belong to one face.
+            if anchor is None:
+                continue
+            ax, ay = np.array(anchor) * 384
+            if not (other[0] <= ax < other[2] and other[1] <= ay < other[3]):
+                continue
+        elif not (bounds[0] <= x < bounds[2] and bounds[1] <= y < bounds[3]):
             continue
         overlap = max(0,min(bounds[2],other[2])-max(bounds[0],other[0])) * max(0,min(bounds[3],other[3])-max(bounds[1],other[1]))
         smaller = min((bounds[2]-bounds[0])*(bounds[3]-bounds[1]),(other[2]-other[0])*(other[3]-other[1]))
-        if overlap/max(1,smaller) >= .5:
+        area = (bounds[2]-bounds[0])*(bounds[3]-bounds[1]) if partial else smaller
+        if overlap/max(1,area) >= (.8 if partial else .5):
             matches.append(face)
     return matches[0] if len(matches)==1 else None
 
