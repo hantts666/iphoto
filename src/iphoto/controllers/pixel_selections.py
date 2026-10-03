@@ -197,7 +197,7 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
         return start(self, jobs, context)
 
 
-def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None):
+def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None, face_hint=None):
     return start(
         self,
         [{"id": "target", "hint": hint, "points": [[*anchor, 1]] if anchor else [],"mask_target":mask_target,
@@ -206,6 +206,7 @@ def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, o
           **({"skin_crop":crop} if crop is not None else {})}],
         {"purpose": "hint", "hint": deepcopy(hint), "summary": summary,
          "detail_grounded_ids": ["target"] if detail_grounded else [],
+         **({"face_hint": deepcopy(face_hint), "source_sha": self._sha} if face_hint else {}),
          **({"origin": deepcopy(origin)} if origin else {})},
     )
 
@@ -337,6 +338,8 @@ def failed_result(self, context, error):
 
 def complete(self, result, context):
     purpose = context["purpose"]
+    if context.get("face_hint") and context.get("source_sha") != self._sha:
+        raise ValueError("照片已更新，本次人脸范围未应用")
     auto_apply = bool(context.get("auto_apply")) and purpose in ("objects", "regions")
     items = {item["id"]: item for item in result["items"]}
     if purpose == "objects" and (
@@ -427,6 +430,11 @@ def complete(self, result, context):
             self._schedule_render()
     else:
         self._set_candidate(items["target"]["mask"])
+        if context.get("face_hint") and items["target"]["mask"].get("semantic_target") == "face":
+            lid = self._scene.add_face(context["face_hint"])
+            if lid:
+                self._scene.set_precise(lid, items["target"]["mask"], items["target"]["quality"])
+                self._scene.remember(self._scene_key())
         # Retain the first result as a spatial prior: on this lightweight
         # model an unconstrained second click can otherwise switch instances.
         self._pixel_hint = deepcopy(context.get("hint") or items["target"]["mask"])

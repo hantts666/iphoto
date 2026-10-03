@@ -382,6 +382,44 @@ class SceneIndex:
             "ascii"
         )
 
+    def add_face(self, face):
+        """Append a successful full-face hint without invalidating other masks.
+
+        Existing objects and their geometry remain unchanged, so their queued
+        work still belongs to this revision. Replacing a catalog uses set().
+        """
+        from .segmentation.face_detection import match_hint
+        objects = (self.catalog or {}).get("objects", [])
+        matched = match_hint(face["mask"], [o for o in objects
+                             if o.get("mask_target") == "face" and "anchor" in o])
+        if matched:
+            return matched["id"]
+        if len(objects) >= MAX_OBJECTS:
+            return None
+        ids = {o["id"] for o in objects}
+        lid = face.get("id")
+        if not lid or lid in ids:
+            n = 1
+            while f"direct-face-{n}" in ids:
+                n += 1
+            lid = f"direct-face-{n}"
+        value = {"summary": (self.catalog or {}).get("summary", "已识别可见人脸"),
+                 "objects": [*objects, {**face, "id": lid, "category": "人脸", "mask_target": "face"}]}
+        if not face.get("id") and face["name"] == "AI 人脸":
+            value["objects"][-1]["name"] = f"AI 人脸 {lid.rsplit('-', 1)[-1]}"
+            value["objects"][-1]["mask"] = deepcopy(face["mask"])
+            value["objects"][-1]["mask"]["label"] = value["objects"][-1]["name"]
+        catalog = validate_catalog(value)
+        obj = catalog["objects"][-1]
+        if "anchor" not in obj:
+            raise ValueError("人脸缺少内部定位点")
+        self.catalog = catalog
+        mask = raster_mask(obj["mask"], (384, 384))
+        self._hits.append((sum(mask.histogram()[1:]), lid, mask))
+        self._hits.sort(key=lambda row: row[0])
+        self._hover[lid] = self._preview_url(mask)
+        return lid
+
     def set_precise(self, lid, mask, quality):
         if lid not in {o["id"] for o in (self.catalog or {}).get("objects", [])}:
             raise ValueError("像素结果不属于当前元素清单")

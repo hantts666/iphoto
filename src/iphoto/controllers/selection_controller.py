@@ -667,14 +667,16 @@ class SelectionController(QObject):
 
     @Property("QVariantList",notify=changed)
     def faces(self):
-        return [{"id":f["id"],"name":f["name"]} for f in self._editor._face_hints]
+        from .face_inventory import current
+        return [{"id":f["id"],"name":f["name"]} for f in current(self._editor)]
 
     @Slot(str,bool)
     def selectFace(self,lid,skin=False):
         editor=self._editor
         if not editor.hasImage or editor.busy or editor.hasRegionDraft:
             return
-        face=next((f for f in editor._face_hints if f["id"]==lid),None)
+        from .face_inventory import current
+        face=next((f for f in current(editor) if f["id"]==lid),None)
         if face is None:
             return editor._notify("没有可靠的人脸定位；可用 AI 直接识别或框住可见人脸后描述",True)
         return pixel_selections.select_hint(editor,deepcopy(face["mask"]),anchor=face["anchor"],
@@ -693,7 +695,8 @@ class SelectionController(QObject):
         }
         if not editor._can_edit() or preset not in presets:
             return
-        face = next((f for f in editor._face_hints if f["id"] == lid), None)
+        from .face_inventory import current
+        face = next((f for f in current(editor) if f["id"] == lid), None)
         if face is None:
             return editor._notify("未可靠定位到该人脸，请重新识别", True)
         name = face["name"] + " · 面部调整"

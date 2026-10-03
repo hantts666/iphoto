@@ -13,7 +13,7 @@ ApplicationWindow {
     readonly property var selection: editor.selection
     width: 1440; height: 930; minimumWidth: 1080; minimumHeight: 700
     visible: true
-    title: "iPhoto 1.9.1 · 原图工作室" + (editor.dirty ? " *" : "")
+    title: "iPhoto 1.9.2 · 原图工作室" + (editor.dirty ? " *" : "")
     color: "#23262a"; font.family: "Microsoft YaHei"; font.pixelSize: 12
     property color ink: "#e4e8ee"
     property color muted: "#a4adb8"
@@ -217,7 +217,7 @@ ApplicationWindow {
             RowLayout { anchors.fill: parent; anchors.leftMargin: 15; anchors.rightMargin: 15; spacing: 10
                 Image { source: "../../../assets/icon.svg"; Layout.preferredWidth: 27; Layout.preferredHeight: 27 }
                 Text { text: "iPhoto"; font.family: "Georgia"; font.pixelSize: 24; color: ink }
-                Caption { text: "1.9.1  /  原图工作室" }
+                Caption { text: "1.9.2  /  原图工作室" }
                 Item { Layout.fillWidth: true }
                 Action { objectName: "imageCapabilitiesButton"; text: "图像能力"; subtle: true; onClicked: { editor.refreshCapabilities(); pluginsDialog.open() } }
                 Action { objectName: "aiSettingsButton"; text: "AI 设置"; onClicked: aiSettings.open() }

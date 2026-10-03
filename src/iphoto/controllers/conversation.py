@@ -20,7 +20,7 @@ from ..document import raster_mask, now, MAX_LAYERS
 from ..layer_tree import display_states
 from ..paths import path_from_url
 from ..storage import atomic_output
-from . import layers, pixel_selections, heal
+from . import layers, pixel_selections, heal, face_inventory
 
 
 def _safe_text(self, text):
@@ -199,8 +199,7 @@ def applyDescription(self, text):
 def _spatial_context(self):
     return {
         "face_skin_available": face_skin_available(),
-        "detected_faces": [{k: face[k] for k in ("name", "anchor", "skin_crop")}
-                           for face in self._face_hints],
+        "detected_faces": face_inventory.spatial_context(self),
         "body_skin_available": pixel_selections.available(),
         "objects": [
             {k: o[k] for k in ("id", "name", "category")}
@@ -416,8 +415,7 @@ def sendMessage(self, text, mode):
             "active_is_group": self.activeIsGroup,
             "repair_available": repair_available(),
             "face_skin_available": face_skin_available(),
-            "detected_faces": [{k: face[k] for k in ("name", "anchor", "skin_crop")}
-                               for face in self._face_hints],
+            "detected_faces": face_inventory.spatial_context(self),
             "body_skin_available": pixel_selections.available(),
         },
     )
@@ -624,7 +622,7 @@ def _cloud_plan(self, result, generation):
         from ..segmentation.face_detection import match_hint
         result['regions'] = deepcopy(result['regions'])
         for region in result['regions']:
-            face = match_hint(region['mask'],self._face_hints) if region.get('mask_target')=='face_skin' else None
+            face = match_hint(region['mask'],face_inventory.current(self)) if region.get('mask_target')=='face_skin' else None
             if face:
                 region.update(mask=deepcopy(face['mask']),anchor=list(face['anchor']),
                               skin_crop=list(face['skin_crop']),recover_face_anchor=True)
@@ -673,12 +671,21 @@ def _cloud_plan(self, result, generation):
         mask["label"] = ("AI · " + self._conversation[-1]["text"])[:200]
         from ..segmentation.face_detection import match_hint
         target = result.get('mask_target','object')
-        face = match_hint(mask,self._face_hints) if target in ('face','face_skin') else None
+        face = match_hint(mask,face_inventory.current(self)) if target in ('face','face_skin') else None
+        # Remember a full face only after the local parser succeeds. A skin
+        # patch, failed prediction or cancelled request cannot become a face.
+        face_hint = None
+        if target == 'face' and (face or result.get('anchor')):
+            face_hint = deepcopy(face) if face else {
+                'name': 'AI 人脸', 'mask': deepcopy(mask), 'anchor': list(result['anchor']),
+            }
+            if not face:
+                face_hint['mask']['label'] = 'AI 人脸'
         pixel_selections.select_hint(
             self, deepcopy(face['mask']) if face else mask, result["summary"],
             face['anchor'] if face else result.get("anchor"),mask_target=target,
             crop=face['skin_crop'] if face else None,recover_face_anchor=bool(face),
-            features=face.get('face_features') if face else None
+            features=face.get('face_features') if face else None, face_hint=face_hint
         )
     elif mode == "regions":
         if not pixel_selections.select_regions(
