@@ -68,7 +68,7 @@ def warm(image):
     return backend().warm(proxy)
 
 
-def segment_jobs(image, jobs, *, tolerant=False):
+def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None):
     """Run bounded pixel jobs with the same validation in either worker."""
     if not isinstance(jobs, list) or len(jobs) > 16:
         raise ValueError("一次最多分割 16 个对象")
@@ -78,7 +78,19 @@ def segment_jobs(image, jobs, *, tolerant=False):
     items = []
     for job in jobs:
         try:
-            mask, quality = segment(image, job.get("hint"), job.get("points"))
+            if job.get("mask_target", "object") == "face_skin":
+                from .face_skin import segment as face_segment
+
+                mask, quality = face_segment(source or image, job.get("hint"), job.get("points"), crop=job.get("skin_crop"))
+            elif job.get("mask_target") == "body_skin":
+                from .body_skin import segment as body_segment
+
+                mask, quality = body_segment(source or image, job.get("parts") or [job], progress=progress)
+            elif job.get("mask_target", "object") == "object":
+                mask, quality = segment(image, job.get("hint"), job.get("points"))
+                quality["model"] = "EfficientSAM-S"
+            else:
+                raise ValueError("未知分区目标类型，照片未改变")
         except ValueError:
             if not tolerant:
                 raise

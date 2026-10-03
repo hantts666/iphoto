@@ -29,6 +29,8 @@ from .preview_cache import LayerPreviewCache, composition_key
 from .masks import clear_decode_cache
 from .plugins import run_selection
 
+PREVIEW_PNG_COMPRESSION = 3
+
 
 def main():
     sys.stdin.reconfigure(encoding="utf-8")
@@ -72,7 +74,7 @@ def main():
         # 24MP+ photos stay interactive; export and alpha matting keep full res.
         next_proxy = preview(next_source.image, 1600)
         original = cache / f"original-{request['id']}.png"
-        next_proxy.save(original, icc_profile=SRGB_PROFILE)
+        next_proxy.save(original, icc_profile=SRGB_PROFILE, compress_level=PREVIEW_PNG_COMPRESSION)
         result = {
             "original": str(original),
             "path": str(next_source.path),
@@ -98,28 +100,42 @@ def main():
     @register("render")
     def _render(request):
         nonlocal previous_key, previous_result, current_overlay, previous_mask_key
+        started = time.perf_counter()
+        stage_ms = dict.fromkeys(("prepare", "compose", "png", "histogram", "stats", "mask"), 0.0)
         layers = validate_layers(request["layers"]) if "layers" in request else None
         key = composition_key(layers) if layers is not None else request["recipe"]
         cache_hit = previous_result is not None and key == previous_key
+        stage_ms["prepare"] = round((time.perf_counter() - started) * 1000, 3)
         if cache_hit:
             result = dict(previous_result)
         else:
+            started = time.perf_counter()
             output = (
                 composition_cache.render(proxy, layers)
                 if layers is not None
                 else render(proxy, Recipe.from_dict(request["recipe"]))
             )
+            stage_ms["compose"] = round((time.perf_counter() - started) * 1000, 3)
             target = cache / f"preview-{request['id']}.png"
-            output.save(target, icc_profile=SRGB_PROFILE)
+            started = time.perf_counter()
+            output.save(target, icc_profile=SRGB_PROFILE, compress_level=PREVIEW_PNG_COMPRESSION)
+            stage_ms["png"] = round((time.perf_counter() - started) * 1000, 3)
             assets.append(target)
+            started = time.perf_counter()
+            bins = histogram(output)
+            stage_ms["histogram"] = round((time.perf_counter() - started) * 1000, 3)
+            started = time.perf_counter()
+            measurements = stats(output)
+            stage_ms["stats"] = round((time.perf_counter() - started) * 1000, 3)
             result = {
                 "preview": str(target),
-                "histogram": histogram(output),
-                "stats": stats(output),
+                "histogram": bins,
+                "stats": measurements,
             }
             previous_key, previous_result = key, dict(result)
         result["cache_hit"] = cache_hit
         result["reused_layers"] = composition_cache.reused
+        started = time.perf_counter()
         if "mask" in request:
             mask = validate_mask(request["mask"])
             mask_key = (
@@ -137,7 +153,38 @@ def main():
                 assets.append(current_overlay)
                 previous_mask_key = mask_key
             result["mask"] = str(current_overlay)
+        stage_ms["mask"] = round((time.perf_counter() - started) * 1000, 3)
+        result["stage_ms"] = stage_ms
         return result
+
+    @register("repair_crop")
+    def _repair_crop(request):
+        from .ai_grounding import crop_pixels
+
+        if request["source_sha"] != source.digest:
+            raise ValueError("照片已变化，过期修复图未准备")
+        box = crop_pixels(request["crop"], source.image.size)
+        picture = source.image.crop(box)
+        target = cache / f"repair-crop-{request['id']}.png"
+        picture.save(target, icc_profile=SRGB_PROFILE)
+        assets.append(target)
+        return {"path": str(target), "crop_size": list(picture.size)}
+
+    @register("object_crop")
+    def _object_crop(request):
+        from PIL import Image
+        from .ai_grounding import crop_pixels
+
+        if request["source_sha"] != source.digest:
+            raise ValueError("照片已变化，过期目标细节未准备")
+        box = crop_pixels(request["crop"], source.image.size)
+        picture = source.image.crop(box)
+        crop_size = [picture.width, picture.height]
+        picture.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+        target = cache / f"object-crop-{request['id']}.png"
+        picture.save(target, icc_profile=SRGB_PROFILE)
+        assets.append(target)
+        return {"path": str(target), "crop_size": crop_size, "image_size": list(picture.size)}
 
     @register("selection")
     def _selection(request):
@@ -157,6 +204,7 @@ def main():
             proxy,
             request.get("jobs"),
             tolerant=request.get("context", {}).get("purpose") == "precache",
+            source=source.image,
         )
 
     @register("matte")
@@ -244,7 +292,6 @@ def main():
                 "ok": False,
                 "error": str(exc),
             }
-        output = None  # Do not retain a full-resolution export buffer while idle.
         print(json.dumps(response, ensure_ascii=False), flush=True)
 
 

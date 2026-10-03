@@ -14,7 +14,63 @@ ColumnLayout {
     readonly property bool detailsVisible: expanded
     function commitText() { if(layerNameInput.activeFocus) editor.renameLayer(layerNameInput.text) }
     function focusName() { layerNameInput.forceActiveFocus(); layerNameInput.selectAll() }
+    property string revealedLayerId: ""
+    property string pendingRevealId: ""
+    function revealFocusedLayer() {
+        var lid = selection.pickedLayerId
+        if (lid === revealedLayerId) return
+        revealedLayerId = lid
+        queueReveal(lid)
+    }
+    function queueReveal(lid) {
+        pendingRevealId = lid
+        if (!lid) { revealTimer.stop(); return }
+        expanded = true
+        revealTimer.restart()
+    }
+    function positionFocusedLayer() {
+        var lid = pendingRevealId
+        pendingRevealId = ""
+        if (!lid || selection.pickedLayerId !== lid || !detailsVisible) return
+        var rows = editor.layers
+        for (var i = 0; i < rows.length; ++i) {
+            if (rows[i].id === lid) {
+                layerList.forceLayout()
+                layerList.positionViewAtIndex(i, ListView.Contain)
+                return
+            }
+        }
+    }
+    // Wait for the inspector's range/parameter layout to settle before scrolling.
+    Timer { id: revealTimer; interval: 1; onTriggered: layerRoot.positionFocusedLayer() }
+    Connections {
+        target: selection
+        function onChanged() { layerRoot.revealFocusedLayer() }
+        function onLayerFocusRequested(lid) { layerRoot.queueReveal(lid) }
+    }
+    Component.onCompleted: revealFocusedLayer()
     property string menuLayerId: ""
+    property var menuContext: ({ groups: [] })
+    function refreshMenuContext() { menuContext = editor.layerContext(menuLayerId) }
+    function showLayerMenu(lid, item, x, y) {
+        menuLayerId = lid
+        refreshMenuContext()
+        var point = item.mapToItem(layerRoot, x, y)
+        layerMenu.popup(layerRoot, point.x, point.y)
+    }
+    function runMenuAction(action, parentId) {
+        var lid = menuLayerId
+        layerMenu.dismiss()
+        editor.runLayerAction(lid, action, parentId || "")
+    }
+    function pickMenuLayer() {
+        if (!menuContext.pick) return false
+        var lid = menuLayerId
+        layerMenu.dismiss()
+        selection.pickLayer(lid)
+        return selection.pickedLayerId === lid && editor.activeLayerId === lid
+    }
+    Connections { target: editor; function onChanged() { if(layerMenu.visible) layerRoot.refreshMenuContext() } }
     Layout.fillWidth: true; Layout.preferredHeight: !detailsVisible ? 38 : rangeMode ? (workspace.height<800 ? 150 : 190) : (layerProperties.expanded ? (workspace.height<800 ? 310 : 360) : (workspace.height<800 ? 170 : 220))
     Layout.leftMargin: 12; Layout.rightMargin: 12; Layout.bottomMargin: 6; spacing: 5
     RowLayout { Layout.fillWidth: true; Layout.topMargin: 6
@@ -25,6 +81,8 @@ ColumnLayout {
     }
     Caption { visible: detailsVisible && rangeMode; text: "点击图层查看调整；再次点击返回范围"; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
     ListView { id: layerList; objectName: "layerList"; visible: detailsVisible; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 3; model: editor.layerRowsModel
+        onHeightChanged: if(layerRoot.pendingRevealId) revealTimer.restart()
+        onContentHeightChanged: if(layerRoot.pendingRevealId) revealTimer.restart()
         ScrollBar.vertical: ScrollBar {}
         delegate: Rectangle { required property var layerRow; width: layerList.width; height: 40; radius: 3; color: selection.pickedLayerId===layerRow.id ? "#435c53" : "#252a30"
             RowLayout { anchors.fill: parent; anchors.margins: 4; spacing: 4
@@ -56,38 +114,43 @@ ColumnLayout {
                 }
             }
             MouseArea {
+                id: rowMenuArea
                 anchors.fill: parent
                 acceptedButtons: Qt.RightButton
-                onClicked: function(mouse) { layerRoot.menuLayerId = layerRow.id; layerMenu.popup() }
+                onClicked: function(mouse) { layerRoot.showLayerMenu(layerRow.id, rowMenuArea, mouse.x, mouse.y) }
             }
         }
     }
     Menu {
-        id: layerMenu
-        MenuItem { objectName: "layerMenuPick"; text: "编辑此层（调整）"; onTriggered: selection.pickLayer(layerRoot.menuLayerId) }
-        MenuItem { objectName: "layerMenuRange"; text: "载入蒙版为范围"; onTriggered: { selection.pickLayer(layerRoot.menuLayerId); workspace.reviewMask() } }
-        MenuItem { objectName: "layerMenuRename"; text: "重命名"; onTriggered: { selection.pickLayer(layerRoot.menuLayerId); layerRoot.focusName() } }
-        MenuItem { objectName: "layerMenuDuplicate"; text: "复制层"; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.duplicateLayer() } }
-        MenuItem { objectName: "layerMenuToggle"; text: "显示 / 隐藏"; onTriggered: editor.toggleLayer(layerRoot.menuLayerId) }
+        id: layerMenu; objectName: "layerContextMenu"; width: 260
+        MenuItem { id: menuTargetLabel; objectName: "layerMenuTarget"; text: layerRoot.menuContext.name || "图层已不存在"; enabled: false
+            contentItem: Text { text: menuTargetLabel.text; textFormat: Text.PlainText; font: menuTargetLabel.font; color: "#a9b7af"; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+        }
         MenuSeparator {}
-        MenuItem { objectName: "layerMenuUp"; text: "上移"; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.moveLayer(1) } }
-        MenuItem { objectName: "layerMenuDown"; text: "下移"; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.moveLayer(-1) } }
-        MenuItem { objectName: "layerMenuGroup"; text: "编组  Ctrl+G"; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.groupLayer() } }
-        MenuItem { objectName: "layerMenuUngroup"; text: "移出组"; enabled: editor.activeParentId !== ""; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.moveOutOfGroup() } }
+        MenuItem { objectName: "layerMenuPick"; text: "编辑此层（调整）"; enabled: !!layerRoot.menuContext.pick; onTriggered: layerRoot.pickMenuLayer() }
+        MenuItem { objectName: "layerMenuRange"; text: "载入蒙版为范围"; enabled: !!layerRoot.menuContext.range; onTriggered: { if(layerRoot.pickMenuLayer()) workspace.reviewMask() } }
+        MenuItem { objectName: "layerMenuRename"; text: "重命名"; enabled: !!layerRoot.menuContext.rename; onTriggered: { if(layerRoot.pickMenuLayer()) layerRoot.focusName() } }
+        MenuItem { objectName: "layerMenuDuplicate"; text: "复制层"; enabled: !!layerRoot.menuContext.duplicate; onTriggered: layerRoot.runMenuAction("duplicate") }
+        MenuItem { objectName: "layerMenuToggle"; text: "显示 / 隐藏"; enabled: !!layerRoot.menuContext.toggle; onTriggered: layerRoot.runMenuAction("toggle") }
+        MenuSeparator {}
+        MenuItem { objectName: "layerMenuUp"; text: "上移"; enabled: !!layerRoot.menuContext.up; onTriggered: layerRoot.runMenuAction("up") }
+        MenuItem { objectName: "layerMenuDown"; text: "下移"; enabled: !!layerRoot.menuContext.down; onTriggered: layerRoot.runMenuAction("down") }
+        MenuItem { objectName: "layerMenuGroup"; text: "编组  Ctrl+G"; enabled: !!layerRoot.menuContext.group; onTriggered: layerRoot.runMenuAction("group") }
+        MenuItem { objectName: "layerMenuUngroup"; text: "移出组"; enabled: !!layerRoot.menuContext.ungroup; onTriggered: layerRoot.runMenuAction("ungroup") }
         Menu {
-            title: "移入组"
+            title: "移入组"; enabled: !!layerRoot.menuContext.move
             Repeater {
-                model: editor.groupTargets
-                delegate: MenuItem { required property var modelData; text: modelData.name; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.moveToGroup(modelData.id) } }
+                model: layerRoot.menuContext.groups
+                delegate: MenuItem { required property var modelData; objectName: "layerMenuMove_"+modelData.id; text: modelData.name; onTriggered: layerRoot.runMenuAction("move", modelData.id) }
             }
         }
         MenuSeparator {}
-        MenuItem { objectName: "layerMenuDelete"; text: "删除（可撤销）"; onTriggered: { editor.selectLayer(layerRoot.menuLayerId); editor.deleteLayer() } }
+        MenuItem { objectName: "layerMenuDelete"; text: "删除（可撤销）"; enabled: !!layerRoot.menuContext.delete; onTriggered: layerRoot.runMenuAction("delete") }
     }
     FoldSection { id: layerProperties; objectName: "layerPropertiesSection"; title: "图层属性"; expanded: true; visible: layerRoot.detailsVisible && !layerRoot.rangeMode
     Field { id: layerNameInput; objectName: "layerNameInput"; visible: detailsVisible; Layout.fillWidth: true; implicitHeight: 26; text: editor.activeLayerName; enabled: workspace.editingEnabled; onEditingFinished: editor.renameLayer(text) }
-    RowLayout { visible: detailsVisible; Layout.fillWidth: true
-        Caption { text: "透明度"; font.pixelSize: 10 }
+    RowLayout { visible: detailsVisible && !editor.activeRepairInfo.isolated; Layout.fillWidth: true
+        Caption { objectName: "layerOpacityLabel"; text: editor.activeIsGroup ? "整体强度" : editor.activeRepairInfo.count > 0 ? "图层强度" : "不透明度"; font.pixelSize: 10 }
         FineSlider { objectName: "layerOpacitySlider"; Layout.fillWidth: true; implicitHeight: 25; from: 0; to: 100; value: editor.layerOpacity; enabled: workspace.editingEnabled; onMoved: editor.setOpacity(value); onPressedChanged: if(!pressed) editor.finishGesture() }
         Caption { text: Math.round(editor.layerOpacity)+"%"; font.pixelSize: 10 }
     }

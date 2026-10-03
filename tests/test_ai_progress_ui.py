@@ -1,4 +1,8 @@
-"""An in-flight AI request should explain its observable wait in the chat pane."""
+"""Foreground AI progress remains reachable across workspace navigation."""
+
+from copy import deepcopy
+
+import pytest
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtTest import QTest
@@ -70,4 +74,45 @@ def test_retry_starts_next_attempt_without_dropping_busy_state(ui):
         assert find("aiRequestProgress").property("visible")
         _click(window, find("cancelAiRequest"))
         wait_for(lambda: not editor.ai.busy)
+    assert not warnings
+
+
+@pytest.mark.parametrize("view", ["small", "collapse_during_request", "picked_layer"])
+def test_progress_and_cancel_survive_chat_and_inspector_changes(ui, view):
+    editor, window, find, warnings, tmp_path = ui
+    before = deepcopy(editor._layers)
+    cursor, generation = editor._cursor, editor._generation
+    if view == "small":
+        window.resize(1080, 700)
+        QTest.qWait(100)
+        assert not window.property("chatOpen")
+    elif view == "picked_layer":
+        editor.selection.pickLayer(editor.activeLayerId)
+        _click(window, find("chatCollapseButton"))
+        assert not find("selectionGuideRoot").isVisible()
+    with mock_api(delay=4) as (url, requests):
+        configure(editor.ai, url)
+        editor._notify("上一项操作已完成", False)
+        assert editor.sendMessage("给我修图建议", "advice")
+        wait_for(lambda: editor.ai.busy and bool(requests))
+        if view == "collapse_during_request":
+            _click(window, find("chatCollapseButton"))
+        assert not window.property("chatOpen")
+        progress, cancel = find("aiRequestProgress"), find("cancelAiRequest")
+        assert progress.isVisible() and cancel.isVisible()
+        assert "修图建议" in find("aiRequestProgressText").property("text")
+        origin = progress.mapToScene(QPointF(0, 0))
+        assert 0 <= origin.y() < 160
+        assert progress.width() == window.width()
+        toast = find("workspaceToast")
+        assert toast.isVisible()
+        assert toast.mapToScene(QPointF(0, 0)).y() >= origin.y()+progress.height()
+        cancel_origin = cancel.mapToScene(QPointF(0, 0))
+        assert 0 <= cancel_origin.x() < window.width()-cancel.width()
+        assert 0 <= cancel_origin.y() < window.height()-cancel.height()
+        _click(window, cancel)
+        wait_for(lambda: not editor.ai.busy and editor._pending_request is None)
+        assert not progress.isVisible()
+        assert editor._layers == before and editor._cursor == cursor and editor._generation == generation
+        assert "取消" in editor.status
     assert not warnings

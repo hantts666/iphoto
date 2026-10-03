@@ -13,19 +13,54 @@ Rectangle {
     property bool showNavigator: true
     property bool wheelZoom: false
     readonly property var navigation: editor.viewport
-    readonly property bool previewReady: afterImage.status === Image.Ready
-    readonly property bool detailReady: detailImage.visible && detailImage.status === Image.Ready
-    readonly property bool maskDetailReady: detailMaskImage.visible && detailMaskImage.status === Image.Ready
+    readonly property bool previewReady: previewLoader.item !== null && previewLoader.item.status === Image.Ready
+    readonly property bool previewFailed: previewLoader.item !== null && previewLoader.item.status === Image.Error
+    readonly property bool originalFallback: previewLoader.item === null || !previewLoader.item.hasFrame
+    readonly property bool previewRecovering: previewLoader.item !== null && previewLoader.item.hadFailure && previewLoader.item.status === Image.Loading
+    readonly property bool detailCoversViewport: coversViewport(detailImage.displayedRect)
+    readonly property bool detailReady: detailImage.visible && detailImage.frameCurrent && detailCoversViewport
+    readonly property bool originalDetailReady: originalDetail.frameCurrent && coversViewport(originalDetail.displayedRect)
+    readonly property bool maskDetailReady: detailMaskImage.visible && detailMaskImage.frameCurrent
+    readonly property bool detailWanted: editor.hasImage && editor.wantsDetail(navigation.zoom, navigation.visibleRect)
+    // Start the first native view immediately. Subsequent viewport changes
+    // still share the timer below so a scroll/zoom burst can settle.
+    onDetailWantedChanged: if (detailWanted) Qt.callLater(function() {
+        // Leave the binding evaluation before the controller emits changed.
+        if (root.detailWanted) editor.requestDetail()
+    })
+    readonly property string detailStatus: {
+        if (root.holdingOriginal || root.originalFallback)
+            return root.originalDetailReady ? "原图细节已显示（正在看原图）"
+                : root.detailWanted ? "原图预览（正在载入原像素对比细节）" : "原图预览"
+        if (workspace.compare && root.detailWanted && !root.originalDetailReady)
+            return "正在载入原图对比细节，暂显快速预览"
+        if (root.detailReady) return "原图细节已显示"
+        if (editor.detailFailed || detailImage.status === Image.Error) return "快速预览（细节未能更新）"
+        if (root.detailWanted && editor.photoPreparing)
+            return detailImage.visible && root.detailCoversViewport
+                ? "照片正在准备，暂显上一次细节"
+                : "照片正在准备，完成后加载当前区域细节"
+        if (detailImage.visible && root.detailCoversViewport) return "正在更新细节，暂显上一次效果"
+        if (!root.detailWanted && previewLoader.item !== null && editor.previewGeneration >= 0
+                && previewLoader.item.displayedGeneration !== editor.documentGeneration)
+            return "快速预览正在更新，暂显上一次效果"
+        return root.detailWanted ? "正在载入当前区域细节…" : "快速预览 1600px"
+    }
     readonly property bool maskDetailCoversViewport: {
-        var tile = editor.detailRect, view = navigation.visibleRect
-        return editor.detailMaskUrl.length > 0 && detailMaskImage.status === Image.Ready
-            && tile[0] <= view[0] && tile[1] <= view[1]
-            && tile[0] + tile[2] >= view[0] + view[2]
-            && tile[1] + tile[3] >= view[1] + view[3]
+        return detailMaskImage.frameCurrent && detailImage.frameCurrent && detailImage.visible
+            && detailMaskImage.displayedRect.every(function(value, index) {
+                return Math.abs(value - detailImage.displayedRect[index]) < 0.000001
+            }) && coversViewport(detailMaskImage.displayedRect)
     }
     readonly property bool selectionPreviewReady: editor.maskUrl.length > 0 && maskImage.status === Image.Ready
     readonly property bool selectionTool: !["inspect", "hand", "zoom"].includes(workspace.selectionTool)
     color: "#191c20"; clip: true
+    function coversViewport(tile) {
+        var view = navigation.visibleRect, tolerance = 0.000001
+        return tile[2] > 0 && tile[3] > 0 && tile[0] <= view[0] + tolerance && tile[1] <= view[1] + tolerance
+            && tile[0] + tile[2] + tolerance >= view[0] + view[2]
+            && tile[1] + tile[3] + tolerance >= view[1] + view[3]
+    }
     function focusCanvas() { photo.forceActiveFocus() }
     function updateSize() { navigation.resize(surface.width, surface.height, root.Screen.devicePixelRatio) }
     Component.onCompleted: { navigation.attachWindow(workspace); updateSize() }
@@ -63,30 +98,66 @@ Rectangle {
             x: root.navigation.imageX; y: root.navigation.imageY
             width: root.navigation.imageWidth; height: root.navigation.imageHeight
             focus: true
-            Image { id: afterImage; anchors.fill: parent; source: root.holdingOriginal ? editor.originalUrl : editor.previewUrl; cache: false; asynchronous: true; fillMode: Image.Stretch }
-            Image {
+            Loader {
+                id: previewLoader
+                anchors.fill: parent
+                // Retain frames only within one source photo. A new original
+                // creates a fresh image and cancels the previous photo's load.
+                property string photoIdentity: editor.originalUrl
+                onPhotoIdentityChanged: { active=false; active=true }
+                sourceComponent: Image {
+                    objectName: "photoPreviewImage"
+                    source: editor.previewUrl
+                    cache: false; asynchronous: true; retainWhileLoading: true
+                    fillMode: Image.Stretch
+                    property bool hasFrame: false
+                    property bool hadFailure: false
+                    property int requestedGeneration: -1
+                    property int displayedGeneration: -1
+                    onSourceChanged: requestedGeneration = editor.previewGeneration
+                    onStatusChanged: {
+                        if (status === Image.Ready) { hasFrame=true; hadFailure=false; displayedGeneration=requestedGeneration }
+                        else if (status === Image.Error) { hasFrame=false; hadFailure=true }
+                        else if (status === Image.Null) hasFrame=false
+                    }
+                }
+            }
+            ViewportDetailImage {
                 id: detailImage; objectName: "detailImage"
-                x: editor.detailRect[0] * photo.width; y: editor.detailRect[1] * photo.height
-                width: editor.detailRect[2] * photo.width; height: editor.detailRect[3] * photo.height
-                source: editor.detailUrl; cache: false; asynchronous: true; fillMode: Image.Stretch
-                visible: editor.detailUrl.length > 0 && !root.holdingOriginal
+                editor: root.editor
+                x: displayedRect[0] * photo.width; y: displayedRect[1] * photo.height
+                width: displayedRect[2] * photo.width; height: displayedRect[3] * photo.height
+                source: editor.detailUrl
+                visible: hasFrame && displayedPhoto === editor.originalUrl && !root.holdingOriginal && !root.originalFallback
+                    && (root.detailCoversViewport && (!editor.detailFailed || frameCurrent)
+                        || previewLoader.item !== null && displayedGeneration === previewLoader.item.displayedGeneration && frameCurrent)
             }
             Item {
-                visible: workspace.compare && !root.holdingOriginal
-                width: photo.width*workspace.split; height: photo.height; clip: true
-                Image { width: photo.width; height: photo.height; source: editor.originalUrl; fillMode: Image.Stretch }
+                visible: workspace.compare || root.holdingOriginal || root.originalFallback
+                width: root.holdingOriginal || root.originalFallback ? photo.width : photo.width*workspace.split
+                height: photo.height; clip: true
+                Image { objectName: "originalPhotoImage"; width: photo.width; height: photo.height; source: editor.originalUrl; fillMode: Image.Stretch }
+                ViewportDetailImage {
+                    id: originalDetail; objectName: "originalDetailImage"
+                    editor: root.editor; sourceFrame: true
+                    x: displayedRect[0] * photo.width; y: displayedRect[1] * photo.height
+                    width: displayedRect[2] * photo.width; height: displayedRect[3] * photo.height
+                    source: editor.detailOriginalUrl
+                    visible: root.originalDetailReady
+                }
             }
             Image {
                 id: maskImage; anchors.fill: parent; source: editor.maskUrl
-                visible: workspace.showMask && !root.holdingOriginal && !workspace.compare && !root.maskDetailCoversViewport
+                visible: workspace.showMask && !root.holdingOriginal && !root.originalFallback && !workspace.compare && !root.maskDetailCoversViewport
                 cache: false; asynchronous: true; fillMode: Image.Stretch
             }
-            Image {
+            ViewportDetailImage {
                 id: detailMaskImage; objectName: "detailMaskImage"
-                x: editor.detailRect[0] * photo.width; y: editor.detailRect[1] * photo.height
-                width: editor.detailRect[2] * photo.width; height: editor.detailRect[3] * photo.height
-                source: editor.detailMaskUrl; cache: false; asynchronous: true; fillMode: Image.Stretch
-                visible: workspace.showMask && !root.holdingOriginal && !workspace.compare
+                editor: root.editor
+                x: displayedRect[0] * photo.width; y: displayedRect[1] * photo.height
+                width: displayedRect[2] * photo.width; height: displayedRect[3] * photo.height
+                source: editor.detailMaskUrl
+                visible: workspace.showMask && !root.holdingOriginal && !root.originalFallback && !workspace.compare
                          && detailImage.visible && root.maskDetailCoversViewport
             }
             MouseArea {
@@ -95,14 +166,19 @@ Rectangle {
                 anchors.fill: parent
                 enabled: editor.hasImage && !editor.busy && !editor.hasRegionDraft && root.selectionTool && !workspace.compare
                 cursorShape: workspace.selectionTool === "object" ? Qt.PointingHandCursor : Qt.CrossCursor
-                preventStealing: true; hoverEnabled: workspace.selectionTool === "object"
+                preventStealing: true; hoverEnabled: ["object", "brush", "heal"].includes(workspace.selectionTool)
                 property var points: []
                 property string strokeMode: "replace"
+                property string repairLayer: ""
+                property string repairPhoto: ""
+                property int repairGeneration: -1
                 function clearStroke() { points = []; overlays.hoverId = ""; overlays.repaint() }
                 function point(mouse) { return [Math.max(0,Math.min(1,mouse.x/width)),Math.max(0,Math.min(1,mouse.y/height))] }
                 function appendPoint(p) { var a=points.slice(); if(a.length>=510) a=a.filter(function(_,i){return i%2===0}); a.push(p); points=a }
                 onPressed: function(mouse) {
                     photo.forceActiveFocus()
+                    repairLayer = editor.activeLayerId; repairPhoto = editor.originalUrl
+                    repairGeneration = editor.documentGeneration
                     strokeMode = mouse.modifiers & Qt.AltModifier ? "subtract" : mouse.modifiers & Qt.ShiftModifier ? "add" : workspace.selectionMode
                     points = [point(mouse)]; overlays.repaint()
                 }
@@ -120,7 +196,10 @@ Rectangle {
                     if (workspace.selectionTool === "smart") editor.pixelPoint(point(mouse), !(mouse.modifiers & Qt.AltModifier))
                     else if (workspace.selectionTool === "object") editor.clickObject(point(mouse),strokeMode)
                     else if (workspace.selectionTool === "wand") editor.wandSelection(point(mouse),workspace.tolerance,strokeMode)
-                    else if (workspace.selectionTool === "heal") { appendPoint(point(mouse)); editor.drawHeal(points,workspace.brushRadius) }
+                    else if (workspace.selectionTool === "heal") {
+                        appendPoint(point(mouse))
+                        editor.selection.paintRepair(repairLayer, repairPhoto, repairGeneration, points, workspace.brushRadius)
+                    }
                     else {
                         if (workspace.selectionTool === "brush" || workspace.selectionTool === "polygon") appendPoint(point(mouse))
                         else points = [points[0],point(mouse)]
@@ -132,7 +211,7 @@ Rectangle {
                 onCanceled: clearStroke()
             }
             Rectangle {
-                visible: workspace.compare; x: photo.width*workspace.split-1; width: 2; height: parent.height; color: "white"
+                visible: workspace.compare && !root.holdingOriginal && !root.originalFallback; x: photo.width*workspace.split-1; width: 2; height: parent.height; color: "white"
                 MouseArea {
                     objectName: "compareHandle"
                     anchors.fill: parent; anchors.leftMargin: -12; anchors.rightMargin: -12
@@ -141,7 +220,24 @@ Rectangle {
                 }
             }
         }
-        CanvasOverlays { id: overlays; anchors.fill: parent; workspace: root.workspace; editor: root.editor; photo: photo; input: selectionMouse }
+        CanvasOverlays {
+            id: overlays; anchors.fill: parent
+            workspace: root.workspace; editor: root.editor; photo: photo; input: selectionMouse
+            visible: !root.holdingOriginal && !root.originalFallback && !workspace.compare && !workspace.modalActive
+        }
+        Rectangle {
+            objectName: "previewLoadFailure"
+            visible: previewLoader.item !== null && previewLoader.item.hadFailure
+            anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 8
+            width: Math.min(parent.width-16, previewErrorText.implicitWidth+20)
+            height: previewErrorText.implicitHeight+14; radius: 4; color: "#503b37"
+            Text {
+                id: previewErrorText
+                anchors.centerIn: parent; width: parent.width-20
+                text: root.previewRecovering ? "正在重试预览，暂时显示原图；修改已保留。" : "预览未能更新，当前显示原图；修改已保留，可重新调节以重试。"
+                textFormat: Text.PlainText; color: "#f1d1c8"; font.pixelSize: 11; wrapMode: Text.Wrap
+            }
+        }
         MouseArea {
             id: navigationMouse
             objectName: "navigationMouse"
@@ -205,7 +301,7 @@ Rectangle {
         CanvasNavigator {
             objectName: "canvasNavigator"
             anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 10
-            navigation: root.navigation; previewUrl: editor.previewUrl
+            navigation: root.navigation; previewUrl: editor.previewUrl; originalUrl: editor.originalUrl
             visible: root.showNavigator && editor.hasImage && !root.navigation.fitMode && !selectionMouse.pressed && !navigationMouse.pressed
         }
     }

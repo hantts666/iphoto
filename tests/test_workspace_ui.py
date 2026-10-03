@@ -107,6 +107,7 @@ def test_text_undo_long_brush_and_close_failure(qt_app, ai_store, tmp_path, monk
     engine.load(QUrl.fromLocalFile(str(ROOT / "src/iphoto/ui/Main.qml")))
     assert engine.rootObjects(), errors
     window = engine.rootObjects()[0]; window.resize(1080,700)
+    window.requestActivate()
     LIVE.append((engine,editor,window))
     def find(name):
         item = window.findChild(QObject,name)
@@ -124,6 +125,7 @@ def test_text_undo_long_brush_and_close_failure(qt_app, ai_store, tmp_path, monk
         assert window.property("chatOpen")
         editor.addLayer()
         editor.beginSelection("empty"); editor.draftAction("all"); editor.acceptSelection()
+        wait_for(lambda: settled(editor) and window.property("editingEnabled"))
         before = deepcopy(editor._layers)
         field = find("descriptionInput"); field.forceActiveFocus()
         for key in (Qt.Key_A,Qt.Key_B,Qt.Key_C): QTest.keyClick(window,key)
@@ -135,9 +137,12 @@ def test_text_undo_long_brush_and_close_failure(qt_app, ai_store, tmp_path, monk
 
         project = tmp_path / "work.iphoto"
         editor.saveProject(str(project))
+        assert editor.projectPath == str(project) and project.is_file()
         layer_name = find("layerNameInput"); layer_name.forceActiveFocus()
+        assert layer_name.property("activeFocus") and layer_name.property("enabled")
         QTest.keyClick(window,Qt.Key_A,Qt.ControlModifier)
         for key in (Qt.Key_N,Qt.Key_E,Qt.Key_W): QTest.keyClick(window,key)
+        assert layer_name.property("text") == "new"
         QTest.keyClick(window,Qt.Key_S,Qt.ControlModifier)
         from iphoto.document import read_project
         wait_for(lambda: not editor.savingProject and read_project(project)["layers"][-1]["name"] == "new")

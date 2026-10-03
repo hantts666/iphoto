@@ -84,7 +84,15 @@ def ui(qt_app, ai_store, tmp_path):
             item = stack.pop()
             if item.objectName() == name:
                 return item
+            # Pointer handlers belong to their delegate but are not visual
+            # childItems. Inspect the current visual delegate's direct children.
+            for child in item.children():
+                if child.objectName() == name:
+                    return child
             stack.extend(item.childItems())
+        found = window.findChild(QObject, name)
+        if found is not None:
+            return found
         raise AssertionError(name)
 
     yield editor, window, find, warnings, tmp_path
@@ -107,7 +115,7 @@ def test_export_dialog_writes_chosen_format_and_quality(ui):
     point = confirm.mapToScene(QPointF(confirm.width() / 2, confirm.height() / 2)).toPoint()
     QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
     wait_for(lambda: settled(editor) and (tmp_path / "out.jpg").exists())
-    jpg = (tmp_path / "out.jpg").stat().st_size
+    assert (tmp_path / "out.jpg").stat().st_size > 0
     dialog.open()
     QTest.qWait(200)
     dialog.setProperty("filePath", str(tmp_path / "out"))
@@ -239,7 +247,6 @@ def test_point_status_mentions_prompt_count(ui, monkeypatch):
 
 
 def test_precache_fills_precise_and_hover_previews(ui, monkeypatch):
-    from iphoto.document import raster_mask
     from iphoto.segmentation.classical import bitmap_mask
     from test_v14 import catalog
 

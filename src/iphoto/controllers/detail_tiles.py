@@ -10,8 +10,8 @@ from PySide6.QtCore import QProcess, QUrl
 from ..paths import ROOT
 
 
-def _visible_box(self):
-    x, y, width, height = self._viewport.visibleRect
+def _visible_box(self, visible_rect=None):
+    x, y, width, height = visible_rect if visible_rect is not None else self._viewport.visibleRect
     if width <= 0 or height <= 0:
         return None
     source_width, source_height = self._width, self._height
@@ -46,17 +46,25 @@ def _tile_box(self, visible):
     return box
 
 
+def wanted(self, zoom, visible_rect):
+    if not self.hasImage or max(self._width, self._height) <= 1600:
+        return False
+    threshold = max(.45, 1600 / max(self._width, self._height) * 1.15)
+    if zoom < threshold:
+        return False
+    visible = _visible_box(self, visible_rect)
+    return visible is not None and _tile_box(self, visible) is not None
+
+
 def request(self):
     if self._closing:
         return
-    if not self.hasImage or max(self._width, self._height) <= 1600:
+    if not wanted(self, self._viewport.zoom, self._viewport.visibleRect):
         stop(self)
         return
-    threshold = max(.45, 1600 / max(self._width, self._height) * 1.15)
-    if self._viewport.zoom < threshold:
-        stop(self)
-        return
-    if self.busy or self._warm_process.state() != QProcess.NotRunning:
+    # Cloud waiting prevents document edits but owns no local image worker.
+    # Browsing may render the current snapshot once photo preparation ends.
+    if self.imageWorkBusy or self._warm_process.state() != QProcess.NotRunning:
         return
     if self._detail_failed_generation == (self._generation, self._detail_version):
         return
@@ -74,6 +82,7 @@ def request(self):
     )
     current = self._detail_box
     if (self._detail_url and self._detail_generation == self._generation
+            and self._detail_frame_version == self._detail_version
             and (not needs_mask or self._detail_mask_url)
             and current is not None and all((current[0] <= visible[0],
                                               current[1] <= visible[1],
@@ -105,9 +114,9 @@ def request(self):
 def invalidate(self):
     self._detail_idle_timer.stop()
     self._detail_version += 1
-    self._detail_url = ""
+    # Keep the last color tile, with its delivered generation and rectangle.
+    # The view can retain a complete frozen frame while the next tile renders.
     self._detail_mask_url = ""
-    self._detail_box = None
     self._detail_pending = None
     self.changed.emit()
 
@@ -148,13 +157,26 @@ def read(self):
                 and active["version"] == self._detail_version
                 and active["source_sha"] == self._sha
             )
-            if current and response.get("ok"):
+            from .preview_updates import accepts
+
+            intermediate = (
+                active["source_sha"] == self._sha
+                and active["generation"] < self._generation
+                and accepts(self, active["generation"])
+                and active["version"] <= self._detail_version
+                and (active["generation"], active["version"])
+                >= (self._detail_generation, self._detail_frame_version)
+            )
+            if (current or intermediate) and response.get("ok"):
                 box = response["result"]["box"]
                 self._detail_url = QUrl.fromLocalFile(response["result"]["path"]).toString()
+                original_path = response["result"].get("original")
+                self._detail_original_url = QUrl.fromLocalFile(original_path).toString() if original_path else ""
                 mask_path = response["result"].get("mask")
-                self._detail_mask_url = QUrl.fromLocalFile(mask_path).toString() if mask_path else ""
+                self._detail_mask_url = QUrl.fromLocalFile(mask_path).toString() if current and mask_path else ""
                 self._detail_box = tuple(box)
-                self._detail_generation = self._generation
+                self._detail_generation = active["generation"]
+                self._detail_frame_version = active["version"]
             elif current:
                 print("[detail worker] " + response.get("error", "unknown error"), file=sys.stderr)
                 self._detail_failed_generation = (self._generation, self._detail_version)
@@ -177,29 +199,36 @@ def stderr(self):
         print("[detail worker] " + data[-2000:], file=sys.stderr)
 
 
-def stop(self):
+def release(self):
+    """Stop source-image work while preserving the delivered frame metadata."""
     self._detail_idle_timer.stop()
-    if (self._detail_process.state() == QProcess.NotRunning and not self._detail_url
-            and not self._detail_pending and not self._detail_active):
-        return
     self._detail_pending = self._detail_active = None
-    self._detail_url = ""
-    self._detail_mask_url = ""
-    self._detail_box = None
-    self._detail_version += 1
-    self._detail_failed_generation = -1
+    self._detail_buffer = b""
     if self._detail_process.state() != QProcess.NotRunning:
         self._detail_aborting = True
         self._detail_process.kill()
     self.changed.emit()
 
 
+def stop(self):
+    self._detail_idle_timer.stop()
+    if (self._detail_process.state() == QProcess.NotRunning and not self._detail_url
+            and not self._detail_pending and not self._detail_active):
+        return
+    self._detail_url = ""
+    self._detail_original_url = ""
+    self._detail_mask_url = ""
+    self._detail_box = None
+    self._detail_version += 1
+    self._detail_failed_generation = -1
+    release(self)
+
+
 def park(self):
     """Release the source image process while keeping its displayed tile."""
     if (self._detail_process.state() == QProcess.Running
             and self._detail_active is None and self._detail_pending is None):
-        self._detail_aborting = True
-        self._detail_process.kill()
+        release(self)
 
 
 def finished(self, *_):

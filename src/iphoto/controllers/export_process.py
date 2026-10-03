@@ -14,6 +14,19 @@ from ..engine import validate_export_destination
 from ..paths import ROOT
 from ..storage import publish_staged_file
 
+PHASES = (
+    "正在启动导出…", "正在读取原照片…", "正在按原图尺寸合成图层…",
+    "正在写入照片文件…", "正在完成导出…",
+)
+
+
+def _phase(self, phase):
+    if phase <= self._export_phase:
+        return
+    self._export_phase = phase
+    self._status = PHASES[phase]
+    self.changed.emit()
+
 
 def _cleanup(request):
     if not request:
@@ -81,6 +94,10 @@ def queue(self, target, jpeg_quality):
         "jpeg_quality": jpeg_quality,
     }
     self._export_buffer = b""
+    self._export_line_offset = 0
+    self._export_phase = 0
+    self._export_final_seen = False
+    self._status = PHASES[0]
     interpreter = Path(sys.executable)
     if interpreter.name.lower() == "pythonw.exe":
         interpreter = interpreter.with_name("python.exe")
@@ -99,9 +116,33 @@ def started(self):
 
 
 def read(self):
-    self._export_buffer += bytes(self._export_process.readAllStandardOutput())
+    data = bytes(self._export_process.readAllStandardOutput())
+    request = self._export_request
+    if not request or self._export_aborting:
+        return
+    self._export_buffer += data
     if len(self._export_buffer) > 1024 * 1024:
         cancel(self, "导出进程返回的数据过大，导出已停止")
+        return
+    while True:
+        end = self._export_buffer.find(b"\n", self._export_line_offset)
+        if end < 0:
+            break
+        line = self._export_buffer[self._export_line_offset:end]
+        self._export_line_offset = end + 1
+        try:
+            response = json.loads(line)
+        except (ValueError, UnicodeDecodeError):
+            continue  # Final validation still checks the complete bounded output.
+        if not isinstance(response, dict):
+            continue
+        if response.get("type") != "progress":
+            self._export_final_seen = True
+            continue
+        phase = response.get("phase")
+        if (not self._export_final_seen and type(response.get("id")) is int
+                and response["id"] == request["id"] and type(phase) is int and 1 <= phase <= 3):
+            _phase(self, phase)
 
 
 def stderr(self):
@@ -139,35 +180,40 @@ def finished(self, code, status):
         self.changed.emit()
         return
     request = self._export_request
-    self._export_request = None
     if request is None:
         return
     try:
         if status != QProcess.NormalExit or code != 0:
             raise ValueError("导出进程异常退出，目标文件未写入")
-        lines = [line for line in self._export_buffer.splitlines() if line.lstrip().startswith(b"{")]
-        if len(lines) != 1:
+        responses = [json.loads(line) for line in self._export_buffer.splitlines()
+                     if line.lstrip().startswith(b"{")]
+        results = [value for value in responses if value.get("type") != "progress"]
+        if len(results) != 1:
             raise ValueError("导出进程没有返回有效结果")
-        response = json.loads(lines[0])
-        if response.get("id") != request["id"]:
+        response = results[0]
+        if type(response.get("id")) is not int or response["id"] != request["id"]:
             raise ValueError("导出结果与当前任务不匹配")
-        if not response.get("ok"):
+        if response.get("ok") is not True:
             raise ValueError(response.get("error", "导出失败"))
         if request["source_sha"] != self._sha:
             raise ValueError("源照片已切换，旧导出结果已丢弃")
         if Path(response["result"]["stage_path"]).resolve() != Path(request["stage_path"]).resolve():
             raise ValueError("导出结果路径与当前任务不匹配")
         target = validate_export_destination(self._path, request["path"])
+        _phase(self, 4)
         publish_staged_file(response["result"]["stage_path"], target)
         result = response["result"]
         message = f"已按原图尺寸导出 {result['width']} × {result['height']}：{target}"
+        self._export_request = None
         self._notify(message)
         self.exportCompleted.emit(str(target), "")
     except (ValueError, OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
         message = str(exc)
+        self._export_request = None
         self._notify(message, True)
         self.exportCompleted.emit(request["path"], message)
     finally:
+        self._export_request = None
         self._export_buffer = b""
         _cleanup_or_retry(self, request)
         self.changed.emit()

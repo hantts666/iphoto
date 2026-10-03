@@ -17,6 +17,7 @@ from .segmentation.classical import (
     assess as assess,
 )  # compatibility exports
 from .segmentation.models import available as pixel_available
+from .segmentation.face_models import available as face_available
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 
@@ -117,6 +118,15 @@ def capabilities():
             "model_path": str(MODEL_DIR / "segmentation"),
         },
     )
+    facial_ready = face_available()
+    rows.insert(1, {
+        "id": "face_skin", "name": "面部皮肤 · BiSeNet",
+        "description": "AI 定位单个人脸后自动分离皮肤，保护眉眼嘴唇、头发和衣物；遮挡与边缘仍需检查。",
+        "available": facial_ready,
+        "status": "可用 · 本地 CPU" if facial_ready else "需要配置面部皮肤模型",
+        "license": "MIT / ONNX Runtime MIT", "source": "https://github.com/yakhyo/face-parsing",
+        "model_path": str(MODEL_DIR / "face-parsing"),
+    })
     return rows
 
 

@@ -41,7 +41,9 @@ def test_autosave_does_not_block_ui_timer(tmp_path, qt_app, ai_store, monkeypatc
         started = perf_counter()
         QTimer.singleShot(50, lambda: ticks.append(perf_counter() - started))
         editor._autosave.start(0)
-        wait_for(lambda: editor._recovery_path.exists())
+        # A visible destination is not a writer-completion signal. On Windows
+        # publication can still hold its rename handle when the path appears.
+        wait_for(lambda: editor._recovery_future is None and editor._recovery_path.exists())
         assert ticks and ticks[0] < .15
         assert read_project(editor._recovery_path)["layers"][0]["recipe"]["exposure"] == .2
     finally:

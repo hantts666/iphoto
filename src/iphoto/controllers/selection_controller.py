@@ -10,19 +10,28 @@ existing controllers; this class never touches masks directly.
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
 from copy import deepcopy
+import math
+import re
+from uuid import uuid4
 
-from ..engine import RANGES
-from . import matting, objects, pixel_selections, selections
+from ..engine import LABELS, RANGES
+from ..document import MIN_STROKE_RADIUS
+from . import adjustment_review, heal, matting, objects, pixel_selections, selections
 
 NAVIGATION_TOOLS = ("inspect", "hand", "zoom")
 DRAFT_FREE_TOOLS = ("object", "smart", "heal")
 MODES = ("replace", "add", "subtract")
-BRUSH_MIN, BRUSH_MAX, BRUSH_STEP = 0.003, 0.15, 0.005
+BRUSH_MAX = 0.15
+HEAL_MAX = 0.025
 
 
 class SelectionController(QObject):
     changed = Signal()
+    layerFocusRequested = Signal(str)
+    parameterFocusRequested = Signal(str, str)
+    repairFocusRequested = Signal(str)
     toolChosen = Signal(str)
+    resultApplied = Signal()
     draftBegan = Signal(str)  # "selection" | "region"
     draftEnded = Signal()
 
@@ -32,13 +41,23 @@ class SelectionController(QObject):
         self._tool = "inspect"
         self._mode = "replace"
         self._brush_radius = 0.025
+        self._heal_radius = 0.003
         self._wand_tolerance = 24.0
         self._show_mask = False
         self._draft_active = False
+        self._draft_target_id = ""
         self._pending_cutout = False
         self._revision = 0
         self._picked = ""
+        self._repair_review_key = None
+        self._repair_review_index = -1
+        self._reviewed_repair = None
+        self._repair_target_cache_key = None
+        self._repair_target_cache = None
+        self._adjustment_review_key = None
+        self._adjustment_review_index = -1
         editor.changed.connect(self._on_editor_changed)
+        editor.ai.progressChanged.connect(self.changed.emit)
         editor.imageOpened.connect(self._on_image_opened)
 
     # -- inspector focus: picked layer => adjustments, otherwise range module --
@@ -49,12 +68,41 @@ class SelectionController(QObject):
 
     @Slot(str)
     def pickLayer(self, lid):
-        if self._editor.hasRegionDraft:
+        if self._editor.hasRegionDraft or self._editor.hasSelectionDraft:
             return
         self._editor.selectLayer(lid)
+        if self._editor.activeLayerId != lid:
+            return
+        if self._reveal_layer(lid):
+            self._editor.changed.emit()
         if self._picked != lid:
             self._picked = lid
             self.changed.emit()
+            if self._editor.activeRepairInfo['count']:
+                self.repairFocusRequested.emit(lid)
+        self.layerFocusRequested.emit(lid)
+
+    def followActiveLayer(self):
+        if self._picked:
+            self.pickLayer(self._editor.activeLayerId)
+
+    def _reveal_layer(self, lid):
+        # Revealing the active row is navigation, without render or undo changes.
+        editor = self._editor
+        if editor.busy:
+            return False
+        by_id = {layer["id"]: layer for layer in editor._layers}
+        parent = by_id.get(lid, {}).get("parent_id", "")
+        expanded = False
+        while parent:
+            group = by_id[parent]
+            if group.get("collapsed", False):
+                group["collapsed"] = False
+                expanded = True
+            parent = group.get("parent_id", "")
+        if expanded:
+            editor._mark_dirty()
+        return expanded
 
     @Slot()
     def clearPick(self):
@@ -62,18 +110,190 @@ class SelectionController(QObject):
             self._picked = ""
             self.changed.emit()
 
+    def showAppliedResult(self, lid):
+        """Reveal an applied result directly; no synthetic draft transitions."""
+        self._pending_cutout = False
+        self._show_mask = False
+        if self._tool not in NAVIGATION_TOOLS:
+            self._tool = "inspect"
+        self.pickLayer(lid)
+        self.resultApplied.emit()
+
+    def focusChangedParameters(self, previous=None):
+        """Expose an applied control once, without following later renders."""
+        editor = self._editor
+        if (editor.hasSelectionDraft or editor.hasRegionDraft or editor.activeIsGroup
+                or not editor.activeDisplay['enabled']):
+            return
+        current = editor.parameters
+        previous = previous or {}
+        changed = [key for key in RANGES if current[key] != previous.get(key, 0)]
+        if not changed:
+            return
+        # Detail and colour controls live in closed sections. Prefer a changed
+        # one there; unchanged existing effects must not redirect the result.
+        priority = ('skin_smoothing', 'sharpness', 'softness', 'warmth', 'tint',
+                    'saturation', 'vibrance')
+        key = next((key for key in priority if key in changed), changed[0])
+        self.pickLayer(editor.activeLayerId)
+        self.parameterFocusRequested.emit(editor.activeLayerId, key)
+
+    @Slot(str, str, int, str, str, result="QVariantMap")
+    def applyParameterText(self, layer_id, photo, generation, key, text):
+        editor = self._editor
+        if (not editor._can_edit() or editor.activeIsGroup or layer_id != editor.activeLayerId
+                or photo != editor.originalUrl or type(generation) is not int
+                or generation != editor.documentGeneration or not isinstance(key, str) or key not in RANGES):
+            return {"ok": False, "message": "此项输入已过期，请重新输入"}
+        lo, hi = RANGES[key]
+        hint = f"{LABELS[key]}：请输入 {lo:g}～{hi:g} 之间的" + ("数值" if key == "exposure" else "整数")
+        try:
+            if (not isinstance(text, str) or not 1 <= len(text.strip()) <= 32
+                    or not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", text.strip())):
+                raise ValueError()
+            value = float(text.strip())
+            if (not math.isfinite(value) or not lo <= value <= hi
+                    or key != "exposure" and not value.is_integer()):
+                raise ValueError()
+        except ValueError:
+            return {"ok": False, "message": hint}
+        if editor.parameters[key] != value:
+            editor.setParameter(key, value)
+            editor.finishGesture()
+        return {"ok": True, "message": ""}
+
+    @Slot(str, str, int, "QVariantList", float, result=bool)
+    def paintRepair(self, layer_id, photo, generation, points, radius):
+        editor = self._editor
+        if (layer_id != editor.activeLayerId or photo != editor.originalUrl
+                or type(generation) is not int or generation != editor.documentGeneration):
+            return False
+        return heal.paintRepair(editor, points, radius)
+
+    @Slot("QVariantList", result=bool)
+    def reviewAdjustments(self, layer_ids):
+        editor = self._editor
+        if not editor.hasImage or editor.busy or editor.hasSelectionDraft or editor.hasRegionDraft:
+            return False
+        targets = adjustment_review.targets(editor, layer_ids)
+        if not targets:
+            return False
+        key = (editor._sha, [(layer['id'], point, versions) for layer, point, versions in targets])
+        index = (self._adjustment_review_index + 1) % len(targets) if key == self._adjustment_review_key else 0
+        layer, point, _ = targets[index]
+        reveal_controls = key != self._adjustment_review_key or editor.activeLayerId != layer['id']
+        self._adjustment_review_key, self._adjustment_review_index = key, index
+        self.pickLayer(layer['id'])
+        if reveal_controls:
+            self.focusChangedParameters()
+        self._show_mask = False
+        self.chooseTool('inspect')
+        editor.viewport.setZoom(1.)
+        editor.viewport.centerOn(*point)
+        note = '；此层效果未显示' if not editor.activeDisplay['enabled'] else ''
+        next_note = '再次点击查看下一处，' if len(targets) > 1 else ''
+        editor._notify(f"正在查看局部效果 {index+1}/{len(targets)} · {layer['name']} · 100%{note}；{next_note}可按住看原图比较")
+        return True
+
+    @Slot("QVariantList", result=bool)
+    def reviewRepairs(self, layer_ids):
+        editor = self._editor
+        if (not editor.hasImage or editor.busy or editor.hasSelectionDraft or editor.hasRegionDraft):
+            return False
+        targets = heal.review_targets(editor, layer_ids)
+        if not targets:
+            return False
+        key = (editor._sha, [(layer['id'], op) for layer, op in targets])
+        index = (self._repair_review_index + 1) % len(targets) if key == self._repair_review_key else 0
+        layer, op = targets[index]
+        # Navigation follows live strokes. A changed/deleted result restarts the
+        # cycle instead of reusing stale coordinates from the conversation.
+        self._repair_review_key = deepcopy(key)
+        self._repair_review_index = index
+        self.pickLayer(layer['id'])
+        local_index = sum(previous['id'] == layer['id'] for previous, _ in targets[:index])
+        self._reviewed_repair = {
+            'sha': editor._sha, 'layer_id': layer['id'], 'index': local_index, 'token': uuid4().hex,
+            'ops': [stroke for lid, stroke in self._repair_review_key[1] if lid == layer['id']],
+        }
+        self._show_mask = False
+        self.chooseTool('inspect')
+        radius_x = op['radius'] * min(editor._width, editor._height) / editor._width
+        radius_y = op['radius'] * min(editor._width, editor._height) / editor._height
+        xs, ys = zip(*op['points'])
+        editor.viewport.focusRegion(min(xs)-radius_x, min(ys)-radius_y,
+                                    max(xs)+radius_x, max(ys)+radius_y)
+        note = '；此层效果未显示' if not editor.activeDisplay['enabled'] else ''
+        editor._notify(f"正在查看修复 {index+1}/{len(targets)} · {layer['name']}{note}；可按住看原图比较")
+        self.changed.emit()
+        return True
+
+    def _reviewed_repair_target(self):
+        editor, reference = self._editor, self._reviewed_repair
+        if (not reference or reference['sha'] != editor._sha
+                or reference['layer_id'] != editor.activeLayerId or self._picked != editor.activeLayerId):
+            return None
+        # Rendering/status notifications share the same document generation.
+        # Check the live stroke list once per content change, without rasterizing.
+        key = (reference['token'], editor.documentGeneration)
+        if key != self._repair_target_cache_key:
+            layer = editor._layer()
+            matches = (layer.get('heal') or {}).get('ops', []) == reference['ops']
+            self._repair_target_cache = (layer, reference['index'], reference['ops']) if matches else None
+            self._repair_target_cache_key = key
+        return self._repair_target_cache
+
+    @Property('QVariantMap', notify=changed)
+    def reviewedRepair(self):
+        target = self._reviewed_repair_target()
+        if not target:
+            return {}
+        layer, index, ops = target
+        return {'layer_id': layer['id'], 'index': index+1, 'count': len(ops),
+                'token': self._reviewed_repair['token'], 'removes_layer': heal.removes_empty_layer(self._editor, layer)}
+
+    @Slot(str, result=bool)
+    def deleteReviewedRepair(self, token):
+        editor = self._editor
+        if (editor.busy or not editor._can_edit() or not self._reviewed_repair
+                or token != self._reviewed_repair['token']):
+            return False
+        target = self._reviewed_repair_target()
+        if not target or not heal.removeStroke(editor, target[0]['id'], target[1], target[2]):
+            return False
+        self._reviewed_repair = None
+        self._repair_review_key = None
+        self._repair_review_index = -1
+        self._repair_target_cache_key = None
+        self._repair_target_cache = None
+        self.changed.emit()
+        return True
+
     # -- state synchronization ------------------------------------------------
 
     def _on_editor_changed(self):
         self._revision += 1
         self._sync_draft()
+        editor = self._editor
+        repair_target = ""
+        if self._picked and self._picked != editor.activeLayerId:
+            # An open inspector follows document selection, including undo and
+            # deleted targets. An explicitly cleared pick stays in range mode.
+            self._picked = editor.activeLayerId
+            if self._reveal_layer(self._picked):
+                editor._publish_layer_rows()
+            if editor.activeRepairInfo['count']:
+                repair_target = self._picked
         self.changed.emit()
+        if repair_target:
+            self.repairFocusRequested.emit(repair_target)
 
     def _sync_draft(self):
         editor = self._editor
         active = editor.hasSelectionDraft or editor.hasRegionDraft
         if active and not self._draft_active:
             self._draft_active = True
+            self._draft_target_id = editor._selection_target_id
             self._show_mask = editor.maskView != "adjustment"
             self._picked = ""
             self.draftBegan.emit("region" if editor.hasRegionDraft else "selection")
@@ -83,15 +303,31 @@ class SelectionController(QObject):
                 self._picked = editor.activeLayerId
         elif not active and self._draft_active:
             self._draft_active = False
+            if self._draft_target_id == editor.activeLayerId:
+                self._picked = self._draft_target_id
+            self._draft_target_id = ""
             self._pending_cutout = False
             self._show_mask = False
             if self._tool not in NAVIGATION_TOOLS:
                 self._tool = "inspect"
             self.draftEnded.emit()
 
+    def _reset_document_focus(self):
+        self._draft_active = False
+        self._draft_target_id = ""
+        self._pending_cutout = False
+        self._picked = ""
+        self._repair_review_key = None
+        self._repair_review_index = -1
+        self._reviewed_repair = None
+        self._repair_target_cache_key = None
+        self._repair_target_cache = None
+        self._adjustment_review_key = None
+        self._adjustment_review_index = -1
+
     def _on_image_opened(self):
         self._tool = "inspect"
-        self._draft_active = False
+        self._reset_document_focus()
         self._sync_draft()
         if not self._draft_active:
             self._show_mask = False
@@ -113,7 +349,34 @@ class SelectionController(QObject):
 
     @Property(float, notify=changed)
     def brushRadius(self):
-        return self._brush_radius
+        lo, hi = self._brush_bounds()
+        value = self._heal_radius if self._tool == "heal" else self._brush_radius
+        return max(lo, min(hi, value))
+
+    def _brush_bounds(self):
+        short_side = max(1, min(self._editor._width, self._editor._height))
+        hi = HEAL_MAX if self._tool == "heal" else BRUSH_MAX
+        # The existing raster brush needs a one-pixel radius. Its minimum
+        # diameter must not grow with the source photograph's dimensions.
+        return min(hi, max(MIN_STROKE_RADIUS, 1 / short_side)), hi
+
+    @Property(int, notify=changed)
+    def brushDiameter(self):
+        return max(1, round(2 * self.brushRadius * max(1, min(self._editor._width, self._editor._height))))
+
+    @Property(int, notify=changed)
+    def minBrushDiameter(self):
+        lo, _ = self._brush_bounds()
+        return max(1, round(2 * lo * max(1, min(self._editor._width, self._editor._height))))
+
+    @Property(int, notify=changed)
+    def maxBrushDiameter(self):
+        _, hi = self._brush_bounds()
+        return max(self.minBrushDiameter, round(2 * hi * max(1, min(self._editor._width, self._editor._height))))
+
+    @Property(int, notify=changed)
+    def brushDiameterStep(self):
+        return max(1 if self._tool == "heal" else 2, round(self.brushDiameter * .1))
 
     @Property(float, notify=changed)
     def wandTolerance(self):
@@ -126,6 +389,7 @@ class SelectionController(QObject):
     @Slot(str)
     def chooseTool(self, tool):
         editor = self._editor
+        switching = tool != self._tool
         navigation = tool in NAVIGATION_TOOLS
         if not editor.hasImage or (
             not navigation and (editor.busy or editor.hasRegionDraft)
@@ -145,18 +409,41 @@ class SelectionController(QObject):
         if not navigation:
             if tool not in DRAFT_FREE_TOOLS:
                 editor.beginSelection("empty")
-            self._show_mask = True
+            if tool in ("smart", "object") and not editor.hasSelectionDraft:
+                if switching:
+                    self._show_mask = False
+            else:
+                self._show_mask = tool != "heal"
         self.changed.emit()
         self.toolChosen.emit(tool)
 
     @Slot()
     def reviewMask(self):
-        self._editor.beginSelection("current")
+        editor = self._editor
+        if not editor.hasImage or editor.busy or editor.hasRegionDraft:
+            return
+        if editor.hasSelectionDraft and not self.editingLayerMask:
+            return
+        editor.beginSelection("current")
         self._tool = "brush"
         self._mode = "add"
         self._show_mask = True
         self.changed.emit()
         self.toolChosen.emit("brush")
+
+    @Slot(str, result=bool)
+    def correctMask(self, mode):
+        """Start a bound correction with the requested brush operation."""
+        editor = self._editor
+        if (mode not in ("add", "subtract") or not editor.hasImage or editor.busy
+                or editor.hasRegionDraft or editor.hasSelectionDraft):
+            return False
+        self.reviewMask()
+        if not self.editingLayerMask:
+            return False
+        self.setMaskView("overlay")
+        self.setMode(mode)
+        return True
 
     @Slot(str)
     def setMode(self, mode):
@@ -170,14 +457,33 @@ class SelectionController(QObject):
 
     @Slot(float)
     def setBrushRadius(self, value):
-        value = max(BRUSH_MIN, min(BRUSH_MAX, value))
-        if value != self._brush_radius:
-            self._brush_radius = value
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return
+        healing = self._tool == "heal"
+        lo, hi = self._brush_bounds()
+        value = max(lo, min(hi, value))
+        if value != self.brushRadius:
+            if healing:
+                self._heal_radius = value
+            else:
+                self._brush_radius = value
             self.changed.emit()
 
     @Slot(int)
+    def setBrushDiameter(self, value):
+        short_side = max(1, min(self._editor._width, self._editor._height))
+        self.setBrushRadius(value / (2 * short_side))
+
+    @Slot(int)
     def adjustBrush(self, direction):
-        self.setBrushRadius(self._brush_radius + BRUSH_STEP * (1 if direction > 0 else -1))
+        diameter = self.brushDiameter + self.brushDiameterStep * (1 if direction > 0 else -1)
+        lo, hi = self._brush_bounds()
+        if diameter <= self.minBrushDiameter:
+            self.setBrushRadius(lo)
+        elif diameter >= self.maxBrushDiameter:
+            self.setBrushRadius(hi)
+        else:
+            self.setBrushDiameter(diameter)
 
     @Slot(float)
     def setWandTolerance(self, value):
@@ -219,12 +525,18 @@ class SelectionController(QObject):
             for request in list(self._editor._queue) + list(self._editor._pixel_queue)
         ):
             return "pixel"
-        if self._editor.ai.busy:
+        if self._editor.ai.busy or self._editor.aiRepairPreparing or self._editor.aiObjectPreparing:
             return "ai"
+        if self._editor.photoPreparing:
+            return "warm"
         return "none"
 
     @Property(str, notify=changed)
     def taskText(self):
+        if self._editor.ai.busy:
+            return self._editor.ai.requestProgress
+        if self.taskKind == "warm":
+            return "正在准备照片以便点选，可继续浏览；点击目标后会排队处理…"
         return self._editor.status
 
     @Property(bool, notify=changed)
@@ -239,7 +551,7 @@ class SelectionController(QObject):
 
     @Property(bool, notify=changed)
     def taskCancellable(self):
-        return self.taskKind in ("pixel", "matte", "ai")
+        return self.taskKind in ("pixel", "matte", "ai", "warm")
 
     @Slot()
     def cancelTask(self):
@@ -250,7 +562,14 @@ class SelectionController(QObject):
         elif kind == "matte":
             matting.cancel(editor)
         elif kind == "ai":
-            editor.ai.cancel()
+            if editor.ai.busy:
+                editor.ai.cancel()
+            elif editor.aiObjectPreparing:
+                editor.cancelObjectPreparation()
+            else:
+                editor.cancelRepairPreparation()
+        elif kind == "warm":
+            pixel_selections.cancel_preparation(editor)
 
     # -- target acquisition ---------------------------------------------------
 
@@ -418,6 +737,23 @@ class SelectionController(QObject):
     # -- draft output ---------------------------------------------------------
 
     @Property(bool, notify=changed)
+    def editingLayerMask(self):
+        editor = self._editor
+        return editor.hasSelectionDraft and bool(editor._selection_target_id)
+
+    @Property(str, notify=changed)
+    def maskEditLayerName(self):
+        editor = self._editor
+        return next(
+            (l["name"] for l in editor._layers if l["id"] == editor._selection_target_id),
+            "",
+        )
+
+    @Slot()
+    def applyDefault(self):
+        self.apply("replace_mask" if self.editingLayerMask else "new_layer")
+
+    @Property(bool, notify=changed)
     def inpaintAvailable(self):
         return any(
             c["id"] == "inpaint" and c["available"]
@@ -433,10 +769,12 @@ class SelectionController(QObject):
                 self._picked = self._editor.activeLayerId
         elif mode == "replace_mask":
             self._editor.acceptSelection()
-            self._picked = self._editor.activeLayerId
+            if not self._editor.hasSelectionDraft:
+                self._picked = self._editor.activeLayerId
         elif mode == "inpaint":
             selections.inpaintToLayer(self._editor)
-            self._picked = self._editor.activeLayerId
+            if not self._editor.hasSelectionDraft:
+                self._picked = self._editor.activeLayerId
         else:
             self._editor._notify("未知的输出方式", True)
         self.changed.emit()

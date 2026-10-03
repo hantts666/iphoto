@@ -1,6 +1,9 @@
 """Default chat can decide to edit the current layer or create local layers."""
 
 import json
+import base64
+import time
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,8 @@ from test_v14 import scene_response
 def auto_response(action="layers", regions=None, recipe=None, summary="已规划人像局部调整"):
     plan = {
         "action": action,
+        "scope": {"adjust": "current_layer", "update_layers": "existing_layers", "global": "whole_image", "layers": "regions", "answer": "none", "unsupported": "none"}[action],
+        "layer_edits": [],
         "summary": summary,
         "recipe": recipe or Recipe().to_dict(),
         "regions": regions if regions is not None else [
@@ -36,6 +41,17 @@ def auto_response(action="layers", regions=None, recipe=None, summary="已规划
         ],
     }
     return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(plan, ensure_ascii=False)}}]}
+
+
+def with_skin_grounding(response):
+    def reply(payload):
+        mode = json.loads(payload["messages"][1]["content"][0]["text"])["mode"]
+        if mode == "selection":
+            selected = {"status": "selected", "summary": "已精定位皮肤",
+                        "box": [200, 200, 800, 800], "point": [500, 500]}
+            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(selected)}}]}
+        return response(payload) if callable(response) else response
+    return reply
 
 
 def test_auto_protocol_checks_actions_and_local_masks():
@@ -91,7 +107,7 @@ def test_default_chat_creates_portrait_layer_and_one_undo(qt_app, ai_store, tmp_
     try:
         editor.openImage(str(photo))
         wait_for(lambda: editor.hasImage and settled(editor))
-        with mock_api(auto_response()) as (url, requests):
+        with mock_api(with_skin_grounding(auto_response())) as (url, requests):
             configure(editor.ai, url)
             assert find("chatModeBox").property("currentIndex") == 0
             find("descriptionInput").setProperty("text", "给人物面部磨皮，背景保持清晰")
@@ -101,13 +117,17 @@ def test_default_chat_creates_portrait_layer_and_one_undo(qt_app, ai_store, tmp_
             assert editor.activeLayerName == "人像皮肤"
             assert editor.parameters["skin_smoothing"] == 35
             assert editor.selection.pickedLayerId == editor.activeLayerId
-            assert len(requests) == 1
+            assert len(requests) == 2
+            crop_url = requests[1][2]["messages"][1]["content"][1]["image_url"]["url"]
+            with Image.open(BytesIO(base64.b64decode(crop_url.split(",", 1)[1]))) as crop:
+                assert crop.width < 600 and crop.height < 420
             sent = json.loads(requests[0][2]["messages"][1]["content"][0]["text"])
             assert sent["mode"] == "auto" and sent["max_new_layers"] >= 1
             assert "mask_image_note" not in sent
             assert sum(item["type"] == "image_url" for item in requests[0][2]["messages"][1]["content"]) == 1
-            assert editor.conversation[-2]["state"] == "applied"
-            assert editor.conversation[-2]["layer_name"] == "局部分层"
+            assert editor.conversation[-1]["role"] == "assistant"
+            assert editor.conversation[-1]["state"] == "applied"
+            assert editor.conversation[-1]["layer_name"] == "局部分层"
             assert window.grabWindow().save(str(ROOT / "artifacts/ux-ai-auto-layers.png"))
             project = tmp_path / "auto-portrait.iphoto"
             editor.saveProject(str(project))
@@ -141,14 +161,14 @@ def test_auto_layers_complete_with_real_pixel_worker(qt_app, ai_store, tmp_path)
             "name": "人物区域", "reason": "局部磨皮", "box": [100, 80, 430, 800],
             "point": [270, 400], "recipe": Recipe(skin_smoothing=30).to_dict(),
         }])
-        with mock_api(response) as (url, requests):
+        with mock_api(with_skin_grounding(response)) as (url, requests):
             configure(editor.ai, url)
             editor.sendMessage("只给人物区域轻度磨皮", "auto")
             wait_for(lambda: len(editor.layers) == 2 and settled(editor), seconds=75)
             assert not editor.hasRegionDraft
             assert editor.parameters["skin_smoothing"] == 30
             assert editor.selection.pickedLayerId == editor.activeLayerId
-            assert len(requests) == 1
+            assert len(requests) == 2
             editor.undo()
             wait_for(lambda: settled(editor))
             assert len(editor.layers) == 1
@@ -171,7 +191,7 @@ def test_legacy_select_it_yourself_reply_retries_as_auto_layers(qt_app, ai_store
                 if mode == "auto" else region_completion()
             )
 
-        with mock_api(reply) as (url, requests):
+        with mock_api(with_skin_grounding(reply)) as (url, requests):
             configure(editor.ai, url)
             editor.sendMessage("人物面部磨皮，背景保持清晰", "auto")
             wait_for(lambda: len(editor.layers) == 3 and settled(editor))
@@ -209,6 +229,33 @@ def test_auto_chat_global_edit_and_answer_do_not_create_layers(qt_app, ai_store,
         editor.close()
 
 
+def test_unsupported_legacy_fallback_does_not_start_skin_grounding(qt_app, ai_store, tmp_path):
+    photo = tmp_path / "unsupported-fallback.png"
+    Image.new("RGB", (600, 420), (154, 115, 95)).save(photo)
+    editor = Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(photo))
+        wait_for(lambda: editor.hasImage and settled(editor))
+
+        def reply(payload):
+            mode = json.loads(payload["messages"][1]["content"][0]["text"])["mode"]
+            if mode == "auto":
+                return completion(status="unsupported", summary="请先建立面部选区，再磨皮")
+            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(
+                {"status": "unsupported", "summary": "面部被遮挡，不能可靠定位", "regions": []}
+            )}}]}
+
+        with mock_api(reply) as (url, requests):
+            configure(editor.ai, url)
+            editor.sendMessage("给人物面部磨皮", "auto")
+            wait_for(lambda: not editor.ai.busy and editor._pending_request is None)
+            assert len(requests) == 2
+            assert len(editor.layers) == 1
+            assert editor.conversation[-1]["state"] == "unsupported"
+    finally:
+        editor.close()
+
+
 def test_invalid_ai_layer_recipe_is_replanned_once(qt_app, ai_store, tmp_path, pixel_protocol_stub):
     photo = tmp_path / "retry-portrait.png"
     Image.new("RGB", (600, 420), (154, 115, 95)).save(photo)
@@ -225,11 +272,11 @@ def test_invalid_ai_layer_recipe_is_replanned_once(qt_app, ai_store, tmp_path, p
             prompt = payload["messages"][0]["content"]
             return auto_response() if "上次回复未通过程序校验" in prompt else bad
 
-        with mock_api(reply) as (url, requests):
+        with mock_api(with_skin_grounding(reply)) as (url, requests):
             configure(editor.ai, url)
             assert editor.sendMessage("给人物磨皮", "auto")
             wait_for(lambda: len(editor.layers) == 2 and settled(editor))
-            assert len(requests) == 2
+            assert len(requests) == 3
             assert "sharpness" in requests[1][2]["messages"][0]["content"]
             assert len([m for m in editor.conversation if m["role"] == "user"]) == 1
             assert editor.parameters["skin_smoothing"] == 35
@@ -279,5 +326,69 @@ def test_first_scene_analysis_repairs_invalid_catalog_reply(qt_app, ai_store, tm
             assert len(requests) == 2
             assert not editor.ai.isError
             assert len([m for m in editor.conversation if m["role"] == "user"]) == 1
+    finally:
+        editor.close()
+
+
+def test_second_skin_region_rejection_does_not_apply_the_first(qt_app, ai_store, tmp_path):
+    photo = tmp_path / "skin-two-regions.png"
+    Image.new("RGB", (600, 420), (154, 115, 95)).save(photo)
+    editor = Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(photo))
+        wait_for(lambda: editor.hasImage and settled(editor))
+        body = json.loads(auto_response()["choices"][0]["message"]["content"])
+        body["regions"].append({**body["regions"][0], "name": "手臂皮肤"})
+        planned = {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(body)}}]}
+        count = 0
+
+        def reply(payload):
+            nonlocal count
+            mode = json.loads(payload["messages"][1]["content"][0]["text"])["mode"]
+            if mode != "selection":
+                return planned
+            count += 1
+            if count == 1:
+                return with_skin_grounding(planned)(payload)
+            return {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(
+                {"status": "unsupported", "summary": "手臂被遮挡，不能可靠定位", "box": [], "point": []}
+            )}}]}
+
+        with mock_api(reply) as (url, requests):
+            configure(editor.ai, url)
+            editor.sendMessage("面部和手臂轻磨皮", "auto")
+            wait_for(lambda: not editor.ai.busy and editor.conversation[-1]["state"] == "unsupported")
+            assert len(requests) == 3
+            assert len(editor.layers) == 1
+            assert not editor.hasRegionDraft
+            assert len([m for m in editor.conversation if m["role"] == "user"]) == 1
+    finally:
+        editor.close()
+
+
+def test_closeup_grounding_can_be_cancelled_before_any_layer_is_created(qt_app, ai_store, tmp_path):
+    photo = tmp_path / "cancel-grounding.png"
+    Image.new("RGB", (600, 420), (154, 115, 95)).save(photo)
+    editor = Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(photo))
+        wait_for(lambda: editor.hasImage and settled(editor))
+
+        def reply(payload):
+            mode = json.loads(payload["messages"][1]["content"][0]["text"])["mode"]
+            if mode == "selection":
+                time.sleep(1)
+            return with_skin_grounding(auto_response())(payload)
+
+        with mock_api(reply) as (url, requests):
+            configure(editor.ai, url)
+            editor.sendMessage("给人物磨皮", "auto")
+            wait_for(lambda: len(requests) == 2)
+            assert editor.busy
+            assert "精定位" in editor.ai.requestProgress
+            editor.ai.cancel()
+            wait_for(lambda: not editor.busy and editor._pending_request is None)
+            assert len(editor.layers) == 1
+            assert not editor.hasRegionDraft
     finally:
         editor.close()

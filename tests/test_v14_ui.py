@@ -89,7 +89,18 @@ def test_object_hover_click_combine_and_nested_group_controls(
         editor.clearObjectChecks()
         click("checkCategoryButton")
         assert editor.checkedObjectCount == 2
-        click("adjustCheckedObjectsButton")
+        # Checkbox acquisition stays separate from the current draft. Restore
+        # both objects explicitly before committing that visible range.
+        assert not find("adjustCheckedObjectsButton").property("visible")
+        assert raster_mask(editor._candidate, (200, 140)).getpixel((40, 40)) == 0
+        click("objectCombineMenuButton")
+        assert find("combineObjectsButton").property("text") == "用勾选对象重新选择范围"
+        click("combineObjectsButton")
+        wait_for(lambda: idle() and window.property("selectionPreviewReady"), seconds=60)
+        assert raster_mask(editor._candidate, (200, 140)).getpixel((40, 40)) == 255
+        assert raster_mask(editor._candidate, (200, 140)).getpixel((150, 40)) == 255
+        wait_for(lambda: find("selectionToLayerButton").property("enabled"))
+        click("selectionToLayerButton")
         wait_for(idle)
         assert not editor.hasSelectionDraft
         assert editor.selection.pickedLayerId == editor.activeLayerId

@@ -22,7 +22,7 @@ class Viewport(QObject):
         self._zoom = 1.0
         self._x = self._y = 0.0
         self._fit = True
-        self._space = self._control = self._alt = False
+        self._space = self._control = self._alt = self._shift = False
         self._window = None
 
     @Property(float, notify=changed)
@@ -74,6 +74,10 @@ class Viewport(QObject):
     @Property(bool, notify=keysChanged)
     def altHeld(self):
         return self._alt
+
+    @Property(bool, notify=keysChanged)
+    def shiftHeld(self):
+        return self._shift
 
     def _fit_zoom(self):
         if not all(self._source):
@@ -192,6 +196,21 @@ class Viewport(QObject):
         self._constrain()
         self.changed.emit()
 
+    @Slot(float, float, float, float)
+    def focusRegion(self, left, top, right, bottom):
+        """Show a source region with context, at no more than actual size."""
+        if (not all(self._source) or not all(isfinite(v) for v in (left, top, right, bottom))
+                or left >= right or top >= bottom):
+            return
+        left, top, right, bottom = (max(0, left), max(0, top), min(1, right), min(1, bottom))
+        if left >= right or top >= bottom:
+            return
+        width = max(128, (right-left) * self._source[0])
+        height = max(128, (bottom-top) * self._source[1])
+        self.setZoom(min(1., self._size[0] * self._dpr * .75 / width,
+                         self._size[1] * self._dpr * .75 / height))
+        self.centerOn((left+right)/2, (top+bottom)/2)
+
     @Slot(QObject)
     def attachWindow(self, window):
         if self._window is window:
@@ -203,7 +222,7 @@ class Viewport(QObject):
 
     @Slot()
     def resetKeys(self):
-        self._space = self._control = self._alt = False
+        self._space = self._control = self._alt = self._shift = False
         self.keysChanged.emit()
         self.cancelGesture.emit()
 
@@ -222,12 +241,15 @@ class Viewport(QObject):
                     self._space = kind == QEvent.KeyPress and allowed
                     self._control = bool(event.modifiers() & Qt.ControlModifier)
                     self._alt = bool(event.modifiers() & Qt.AltModifier)
+                    self._shift = bool(event.modifiers() & Qt.ShiftModifier)
                     self.keysChanged.emit()
                 return True
-            if key in (Qt.Key_Control, Qt.Key_Alt) and kind != QEvent.ShortcutOverride:
+            if key in (Qt.Key_Control, Qt.Key_Alt, Qt.Key_Shift) and kind != QEvent.ShortcutOverride:
                 if key == Qt.Key_Control:
                     self._control = kind == QEvent.KeyPress and allowed
-                else:
+                elif key == Qt.Key_Alt:
                     self._alt = kind == QEvent.KeyPress and allowed
+                else:
+                    self._shift = kind == QEvent.KeyPress and allowed
                 self.keysChanged.emit()
         return super().eventFilter(watched, event)

@@ -74,7 +74,7 @@ def _decode(png, width, height):
     return image
 
 
-def validate_bitmap(value):
+def validate_bitmap(value, *, cache_decoded=False):
     if not isinstance(value, dict) or set(value) not in (
         {"png", "width", "height"},
         {"png", "width", "height", "sampling"},
@@ -93,7 +93,12 @@ def validate_bitmap(value):
     ):
         raise ValueError("蒙版资源过大")
     key = _cache_key(value["png"], value["width"], value["height"])
-    if key not in _VALIDATED:
+    if cache_decoded:
+        # A foreground result will be rasterized immediately. Keep that one
+        # validated decode in the bounded cache instead of decoding it twice.
+        # Ordinary project validation still retains no pixel data.
+        _decode(value["png"], value["width"], value["height"])
+    elif key not in _VALIDATED:
         _decode_uncached(value["png"], value["width"], value["height"])
     _remember_valid(key)
     return dict(value)
@@ -104,7 +109,10 @@ def decode_bitmap(value, size):
     if image.size != size and value.get("sampling") == "alpha":
         # Interpolate continuous coverage without introducing ringing or
         # modifying the protected zero support at the export resolution.
-        support = image.point([0] + [255] * 255).resize(size, Image.Resampling.NEAREST)
+        # Nearest-neighbour sampling and a point lookup commute exactly.
+        # Threshold the destination rather than allocating a source-size
+        # support image for every thumbnail/coverage query on a large mask.
+        support = image.resize(size, Image.Resampling.NEAREST).point([0] + [255] * 255)
         resized = image.resize(size, Image.Resampling.BILINEAR)
         resized.paste(0, mask=support.point(lambda v: 255 - v))
         return resized

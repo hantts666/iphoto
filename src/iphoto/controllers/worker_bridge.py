@@ -21,7 +21,11 @@ def _request(self, op, **data):
         from .detail_tiles import invalidate
 
         invalidate(self)
-    elif op in {"export", "matte", "selection"} or (op == "segment" and request.get("priority") != "low"):
+    elif op == "segment" and request.get("priority") != "low":
+        from .detail_tiles import release
+
+        release(self)
+    elif op in {"export", "matte", "selection"}:
         self._stop_detail()
     if op == "matte":
         from .matte_process import queue
@@ -42,6 +46,10 @@ def _request(self, op, **data):
         self._queue.append(request)
     already_active = self._active is not None
     self._pump()
+    if op == "render":
+        # At high zoom, the visible source tile responds to the same snapshot
+        # immediately; ordinary progress signals must not debounce it away.
+        self.requestDetail()
     if already_active and op != "render":
         # Queuing foreground work behind an active background task changes
         # busy/task state even though the worker cannot dispatch it yet.
@@ -63,7 +71,9 @@ def _start_warm(self):
     proxy_path = QUrl(self._original).toLocalFile()
     if not Path(proxy_path).is_file():
         return
-    self._stop_detail()
+    from .detail_tiles import release
+
+    release(self)
     interpreter = Path(sys.executable)
     if interpreter.name.lower() == "pythonw.exe":
         interpreter = interpreter.with_name("python.exe")
@@ -129,16 +139,21 @@ def _pump_pixel(self):
             str(interpreter), [str(ROOT / "run.py"), "--pixel-worker"]
         )
         return
-    if self._pixel_process.state() != QProcess.Running or _warm_running(self):
+    if self._pixel_process.state() != QProcess.Running:
         return
-    self._pixel_active = next(
+    next_request = next(
         (request for request in self._pixel_queue if request.get("priority") != "low"),
         self._pixel_queue[0],
     )
+    if _warm_running(self) and not (next_request.get("composition") and not next_request.get("jobs")):
+        return
+    self._pixel_active = next_request
     self._pixel_queue.remove(self._pixel_active)
     request = {
         **self._pixel_active,
         "proxy_path": QUrl(self._original).toLocalFile(),
+        "source_path": self._path,
+        "source_sha": self._sha,
     }
     self._pixel_process.write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
     self.changed.emit()
@@ -164,6 +179,19 @@ def _pixel_read(self):
             response = json.loads(line)
             active = self._pixel_active
             if not active or response.get("id") != active["id"]:
+                continue
+            if "progress" in response:
+                progress = response["progress"]
+                if (isinstance(progress, dict) and progress.get("kind") == "body"
+                        and type(progress.get("part")) is int and type(progress.get("total")) is int
+                        and 1 <= progress["part"] <= progress["total"] <= 4
+                        and response.get("generation") == self._generation
+                        and not active.get("cancelled") and active.get("priority") != "low"
+                        and any(job.get("mask_target") == "body_skin" for job in active.get("jobs", []))):
+                    self._status = f"正在按原图细节分割身体部位 {progress['part']}/{progress['total']}；全部完成后建立图层…"
+                    self.changed.emit()
+                # Progress is not a result: it cannot release the active job,
+                # publish a partial layer, or mark whole-photo SAM as ready.
                 continue
             self._pixel_active = None
             context = active.get("context", {})
@@ -221,7 +249,8 @@ def _pixel_read(self):
             elif (response["generation"] == self._generation or current_scene_cache) and not active.get("cancelled"):
                 from .pixel_selections import complete
 
-                self._warm_ready_sha = self._sha
+                if any(job.get("mask_target", "object") == "object" for job in active.get("jobs", [])) or context.get("purpose") == "warm":
+                    self._warm_ready_sha = self._sha
                 complete(self, response["result"], active["context"])
             elif context.get("purpose") != "precache":
                 self._status = "本次像素选区已取消或过期，原选区保留"
@@ -230,7 +259,12 @@ def _pixel_read(self):
             self._pump_pixel()
         except Exception as exc:
             self._pixel_active = None
-            self._notify("处理像素结果失败：" + str(exc), True)
+            if active and active.get("context", {}).get("auto_apply"):
+                from .pixel_selections import failed_result
+
+                failed_result(self, active["context"], exc)
+            else:
+                self._notify("处理像素结果失败：" + str(exc), True)
             self._pump_pixel()
 
 
@@ -352,6 +386,10 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
+            if op in ("repair_crop", "object_crop") and active.get("cancelled"):
+                self.changed.emit()
+                self._pump()
+                continue
             if not response["ok"]:
                 context = active.get("context", {})
                 if op == "segment" and context.get("purpose") in ("precache", "warm"):
@@ -429,6 +467,7 @@ def _read(self):
                 if op == "open" and self.hasImage:
                     self._schedule_render()
             elif op == "open":
+                self._last_render_metrics = {}
                 value = response["result"]
                 self._path, self._name, self._sha = (
                     value["path"],
@@ -440,6 +479,7 @@ def _read(self):
                 self._viewport.setSource(self._width, self._height)
                 self._original = QUrl.fromLocalFile(value["original"]).toString()
                 self._preview = self._original
+                self._preview_generation = -1
                 self._histogram = value["histogram"]
                 self._stats = value.get("stats")
                 self._recipe = Recipe().to_dict()
@@ -455,13 +495,23 @@ def _read(self):
                 self.imageOpened.emit()
                 self._schedule_render()
             elif op == "render":
-                if response["generation"] == self._generation:
+                from .preview_updates import accepts
+
+                if (accepts(self, response["generation"])
+                        and response["generation"] >= self._preview_generation):
                     value = response["result"]
                     self._preview = QUrl.fromLocalFile(value["preview"]).toString()
+                    self._preview_generation = response["generation"]
                     self._histogram = value["histogram"]
                     self._stats = value.get("stats", self._stats)
                     self._elapsed = value["elapsed_ms"]
-                    if "mask" in value:
+                    self._last_render_metrics = {
+                        "generation": response["generation"],
+                        "worker_elapsed_ms": value["elapsed_ms"],
+                        "stage_ms": value.get("stage_ms", {}),
+                        "cache_hit": value.get("cache_hit", False),
+                    }
+                    if "mask" in value and response["generation"] == self._generation:
                         self._mask_url = QUrl.fromLocalFile(value["mask"]).toString()
             elif op == "interpret":
                 if response["generation"] == self._generation:
@@ -492,6 +542,14 @@ def _read(self):
                 elif context.get("purpose") != "warm":
                     self._status = "本次像素选区已取消或过期，原选区保留"
                     self._notify("本次像素选区已取消或过期，未改变当前选区")
+            elif op == "repair_crop":
+                from .conversation import _repair_crop_ready
+
+                _repair_crop_ready(self, response["result"], active["context"], response["generation"])
+            elif op == "object_crop":
+                from .object_grounding import crop_ready
+
+                crop_ready(self, response["result"], active["context"], response["generation"])
             elif op == "matte":
                 if response["generation"] == self._generation and not active.get(
                     "cancelled"
@@ -519,7 +577,8 @@ def _read(self):
                     self._notify(
                         "；".join(warnings)
                         if warnings
-                        else "选区已生成，请检查边缘后输出到图层"
+                        else "选区已生成，请检查边缘后输出到图层",
+                        scope="draft",
                     )
             elif op == "export":
                 value = response["result"]

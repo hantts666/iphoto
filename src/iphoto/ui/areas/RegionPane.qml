@@ -24,7 +24,6 @@ ColumnLayout {
             }
         }
     }
-    TaskStatusBar { editor: regionRoot.editor; prefix: "region" }
     RefineControls { workspace: regionRoot.workspace; editor: regionRoot.editor; regionMode: true; prefix: "region" }
     Caption { text: "细化作用于当前选中的区域。创建图层后，可单独载入每层蒙版继续补选或擦除。"; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.bottomMargin: 12 }
 }

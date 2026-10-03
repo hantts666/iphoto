@@ -1,5 +1,6 @@
 """State-driven inspector: picked layer shows adjustments, otherwise the range module."""
 
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -138,4 +139,92 @@ def test_opacity_updates_keep_thumbnail_delegate_and_source(ui, monkeypatch):
     assert find(name) == thumbnail
     assert thumbnail.property("source") == source
     assert not calls
+    assert not warnings, warnings
+
+
+def click(window, item):
+    point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+    QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
+
+
+def test_thumbnail_review_primary_updates_original_layer_and_undo(ui):
+    editor, window, find, warnings = ui
+    editor.setParameter("exposure", 0.4)
+    editor.finishGesture()
+    wait_for(lambda: settled(editor))
+    lid = editor.activeLayerId
+    original = deepcopy(editor._layer())
+    count = len(editor.layers)
+
+    click(window, find("layerMaskThumb_" + lid))
+    wait_for(lambda: editor.hasSelectionDraft and settled(editor))
+    editor.drawDraft("rect", "subtract", [[0.05, 0.05], [0.4, 0.5]], 0)
+    wait_for(lambda: settled(editor))
+    primary = find("selectionToLayerButton")
+    wait_for(lambda: primary.property("enabled"))
+    assert primary.property("text") == "保存范围修改"
+    assert original["name"] in find("draftStateCaption").property("text")
+    assert original["name"] in find("editingContextLabel").property("text")
+    revised = deepcopy(editor._candidate)
+    click(window, primary)
+    wait_for(lambda: not editor.hasSelectionDraft and settled(editor))
+
+    assert len(editor.layers) == count
+    assert editor.activeLayerId == lid
+    assert editor._layer()["mask"] == revised
+    assert editor._layer()["recipe"] == original["recipe"]
+    assert editor.selection.pickedLayerId == lid
+    assert find("parameter_exposure").property("visible")
+    editor.undo()
+    wait_for(lambda: settled(editor))
+    assert editor._layer() == original
+    assert not warnings, warnings
+
+
+def test_thumbnail_review_cancel_returns_to_original_adjustments(ui):
+    editor, window, find, warnings = ui
+    original = deepcopy(editor._layer())
+    click(window, find("layerMaskThumb_" + editor.activeLayerId))
+    wait_for(lambda: editor.hasSelectionDraft and settled(editor))
+    editor.draftAction("clear")
+    wait_for(lambda: settled(editor))
+    cancel = find("discardSelectionButton")
+    assert cancel.property("text") == "取消修改"
+    click(window, cancel)
+    wait_for(lambda: not editor.hasSelectionDraft and settled(editor))
+    assert editor._layer() == original
+    assert editor.selection.pickedLayerId == original["id"]
+    assert find("parameter_exposure").property("visible")
+    assert not warnings, warnings
+
+
+def test_new_range_primary_still_creates_adjustment(ui):
+    editor, window, find, warnings = ui
+    count = len(editor.layers)
+    editor.drawDraft("rect", "replace", [[0.2, 0.2], [0.8, 0.8]], 0)
+    primary = find("selectionToLayerButton")
+    wait_for(lambda: primary.property("enabled"))
+    assert primary.property("text") == "开始调整此范围"
+    click(window, primary)
+    wait_for(lambda: not editor.hasSelectionDraft and settled(editor))
+    assert len(editor.layers) == count + 1
+    assert find("parameter_exposure").property("visible")
+    assert not warnings, warnings
+
+
+def test_review_can_explicitly_create_another_layer(ui):
+    editor, window, find, warnings = ui
+    original = deepcopy(editor._layer())
+    click(window, find("layerMaskThumb_" + editor.activeLayerId))
+    wait_for(lambda: editor.hasSelectionDraft and settled(editor))
+    click(window, find("moreOutputButton"))
+    other = find("acceptSelectionButton")
+    wait_for(lambda: other.property("visible") and other.property("enabled"))
+    assert other.property("text") == "另建调整层"
+    click(window, other)
+    wait_for(lambda: not editor.hasSelectionDraft and settled(editor))
+    assert len(editor.layers) == 2
+    assert editor._layers[0] == original
+    assert editor.activeLayerId != original["id"]
+    assert not editor.selection.editingLayerMask
     assert not warnings, warnings
