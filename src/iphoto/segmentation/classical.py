@@ -1,6 +1,7 @@
 """Classical color segmentation and single-subject compatibility backends."""
 
 from pathlib import Path
+from copy import deepcopy
 import numpy as np
 from PIL import Image, ImageChops
 from ..document import empty_mask, raster_mask, raster_mask_cached
@@ -83,6 +84,9 @@ def refine(image, mask):
         cv.GC_INIT_WITH_MASK,
     )
     selected = (labels == cv.GC_FGD) | (labels == cv.GC_PR_FGD)
+    semantic = not mask['inverted'] and mask.get('semantic_target') in ('face','face_skin','body_skin')
+    if semantic:
+        selected &= hard
     overlap = float(
         np.logical_and(selected, hard).sum()
         / max(1, np.logical_or(selected, hard).sum())
@@ -92,7 +96,16 @@ def refine(image, mask):
     result = bitmap_mask(
         Image.fromarray(selected.astype(np.uint8) * 255), "边缘优化选区"
     )
+    if semantic:
+        alpha = Image.fromarray(selected.astype(np.uint8)*255).resize(image.size,Image.Resampling.NEAREST)
+        support = raster_mask(mask,image.size).point(lambda value:255 if value else 0)
+        alpha = ImageChops.multiply(alpha,support)
+        result['bitmap'] = encode_bitmap(alpha,sampling='alpha',preserve_resolution=True)
     result["feather"] = mask["feather"]
+    if semantic:
+        for key in ('semantic_target','face_binding'):
+            if key in mask:
+                result[key] = deepcopy(mask[key])
     return result, {
         **assess(result),
         "overlap": round(overlap, 3),

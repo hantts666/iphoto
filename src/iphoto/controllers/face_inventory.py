@@ -52,6 +52,29 @@ def choices(editor):
     return result
 
 
+def binding(editor, face):
+    return {'face_id':face['id'],'source_sha256':editor._sha}
+
+
+def retouch_layer(editor, face):
+    """Prefer the chosen face layer; a name is not its persistent identity."""
+    expected = binding(editor,face)
+    label = face['mask']['label']+' · 面部皮肤'
+    layers = [editor._layer(),*reversed(editor._layers)]
+    for layer in layers:
+        mask = layer['mask']
+        if (layer['kind']!='adjustment' or layer.get('inpaint') or layer.get('heal')
+                or mask.get('semantic_target')!='face_skin' or mask['inverted']):
+            continue
+        if mask.get('face_binding')==expected:
+            return layer
+        # Legacy masks have a precise full-skin label. Do not infer identity
+        # from an arbitrary layer name, partial patch or stale binding.
+        if 'face_binding' not in mask and mask['label']==label:
+            return layer
+    return None
+
+
 def grounding_context(editor, anchor):
     """A unique face containing a point can guide a second visual lookup.
 

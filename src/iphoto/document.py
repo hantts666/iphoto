@@ -81,6 +81,15 @@ def validate_mask(mask, *, cache_bitmap=False):
     number(mask.get("feather"), 0, 0.05)
     if "semantic_target" in mask and mask["semantic_target"] not in ("face", "face_skin", "body_skin"):
         raise ValueError("选区语义目标无效")
+    binding = mask.get('face_binding')
+    if binding is not None:
+        if (not isinstance(binding,dict) or set(binding)!={'face_id','source_sha256'}
+                or not isinstance(binding['face_id'],str) or not 1<=len(binding['face_id'])<=64
+                or not isinstance(binding['source_sha256'],str)
+                or not re.fullmatch(r'[0-9a-fA-F]{64}',binding['source_sha256'])
+                or mask.get('semantic_target') not in ('face','face_skin')):
+            raise ValueError('人脸关联信息无效')
+        binding = {'face_id':binding['face_id'],'source_sha256':binding['source_sha256'].lower()}
     shift = mask.get("edge_shift", 0)
     if isinstance(shift, bool) or not isinstance(shift, int) or not -5 <= shift <= 5:
         raise ValueError("边缘位移应为 -5～5 的整数（短边百分比）")
@@ -128,6 +137,7 @@ def validate_mask(mask, *, cache_bitmap=False):
         "inverted": mask["inverted"],
         "label": mask["label"],
         **({"semantic_target":mask["semantic_target"]} if "semantic_target" in mask else {}),
+        **({'face_binding':binding} if binding is not None else {}),
         **({"bitmap": validate_bitmap(mask["bitmap"], cache_decoded=cache_bitmap)} if "bitmap" in mask else {}),
         "feather": float(mask["feather"]),
         **({"edge_shift": mask["edge_shift"]} if mask.get("edge_shift") else {}),

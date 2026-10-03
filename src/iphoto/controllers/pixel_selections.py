@@ -197,7 +197,7 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
         return start(self, jobs, context)
 
 
-def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None, face_hint=None, face_scope="full", face_context=None, face_part="all"):
+def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, origin=None, mask_target="object", crop=None, recover_face_anchor=False, features=None, face_hint=None, face_scope="full", face_context=None, face_part="all", face_binding=None):
     return start(
         self,
         [{"id": "target", "hint": hint, "points": [[*anchor, 1]] if anchor else [],"mask_target":mask_target,
@@ -210,6 +210,7 @@ def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, o
         {"purpose": "hint", "hint": deepcopy(hint), "summary": summary,
          "detail_grounded_ids": ["target"] if detail_grounded else [],
          **({"face_hint": deepcopy(face_hint), "source_sha": self._sha} if face_hint else {}),
+         **({'face_binding':deepcopy(face_binding)} if face_binding else {}),
          **({"origin": deepcopy(origin)} if origin else {})},
     )
 
@@ -344,6 +345,10 @@ def failed_result(self, context, error):
 
 def complete(self, result, context):
     purpose = context["purpose"]
+    bindings = ([context['face_binding']] if context.get('face_binding') else [])
+    bindings += [region['face_binding'] for region in context.get('regions',[]) if region.get('face_binding')]
+    if any(binding['source_sha256']!=self._sha for binding in bindings):
+        raise ValueError('照片已更新，本次人脸范围未应用')
     if context.get("face_hint") and context.get("source_sha") != self._sha:
         raise ValueError("照片已更新，本次人脸范围未应用")
     auto_apply = bool(context.get("auto_apply")) and purpose in ("objects", "regions")
@@ -422,6 +427,8 @@ def complete(self, result, context):
         for i, region in enumerate(context["regions"]):
             layer = new_layer(region["name"])
             layer.update(mask=items[str(i)]["mask"], recipe=region["recipe"])
+            if region.get('face_binding') and layer['mask'].get('semantic_target') in ('face','face_skin'):
+                layer['mask'] = validate_mask({**layer['mask'],'face_binding':region['face_binding']})
             if "bitmap" not in layer["mask"]:
                 raise ValueError("分区像素蒙版不完整，已有图层与范围保留")
             layers.append(layer)
@@ -435,12 +442,18 @@ def complete(self, result, context):
             self._mark_dirty()
             self._schedule_render()
     else:
-        self._set_candidate(items["target"]["mask"])
-        if context.get("face_hint") and items["target"]["mask"].get("semantic_target") == "face":
+        candidate = validate_mask(items["target"]["mask"])
+        lid = None
+        if context.get('face_binding') and candidate.get('semantic_target') in ('face','face_skin'):
+            candidate = validate_mask({**candidate,'face_binding':context['face_binding']})
+        if context.get("face_hint") and candidate.get("semantic_target") == "face":
             lid = self._scene.add_face(context["face_hint"])
             if lid:
-                self._scene.set_precise(lid, items["target"]["mask"], items["target"]["quality"])
-                self._scene.remember(self._scene_key())
+                candidate = validate_mask({**candidate,'face_binding':{'face_id':lid,'source_sha256':self._sha}})
+        self._set_candidate(candidate)
+        if lid:
+            self._scene.set_precise(lid, candidate, items["target"]["quality"])
+            self._scene.remember(self._scene_key())
         # Retain the first result as a spatial prior: on this lightweight
         # model an unconstrained second click can otherwise switch instances.
         self._pixel_hint = deepcopy(context.get("hint") or items["target"]["mask"])

@@ -641,6 +641,8 @@ def _cloud_plan(self, result, generation):
                               skin_crop=list(face['skin_crop']),recover_face_anchor=True)
                 if partial:
                     region['face_context'] = deepcopy(face['mask'])
+                else:
+                    region['face_binding'] = face_inventory.binding(self,face)
                 if 'face_features' in face:
                     region['face_features'] = deepcopy(face['face_features'])
         skin_indices = [i for i, r in enumerate(result["regions"])
@@ -721,6 +723,7 @@ def _cloud_plan(self, result, generation):
             face['anchor'] if face else result.get("anchor"),mask_target=target,
             crop=face['skin_crop'] if face else None,recover_face_anchor=bool(face),
             features=face.get('face_features') if face else None, face_hint=face_hint,
+            face_binding=face_inventory.binding(self,face) if face and not partial else None,
             face_scope=scope, face_context=face['mask'] if face and partial else None,
             face_part=result.get('face_part','all')
         )

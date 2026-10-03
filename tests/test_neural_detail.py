@@ -93,7 +93,8 @@ def test_invalid_or_conflicting_edge_anchors_fail_before_model_inference(points,
 def test_face_protected_holes_cannot_be_filled_by_neural_or_classic_edge_refinement(monkeypatch):
     from iphoto.matting import service as matte_service
     seed=np.zeros((64,96),np.uint8);seed[10:54,10:86]=255;seed[28:33,45:50]=0
-    mask={**bitmap(seed),'semantic_target':'face_skin'}
+    binding={'face_id':'local-face-1','source_sha256':'a'*64}
+    mask={**bitmap(seed),'semantic_target':'face_skin','face_binding':binding}
     monkeypatch.setattr(neural,'backend',lambda:ColorEngine())
     guides=[]
     def classic(image,guide,**kwargs):
@@ -104,7 +105,39 @@ def test_face_protected_holes_cannot_be_filled_by_neural_or_classic_edge_refinem
                      matte_service.refine_alpha(Image.new('RGB',(96,64),'gray'),mask,8)):
         alpha=np.array(raster_mask(result,(96,64)))
         assert not alpha[seed==0].any() and result['semantic_target']=='face_skin'
+        assert result['face_binding']==binding and result['face_binding'] is not binding
     assert not guides[0][seed==0].any()
+
+
+def test_inverted_face_refinement_does_not_bind_the_background_to_a_face(monkeypatch):
+    from iphoto.matting import service as matte_service
+    seed=np.zeros((64,96),np.uint8);seed[10:54,10:86]=255
+    mask={**bitmap(seed),'semantic_target':'face_skin','inverted':True,
+          'face_binding':{'face_id':'local-face-1','source_sha256':'a'*64}}
+    monkeypatch.setattr(neural,'backend',lambda:ColorEngine())
+    monkeypatch.setattr(matte_service,'solve_alpha',lambda image,guide,**kwargs:(np.rint(guide*255).astype(np.uint8),1))
+    for result,_ in (neural.refine(Image.new('RGB',(96,64),'gray'),mask,8),
+                     matte_service.refine_alpha(Image.new('RGB',(96,64),'gray'),mask,8)):
+        assert 'semantic_target' not in result and 'face_binding' not in result
+
+
+def test_classical_refinement_preserves_native_face_holes_and_binding(monkeypatch):
+    from iphoto.segmentation import classical
+    # A source-pixel exclusion that disappears when reduced to the 1280px proxy.
+    seed=np.zeros((1600,2000),np.uint8);seed[200:1400,200:1800]=255;seed[801,1001]=0
+    binding={'face_id':'local-face-1','source_sha256':'a'*64}
+    mask={**bitmap(seed),'semantic_target':'face_skin','face_binding':binding}
+    original=deepcopy(mask)
+    cv=classical._cv()
+    def broad_foreground(image,labels,*args):
+        labels[:]=cv.GC_FGD
+    monkeypatch.setattr(cv,'grabCut',broad_foreground)
+    result,_=classical.refine(Image.new('RGB',(2000,1600),'gray'),mask)
+    alpha=np.array(raster_mask(result,(2000,1600)))
+    assert not alpha[seed==0].any() and alpha[800,1000]>0
+    assert result['bitmap']['width']==2000 and result['bitmap']['height']==1600
+    assert result['semantic_target']=='face_skin' and result['face_binding']==binding
+    assert result['face_binding'] is not binding and mask==original
 
 
 @pytest.mark.parametrize("bad",[np.zeros((10,10),np.float32),np.ones((10,10),np.uint8),np.zeros((8,8),np.uint8)])

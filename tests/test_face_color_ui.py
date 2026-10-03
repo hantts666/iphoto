@@ -55,6 +55,13 @@ def test_face_shortcut_reuses_layer_and_rejects_a_stale_face_id(canvas,pixel_pro
     assert e.activeLayerId==lid and len(e._layers)==len(before) and e.parameters['skin_smoothing']==35
     assert e.parameters['hsl_orange_saturation']==5 and e._cursor==cursor+1
     e.undo();wait_for(lambda:settled(e));assert e._layers==before
+    # Upgrading an old mask is a document edit even if smoothing is unchanged.
+    cursor=e._cursor
+    e.selection.retouchFace('local-face-1','smooth');wait_for(lambda:settled(e))
+    assert e.activeLayerId==lid and e._cursor==cursor+1
+    assert e._layer()['mask']['face_binding']=={'face_id':'local-face-1','source_sha256':e._sha}
+    assert e.parameters==before[-1]['recipe']
+    e.undo();wait_for(lambda:settled(e));assert e._layers==before
     e._face_hints=[]
     e.selection.retouchFace('local-face-1','refine')
     assert e._layers==before

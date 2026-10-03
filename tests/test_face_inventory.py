@@ -154,6 +154,14 @@ def test_direct_text_only_remembers_a_successful_full_face_and_reopens_it(canvas
     assert bool(e.selection.faces) == (target == "face")
     if target == "face":
         assert e._scene.precise["direct-face-1"]["mask"]["semantic_target"] == "face"
+        expected_binding={'face_id':'direct-face-1','source_sha256':e._sha}
+        assert e._candidate['face_binding']==expected_binding
+        assert e._draft_history[e._draft_cursor]['face_binding']==expected_binding
+        e.drawDraft('brush','subtract',[[.3,.3]],.02)
+        assert e._candidate['face_binding']==expected_binding
+        wait_for(lambda:settled(e))
+        e.undo();wait_for(lambda:settled(e))
+        assert e._candidate['face_binding']==expected_binding and not e._candidate['ops']
         e.selection.discard(); wait_for(lambda:settled(e))
         project = tmp_path/"direct.iphoto"; e.saveProject(str(project))
         # Prevent the explicit routing fixture from handling unrelated precache jobs.
