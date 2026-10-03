@@ -1,4 +1,4 @@
-"""Verified YuNet localization; detection boxes are hints, not final masks."""
+"""Verified neural localization; detection boxes are hints, not final masks."""
 from hashlib import sha256
 from importlib.util import find_spec
 from pathlib import Path
@@ -139,6 +139,14 @@ def detect(image, *, engine=None, retry_rotated=True):
             if matches:
                 hints = matches
                 break
+    if not hints and native_engine and retry_rotated:
+        from . import retinaface
+        if retinaface.available():
+            # Supplement a complete miss only. Existing successful YuNet
+            # geometry and its saved face identities keep the same behavior.
+            hints = detect(proxy,engine=retinaface.backend(),retry_rotated=False)
+            for hint in hints:
+                hint['detection_model'] = 'RetinaFace MobileNet0.25'
     hints.sort(key=lambda h:(h["anchor"][0],h["anchor"][1]))
     for index,hint in enumerate(hints,1):
         hint.update(id=f"local-face-{index}",name=f"人脸 {index}")

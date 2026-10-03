@@ -35,15 +35,17 @@ AI 分区使用 `mask_target=face_skin` 指定单个人脸，独立像素进程�
 
 `mask_target=face` 选择包含五官的完整面部，排除颈部、头发、帽子和衣物；`face_skin` 只保留皮肤、鼻子与连通的耳部。模型误分类仍可能发生，尤其在帽檐与侧脸处。由本地检测器定位时，若鼻部定位点落在遮挡物上，只允许使用检测框内模型实际识别到的可见鼻部恢复定位；无法找到时保留旧范围。语义蒙版记录目标类型，后续 AI/经典修边都保护已有零覆盖度，避免重新填入五官孔洞。
 
-皮肤范围还参考 YuNet 的眼睛与嘴角定位，为分区模型误判的五官增加局部保护。只使用落在合理面部类别上的可见定位点；落在帽子、鼻子或背景的眼部猜测不扩展为保护孔洞。完整人脸模式不使用这些孔洞。局部保护采用保守椭圆，可能连带少量邻近皮肤，不能等同于五官级真值。
+皮肤范围还参考人脸检测器的眼睛与嘴角定位，为分区模型误判的五官增加局部保护。只使用落在合理面部类别上的可见定位点；落在帽子、鼻子或背景的眼部猜测不扩展为保护孔洞。完整人脸模式不使用这些孔洞。局部保护采用保守椭圆，可能连带少量邻近皮肤，不能等同于五官级真值。
 
-## 人脸检测 · YuNet
+## 人脸检测 · YuNet 与 RetinaFace
 
-显式运行 `.venv\Scripts\python.exe scripts/setup_face_detection.py`。应用本身不下载权重。
+显式运行 `.venv\Scripts\python.exe scripts/setup_face_detection.py`，安装并校验以下两个模型。已有YuNet环境可以再次运行，安装侧脸补充；应用本身不下载权重。
 
 固定 [OpenCV Zoo 作者模型](https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet)，文件 `models/face-detection/face_detection_yunet_2023mar.onnx`，232,589 字节，SHA256 `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`；下载和加载均核对大小/摘要，保留 [MIT 许可](../docs/licenses/YuNet-MIT.txt)。当前使用 OpenCV 4 的模型及输入缓冲接口，避免中文路径问题。
 
-打开照片在图像进程上做最长边1280px的本地检测，阈值0.8，最多16个人脸；没有可靠结果时尝试±30°旋转输入，将定位映射回原图。检测框只是身份与裁切上下文，最终面部范围由 BiSeNet 计算，整个人脸和皮肤分别输出原尺寸蒙版。没有检测结果时不会生成占位矩形冒充精准选区，侧脸可继续用云端文字定位，背向不可见的脸不应被生成。
+侧脸补充使用[作者 RetinaFace MobileNet0.25 ONNX](https://github.com/yakhyo/retinaface-pytorch/releases/tag/v0.0.1)，文件 `models/face-detection/retinaface_mv1_0.25.onnx`，1,736,694字节，固定SHA256 `b7a7acab55e104dce6f32cdfff929bd83946da5cd869b9e2e9bdffafd1b7e4a5`。预处理、先验与解码依据[作者代码修订](https://github.com/yakhyo/retinaface-pytorch/tree/4cd6e3471e5bac794637290a530566f463db4762)，保留[MIT许可](../docs/licenses/RetinaFace-MIT.txt)。CPU ONNX Runtime，最多四个推理线程，首次使用才加载，不增加Torch依赖；安装和首次加载均校验摘要。
+
+打开照片在图像进程上做最长边1280px的本地检测，阈值0.8，最多16个人脸；YuNet没有可靠结果时尝试±30°旋转输入，将定位映射回原图。这三次均无脸时才运行已配置的RetinaFace补充，保留既有成功定位与身份。没有配置补充时沿用原流程。检测框只是身份与裁切上下文，最终面部范围由 BiSeNet 计算，整个人脸和皮肤分别输出原尺寸蒙版。没有检测结果时不会生成占位矩形冒充精准选区，侧脸可继续用云端文字定位，背向不可见的脸不应被生成。当前补充针对全部漏检，尚未覆盖多人照片只漏检部分脸的情况。
 
 ## 身体裸露部位 · EfficientSAM 原图局部
 
