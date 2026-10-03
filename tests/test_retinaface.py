@@ -94,24 +94,92 @@ def test_fallback_only_after_native_and_both_rotated_misses(monkeypatch):
     assert result[0]['id']=='local-face-1' and result[0]['anchor']==[.2,.2]
 
 
-@pytest.mark.parametrize('mode',('native_success','explicit_engine','rotation_disabled','unconfigured'))
-def test_fallback_does_not_change_existing_success_or_explicit_engine(monkeypatch,mode):
+@pytest.mark.parametrize('mode',('explicit_engine','unconfigured'))
+def test_supplement_does_not_run_with_explicit_engine_or_unconfigured_model(monkeypatch,mode):
     calls=[]
-    primary=engine(face_row() if mode=='native_success' else None,calls)
+    primary=engine(None,calls)
     monkeypatch.setattr(face_detection,'_backend',primary)
     monkeypatch.setattr(retinaface,'available',lambda:mode!='unconfigured')
-    def unexpected():raise AssertionError('Supplement should not run')
+    supplement_calls=[]
+    def unexpected():supplement_calls.append(True);raise AssertionError('Supplement should not run')
     monkeypatch.setattr(retinaface,'backend',unexpected)
-    result=face_detection.detect(Image.new('RGB',(1000,1000)),engine=primary if mode=='explicit_engine' else None,retry_rotated=mode!='rotation_disabled')
-    assert len(result)==(1 if mode=='native_success' else 0)
-    if result:assert 'detection_model' not in result[0]
+    result=face_detection.detect(Image.new('RGB',(1000,1000)),engine=primary if mode=='explicit_engine' else None)
+    assert result==[] and supplement_calls==[]
 
 
-def test_rotated_success_keeps_rotation_context_without_supplement(monkeypatch):
+def test_rotated_success_keeps_rotation_context_while_supplement_checks_for_more(monkeypatch):
     calls=[]
     primary=SimpleNamespace(setInputSize=lambda size:calls.append(size),detect=lambda pixels:(True,None if len(calls)==1 else face_row()))
     monkeypatch.setattr(face_detection,'_backend',primary)
-    def unexpected():raise AssertionError('Rotation already found the face')
-    monkeypatch.setattr(retinaface,'available',unexpected)
+    supplementary=[]
+    monkeypatch.setattr(retinaface,'available',lambda:True)
+    monkeypatch.setattr(retinaface,'backend',lambda:engine(None,supplementary))
     result=face_detection.detect(Image.new('RGB',(1000,1000)))
-    assert len(calls)==2 and result[0]['detection_rotation']==-30
+    assert len(calls)==2 and len(supplementary)==1 and result[0]['detection_rotation']==-30
+
+
+def test_supplement_keeps_existing_geometry_and_id_when_new_face_is_to_its_left(monkeypatch):
+    primary=face_row();primary[0,[0,4,6,8,10,12]]+=400
+    existing=face_detection.detect(Image.new('RGB',(1000,1000)),engine=engine(primary,[]))
+    repeated=primary.copy();repeated[0,0]-=10;repeated[0,2]+=20;repeated[0,-1]=.999
+    calls=[]
+    monkeypatch.setattr(face_detection,'_backend',engine(primary,[]))
+    monkeypatch.setattr(retinaface,'available',lambda:True)
+    monkeypatch.setattr(retinaface,'backend',lambda:engine(np.concatenate([repeated,face_row()]),calls))
+    result=face_detection.detect(Image.new('RGB',(1000,1000)))
+    assert len(result)==2 and len(calls)==1 and result[0]==existing[0]
+    assert result[1]['id']=='local-face-2' and result[1]['anchor']==[.2,.2]
+
+
+@pytest.mark.parametrize('has_primary',(False,True))
+def test_supplement_failure_keeps_existing_faces_and_reports_it(monkeypatch,has_primary):
+    primary=face_row() if has_primary else None
+    expected=face_detection.detect(Image.new('RGB',(1000,1000)),engine=engine(primary,[]))
+    monkeypatch.setattr(face_detection,'_backend',engine(primary,[]))
+    monkeypatch.setattr(retinaface,'available',lambda:True)
+    def failure():raise ValueError('corrupt supplemental model')
+    monkeypatch.setattr(retinaface,'backend',failure)
+    warnings=[]
+    assert face_detection.detect(Image.new('RGB',(1000,1000)),warnings=warnings)==expected
+    assert len(warnings)==1 and '未完成' in warnings[0]
+
+
+def test_overlapping_boxes_with_separate_noses_are_not_the_same_identity():
+    image=Image.new('RGB',(1000,1000));first=face_row();second=first.copy()
+    first[0,8]=125;second[0,0]+=40;second[0,8]=330
+    faces=[face_detection.detect(image,engine=engine(rows,[]))[0] for rows in (first,second)]
+    assert not face_detection._same_face(*faces)
+
+
+def test_inner_face_box_with_nearby_nose_is_deduplicated():
+    image=Image.new('RGB',(1000,1000));first=face_row();second=first.copy()
+    second[0,:4]=[150,150,100,100]
+    faces=[face_detection.detect(image,engine=engine(rows,[]))[0] for rows in (first,second)]
+    assert face_detection._same_face(*faces)
+
+
+def test_primary_face_limit_skips_an_unnecessary_supplement(monkeypatch):
+    rows=np.tile(face_row(),(16,1));rows[:,0]=np.arange(16)*40
+    rows[:,4:14:2]+=np.arange(16)[:,None]*40-100
+    monkeypatch.setattr(face_detection,'_backend',engine(rows,[]))
+    calls=[]
+    monkeypatch.setattr(retinaface,'available',lambda:calls.append(True) or True)
+    result=face_detection.detect(Image.new('RGB',(1000,1000)))
+    assert len(result)==16 and calls==[]
+
+
+def test_supplement_is_capped_without_discarding_primary_identity(monkeypatch):
+    primary=face_row();primary[0,[0,4,6,8,10,12]]+=600
+    expected=face_detection.detect(Image.new('RGB',(1000,1000)),engine=engine(primary,[]))[0]
+    rows=[]
+    for index in range(16):
+        x=40+(index%4)*160;y=40+(index//4)*220
+        rows.append([x,y,20,20,x+5,y+5,x+15,y+5,x+10,y+10,x+7,y+15,x+13,y+15,.8+index*.01])
+    candidates=np.array(rows,np.float32)
+    monkeypatch.setattr(face_detection,'_backend',engine(primary,[]))
+    monkeypatch.setattr(retinaface,'available',lambda:True)
+    monkeypatch.setattr(retinaface,'backend',lambda:engine(candidates,[]))
+    result=face_detection.detect(Image.new('RGB',(1000,1000)))
+    assert len(result)==16 and result[0]==expected
+    assert [f['id'] for f in result]==[f'local-face-{i}' for i in range(1,17)]
+    assert all(f['anchor']!=[.05,.05] for f in result[1:])

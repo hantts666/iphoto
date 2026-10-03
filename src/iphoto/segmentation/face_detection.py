@@ -71,7 +71,23 @@ def verified_path():
     return path
 
 
-def detect(image, *, engine=None, retry_rotated=True):
+def _same_face(first, second):
+    """Overlapping face boxes need a nearby nose before merging identities."""
+    bounds = []
+    for hint in (first,second):
+        points = np.asarray(hint['mask']['ops'][0]['points'])
+        bounds.append((points.min(0),points.max(0)))
+    (left, right), (other_left, other_right) = bounds
+    sizes = np.array([right-left,other_right-other_left])
+    overlap = np.maximum(np.minimum(right,other_right)-np.maximum(left,other_left),0).prod()
+    areas = sizes.prod(1)
+    iou = overlap / max(areas.sum()-overlap,1e-10)
+    containment = overlap / max(areas.min(),1e-10)
+    distance = np.linalg.norm((np.array(first['anchor'])-second['anchor']) / np.maximum(sizes.min(0),1e-10))
+    return (iou > .4 or containment >= .8) and distance <= .5
+
+
+def detect(image, *, engine=None, retry_rotated=True, warnings=None):
     """A bounded 1280px neural pass, normalized back to the photograph."""
     global _backend
     import cv2
@@ -139,15 +155,28 @@ def detect(image, *, engine=None, retry_rotated=True):
             if matches:
                 hints = matches
                 break
-    if not hints and native_engine and retry_rotated:
-        from . import retinaface
-        if retinaface.available():
-            # Supplement a complete miss only. Existing successful YuNet
-            # geometry and its saved face identities keep the same behavior.
-            hints = detect(proxy,engine=retinaface.backend(),retry_rotated=False)
-            for hint in hints:
-                hint['detection_model'] = 'RetinaFace MobileNet0.25'
     hints.sort(key=lambda h:(h["anchor"][0],h["anchor"][1]))
+    if native_engine and len(hints) < 16:
+        from . import retinaface
+        try:
+            if retinaface.available():
+                candidates = detect(proxy,engine=retinaface.backend(),retry_rotated=False)
+                extra = []
+                for hint in sorted(candidates,key=lambda h:h['detection_score'],reverse=True):
+                    if any(_same_face(hint,known) for known in hints+extra):
+                        continue
+                    hint['detection_model'] = 'RetinaFace MobileNet0.25'
+                    extra.append(hint)
+                    if len(hints)+len(extra) == 16:
+                        break
+                # Keep primary geometry, order and IDs. Supplementary faces
+                # receive new IDs even when they appear to its left or above.
+                hints.extend(sorted(extra,key=lambda h:(h['anchor'][0],h['anchor'][1])))
+        except Exception:
+            # An optional model cannot discard another model's valid faces.
+            if warnings is not None:
+                warnings.append('补充人脸检测未完成，已保留现有定位；可用文字继续选择' if hints else
+                                '本地补充人脸检测未完成，可用文字定位或框选人脸')
     for index,hint in enumerate(hints,1):
         hint.update(id=f"local-face-{index}",name=f"人脸 {index}")
         hint["mask"]["label"]=hint["name"]

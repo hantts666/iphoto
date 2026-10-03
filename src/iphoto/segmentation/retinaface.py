@@ -1,4 +1,4 @@
-"""Pinned RetinaFace MobileNet0.25 fallback, without a PyTorch dependency.
+"""Pinned RetinaFace MobileNet0.25 supplement, without a PyTorch dependency.
 
 Preprocessing, priors and decode follow yakhyo/retinaface-pytorch (MIT).
 See docs/licenses/RetinaFace-MIT.txt. Boxes remain localization hints.

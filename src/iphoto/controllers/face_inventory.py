@@ -30,6 +30,28 @@ def spatial_context(editor):
             for face in current(editor)]
 
 
+def choices(editor):
+    """Locate a face in the menu without renaming its saved identity or layer."""
+    faces = current(editor)
+    if len(faces) < 2:
+        return [{"id":face["id"],"name":face["name"]} for face in faces]
+    points = [face['anchor'] for face in faces]
+    width = (max(p[0] for p in points)-min(p[0] for p in points))*getattr(editor,'_width',1)
+    height = (max(p[1] for p in points)-min(p[1] for p in points))*getattr(editor,'_height',1)
+    axis = 0 if width >= height else 1
+    order = sorted(range(len(faces)),key=lambda i:(points[i][axis],faces[i]['id']))
+    ranks = {index:rank for rank,index in enumerate(order)}
+    result = []
+    for index,face in enumerate(faces):
+        rank = ranks[index]
+        if len(faces)==2:
+            position = ('左侧','右侧')[rank] if axis==0 else ('上方','下方')[rank]
+        else:
+            position = f"从{'左' if axis==0 else '上'}第{rank+1}张"
+        result.append({'id':face['id'],'name':face['name']+' · '+position})
+    return result
+
+
 def grounding_context(editor, anchor):
     """A unique face containing a point can guide a second visual lookup.
 

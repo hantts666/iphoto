@@ -51,6 +51,27 @@ def test_common_faces_only_offer_full_faces_with_anchors_and_keep_local_geometry
     assert face_inventory.current(e) == []
 
 
+def test_face_menu_positions_use_image_geometry_without_renaming_saved_faces():
+    upper=face('local-face-1',.2);lower=face('local-face-2',.3)
+    lower['anchor'][1]=.75
+    e=owner([upper,lower]);e._width=500;e._height=1500
+    before=deepcopy(e._face_hints)
+    assert face_inventory.choices(e)==[{'id':'local-face-1','name':'local-face-1 · 上方'},
+                                     {'id':'local-face-2','name':'local-face-2 · 下方'}]
+    e._width=5000;e._height=500
+    assert [f['name'] for f in face_inventory.choices(e)]==['local-face-1 · 左侧','local-face-2 · 右侧']
+    assert e._face_hints==before
+    e._face_hints=[upper]
+    assert face_inventory.choices(e)==[{'id':'local-face-1','name':'local-face-1'}]
+
+
+def test_more_face_menu_choices_keep_ids_and_describe_spatial_rank():
+    e=owner([face('first',.6),face('second',.1),face('third',.35)])
+    assert face_inventory.choices(e)==[{'id':'first','name':'first · 从左第3张'},
+                                     {'id':'second','name':'second · 从左第1张'},
+                                     {'id':'third','name':'third · 从左第2张'}]
+
+
 def test_appending_face_preserves_existing_native_masks_checks_hits_and_queued_revision():
     e = owner(objects=[{**face("tree", .65), "mask_target": "object"}])
     scene = e._scene

@@ -667,8 +667,8 @@ class SelectionController(QObject):
 
     @Property("QVariantList",notify=changed)
     def faces(self):
-        from .face_inventory import current
-        return [{"id":f["id"],"name":f["name"]} for f in current(self._editor)]
+        from .face_inventory import choices
+        return choices(self._editor)
 
     @Slot(str,bool)
     def selectFace(self,lid,skin=False):

@@ -95,7 +95,10 @@ def main():
         result["faces"] = []
         if faces_available():
             try:
-                result["faces"] = detect(next_proxy)
+                detection_warnings = []
+                result["faces"] = detect(next_proxy,warnings=detection_warnings)
+                if detection_warnings:
+                    result["face_detection_warning"] = detection_warnings[0]
             except Exception:
                 # Optional localization cannot prevent opening a photograph.
                 result["face_detection_warning"] = "本地人脸检测未完成，可使用文字定位或框选人脸"
