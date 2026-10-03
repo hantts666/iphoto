@@ -140,6 +140,10 @@ ConversationPane的descriptionInput使用TextArea和独立ScrollView，自动换
 
 `ConversationPane.followEnd` 表示跟随最新消息的用户意图，只由滚轮、拖动、滚动条、发送和“新消息”按钮改变。消息换行、虚拟委托高度估计和进度条显隐造成的 `contentY` 变化不能关闭跟随；跟随期间高度变化会延后执行 `forceLayout + positionViewAtEnd`，避免根据估计的 `contentHeight` 手工定位末尾。用户向上翻阅后保留位置并显示未读数，主动发送会恢复跟随；用户滚动可取消尚未执行的定位。
 
+普通对象的独立pixel_worker在前台任务中读取原图并核对source_sha，segment_jobs传入原图用于细化、传入现有model_image代理用于模型编码，复用预热/磁盘embedding而不复制整张原图来缩放。后台precache继续用代理，quality.resolution=preview；正式选中时重算该对象，不把预览缓存混入原尺寸组合，完成后标为source。直接segment调用在没有代理时先缩小再转换RGB，避免额外的全尺寸RGB副本。原图matting失败时自动分割沿native_edge使用512px核心、64px上下文的有界RGB局部贴边，保留原尺寸alpha并在original_edges记录原因、显示复查提示；显式refineMatte仍严格失败并保留原范围。此后备不恢复错误粗分割的内部拓扑。
+
+前台对象进程报告segment/edges/local_edges阶段和对象序号，总数限16；worker_bridge同时核对请求ID、请求/响应代次、当前任务类型、序号/总数、取消状态及优先级。阶段消息只能改变状态，不释放任务、标记预热完成或发布部分蒙版。保存/撤销/导出仍使用最终有效蒙版；普通模型输出保持目标名称，matting与原图贴边不把算法名称反复添加到范围标签。新模型候选及未达标边界见planning/iphoto-v1.8/selection-quality-2026-10-03.md。
+
 `masks.validate_bitmap` 对外部 PNG 完整解码一次以拒绝损坏文件，但只缓存经过校验的摘要，不保留展开后的像素。应用自身 `encode_bitmap` 生成的 PNG 可直接登记为已校验。真正渲染时 `_decode` 使用 64 MiB 字节上限的 LRU 保存展开图，而不是按固定图片张数缓存；项目中存在多张 24MP/60MP 蒙版时，这避免了校验阶段的内存累积。`document.RASTER_CACHE` 另缓存已应用笔画/羽化的栅格结果，同样有独立的 64 MiB 上限。
 
 源照片成功切换后，UI `session._opened` 和主 worker 的 `open` 提交分支分别调用 `clear_decode_cache()`，释放旧照片的展开蒙版。失败的打开请求不触发清理，当前照片和缓存仍可继续使用；已校验摘要索引仅占小量内存，可以跨照片复用。细节图块进程在照片切换时由既有 `stop` 流程结束。

@@ -12,7 +12,7 @@ def load_native(request):
 
     loaded = load_source(request["source_path"])
     if loaded.digest != request.get("source_sha"):
-        raise ValueError("照片源文件已变化，本次皮肤分区未应用")
+        raise ValueError("照片源文件已变化，本次分区未应用")
     return loaded.image
 
 
@@ -39,7 +39,9 @@ def main():
             started = perf_counter()
             composition = request.get("composition")
             source = None
-            if any(job.get("mask_target") in ("face_skin", "body_skin") for job in request.get("jobs", [])):
+            jobs = request.get("jobs", [])
+            if (any(job.get("mask_target") in ("face_skin", "body_skin") for job in jobs)
+                    or jobs and request.get("priority") != "low"):
                 source = load_native(request)
             if composition is not None and not request.get("jobs"):
                 # Combining cached masks needs no model import or embedding.
@@ -52,8 +54,14 @@ def main():
                                       "generation": request.get("generation", 0),
                                       "progress": {"kind": "body", "part": part, "total": total}}), flush=True)
 
+                def detail_progress(phase, part, total):
+                    print(json.dumps({"id": request["id"], "op": "segment",
+                                      "generation": request.get("generation", 0),
+                                      "progress": {"kind": "object", "phase": phase, "part": part, "total": total}}), flush=True)
+
                 result = segment_jobs(
-                    image, request.get("jobs"), tolerant=request.get("priority") == "low", source=source, progress=progress
+                    image, jobs, tolerant=request.get("priority") == "low", source=source,
+                    progress=progress, detail_progress=detail_progress
                 )
             if composition is not None:
                 from .object_composition import compose

@@ -2,12 +2,12 @@
 
 from time import perf_counter
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 from ..document import empty_mask, raster_mask, validate_mask
 from ..masks import encode_bitmap
 from .efficient_sam import backend
-from .edges import guided_edge
+from .edges import guided_edge, native_edge
 from .corrections import correct_negatives
 from .prompts import from_hint, from_points, validate_points
 
@@ -68,7 +68,7 @@ def warm(image):
     return backend().warm(proxy)
 
 
-def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None):
+def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, detail_progress=None):
     """Run bounded pixel jobs with the same validation in either worker."""
     if not isinstance(jobs, list) or len(jobs) > 16:
         raise ValueError("一次最多分割 16 个对象")
@@ -76,7 +76,7 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None):
         warm(image)
         return {"items": []}
     items = []
-    for job in jobs:
+    for index, job in enumerate(jobs, 1):
         try:
             if job.get("mask_target", "object") == "face_skin":
                 from .face_skin import segment as face_segment
@@ -87,8 +87,16 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None):
 
                 mask, quality = body_segment(source or image, job.get("parts") or [job], progress=progress)
             elif job.get("mask_target", "object") == "object":
-                mask, quality = segment(image, job.get("hint"), job.get("points"))
+                # Background catalog previews stay cheap. Foreground requests
+                # must use the native RGB for refinement, not an enlarged proxy.
+                native = source is not None and not tolerant
+                def report(phase):
+                    if detail_progress is not None:
+                        detail_progress(phase, index, len(jobs))
+                mask, quality = segment(source if native else image, job.get("hint"), job.get("points"),
+                                        progress=report, model_image=image)
                 quality["model"] = "EfficientSAM-S"
+                quality["resolution"] = "source" if native else "preview"
             else:
                 raise ValueError("未知分区目标类型，照片未改变")
         except ValueError:
@@ -99,17 +107,24 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None):
     return {"items": items}
 
 
-def segment(image, hint=None, points=None, *, engine=None, soften=True):
+def segment(image, hint=None, points=None, *, engine=None, soften=True, progress=None, model_image=None):
     started = perf_counter()
     points = validate_points(points or [])
-    proxy = image.convert("RGB")
-    proxy.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+    # Resize before converting/copying so a 60 MP source does not allocate
+    # another full-size RGB image just to encode a 1600 px embedding.
+    encoding_image = model_image if model_image is not None else image
+    proxy = (ImageOps.contain(encoding_image, (1600, 1600), Image.Resampling.LANCZOS)
+             if max(encoding_image.size) > 1600 else encoding_image)
+    if proxy.mode != "RGB":
+        proxy = proxy.convert("RGB")
     guide = raster_mask(validate_mask(hint), proxy.size) if hint is not None else None
     coords, labels = (
         from_hint(guide, points)
         if guide is not None
         else from_points(points, proxy.size)
     )
+    if progress is not None:
+        progress("segment")
     logits, scores, timing = (engine or backend()).predict(proxy, coords, labels)
     corrected = {}
     if 0 in labels:
@@ -129,14 +144,26 @@ def segment(image, hint=None, points=None, *, engine=None, soften=True):
         else Image.fromarray(hard.astype(np.uint8) * 255)
     )
     result = empty_mask()
-    result.update(bitmap=encode_bitmap(alpha), label="像素贴边选区")
+    result.update(bitmap=encode_bitmap(alpha), label="所选区域")
     if hint:
-        result["label"] = (hint.get("label", "") + " · 像素贴边")[:200]
+        result["label"] = hint["label"]
     if image.size != proxy.size:
         from ..matting.service import refine_alpha
 
-        result, matte_quality = refine_alpha(image, result, radius=min(64, max(8, round(8 * max(image.size) / 1600))))
-        quality["original_matting"] = matte_quality
+        if progress is not None:
+            progress("edges")
+        radius = min(64, max(8, round(8 * max(image.size) / 1600)))
+        try:
+            result, matte_quality = refine_alpha(image, result, radius=radius)
+            quality["original_matting"] = matte_quality
+        except (ValueError, ImportError) as exc:
+            # Automatic object selection remains usable on dense boundaries.
+            # Explicit user-requested matting retains its strict failure path.
+            if progress is not None:
+                progress("local_edges")
+            result = native_edge(image, result, min(12, radius))
+            quality["original_edges"] = {"backend": "RGB-guided", "reason": str(exc)[:500]}
+            quality["warnings"].append("透明边缘未能稳定估计，已使用原图颜色贴边；请检查细枝、发丝和孔洞")
     quality.update(
         timing,
         coverage=round(float((np.asarray(alpha) > 0).mean()) * 100, 1),

@@ -157,6 +157,11 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
     if intercept(self, context, {}):
         return True
     grounded, seed_items = grounded or {}, seed_items or {}
+    previews = {
+        lid for lid in ids + exclude
+        if self._scene.precise.get(lid, {}).get("quality", {}).get("resolution") == "preview"
+        and lid not in seed_items
+    }
     jobs = [
         {
             "id": lid,
@@ -166,14 +171,14 @@ def select_objects(self, ids, mode="replace", exclude=None, summary="", auto_app
             else [],
         }
         for lid in ids + exclude
-        if lid in grounded or lid not in self._scene.precise and lid not in seed_items
+        if lid in grounded or lid in previews or lid not in self._scene.precise and lid not in seed_items
     ]
     if len(ids) > 1 or exclude or mode != "replace":
         context["composed"] = True
         composition = {"ids": ids, "exclude": exclude, "mode": mode,
                        "size": [self._width, self._height], "base": context["base"],
                        "cached": {lid: deepcopy(seed_items.get(lid, self._scene.precise.get(lid, {}))["mask"])
-                                  for lid in ids+exclude if lid not in grounded
+                                  for lid in ids+exclude if lid not in grounded and lid not in previews
                                   and (lid in seed_items or lid in self._scene.precise)}}
         return start(self, jobs, context, composition=composition)
     elif not jobs:
@@ -430,6 +435,10 @@ def complete(self, result, context):
         quality += " · " + "；".join(warnings)
     if context.get("detail_grounded_ids"):
         quality += " · 已按原图局部细节重新定位"
+    if any(q.get("original_matting") for q in warning_qualities):
+        quality += " · 原图透明边缘"
+    elif any(q.get("original_edges") for q in warning_qualities):
+        quality += " · 原图颜色贴边"
     detail = (
         (context.get("summary", "") + "\n" if context.get("summary") else "")
         + quality

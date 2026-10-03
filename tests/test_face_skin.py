@@ -112,7 +112,7 @@ def test_legacy_plans_only_infer_unambiguous_faces(name, target):
 def test_mixed_jobs_fail_atomically_when_facial_result_is_unreliable(monkeypatch):
     image = Image.new("RGB", (100, 100))
     calls = []
-    monkeypatch.setattr(service, "segment", lambda *args: (mask(), {"fixture": True}))
+    monkeypatch.setattr(service, "segment", lambda *args, **kwargs: (mask(), {"fixture": True}))
     def reject(*args, **kwargs):
         calls.append(True)
         raise ValueError("没有人脸")
