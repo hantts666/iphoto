@@ -24,15 +24,22 @@ PROTECTED_CLASSES = (2, 3, 4, 5, 6, 9, 11, 12, 13, 14, 15, 16, 17, 18)
 _backend = None
 
 
-def feature_guard_pixels(features, labels):
+def feature_guard_pixels(features, labels, face_width=None):
     """Conservative landmark guards supplement ambiguous parsing under a hat."""
-    guard = np.zeros((512,512),np.uint8)
+    height, width = labels.shape
+    guard = np.zeros(labels.shape,np.uint8)
+    if face_width is None:
+        face_width = cv2.boundingRect(np.isin(labels, tuple(range(1,14))).astype(np.uint8))[2]
     for name,points in features.items():
         points = np.asarray(points,np.float64)
         span = np.linalg.norm(points[1]-points[0])
         if span < 1:
             continue
         center = points.mean(0)
+        # Profile/occlusion guesses can collapse two landmarks onto a cheek.
+        # Such a pair needs nearby semantic evidence. Well-separated frontal
+        # landmarks may still protect features misclassified as plain skin.
+        uncertain = span < max(1, face_width) * .18
         angle = float(np.degrees(np.arctan2(*(points[1]-points[0])[::-1])))
         # A small oriented disk at each eye; the mouth uses both corners as a
         # capsule. These are protections, not replacement face boundaries.
@@ -43,16 +50,55 @@ def feature_guard_pixels(features, labels):
             centers = [center]
             axes = (max(1,round(span*.68)),max(1,round(span*.32)))
         for x,y in centers:
-            if 0 <= x < 512 and 0 <= y < 512:
+            if 0 <= x < width and 0 <= y < height:
                 # Occluded landmark guesses can fall on the nose or hat. Only
                 # protect a visible plausible feature/skin centre, not those
                 # guesses or background; semantic features remain protected.
-                label = labels[min(511,round(y)),min(511,round(x))]
+                label = labels[min(height-1,round(y)),min(width-1,round(x))]
                 plausible = (1,2,3,4,5,6) if name=='eyes' else (1,11,12,13)
                 if label not in plausible:
                     continue
+                if uncertain and label == 1:
+                    radius = max(2, round(span * .35))
+                    nearby = labels[max(0,round(y)-radius):min(height,round(y)+radius+1),
+                                    max(0,round(x)-radius):min(width,round(x)+radius+1)]
+                    feature_classes = (2,3,4,5,6) if name == 'eyes' else (11,12,13)
+                    if not np.isin(nearby, feature_classes).any():
+                        continue
                 cv2.ellipse(guard,(round(x),round(y)),axes,angle,0,360,255,-1)
     return guard>0
+
+
+def native_labels(scores, size, bounds=None):
+    """Lift neural scores before argmax; never enlarge a binary label map.
+
+    Two-dimensional blocks bound working score memory to 64x1024x19 floats,
+    including very wide photos. The model itself still runs at 512 pixels.
+    """
+    from ..masks import MAX_MASK_PIXELS, MAX_MASK_SIDE
+    if (scores.shape != (19, 512, 512) or scores.dtype != np.float32
+            or not np.isfinite(scores).all()):
+        raise ValueError("面部分区模型分数无效")
+    width, height = size
+    if (any(isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= MAX_MASK_SIDE for v in size)
+            or width * height > MAX_MASK_PIXELS):
+        raise ValueError("面部边界范围超过尺寸上限")
+    labels = np.zeros((height, width), np.uint8)
+    x0, y0, x1, y1 = bounds or (0, 0, width, height)
+    if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+        raise ValueError("面部边界计算范围无效")
+    source = np.ascontiguousarray(scores.transpose(1, 2, 0))
+    for top in range(y0, y1, 64):
+        bottom = min(top + 64, y1)
+        y = (np.arange(top, bottom, dtype=np.float32) + .5) * 512 / height - .5
+        for left in range(x0, x1, 1024):
+            right = min(left + 1024, x1)
+            x = (np.arange(left, right, dtype=np.float32) + .5) * 512 / width - .5
+            xx = np.broadcast_to(x, (bottom-top, right-left))
+            yy = np.broadcast_to(y[:, None], xx.shape)
+            block = cv2.remap(source, xx, yy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            labels[top:bottom, left:right] = block.argmax(2).astype(np.uint8)
+    return labels
 
 
 class FaceParser:
@@ -69,7 +115,7 @@ class FaceParser:
             str(verified_path()), sess_options=options, providers=["CPUExecutionProvider"]
         )
 
-    def predict(self, image):
+    def _scores(self, image):
         rgb = cv2.resize(np.asarray(image.convert("RGB")), (512, 512)).astype(np.float32) / 255
         rgb = (rgb - np.array([.485, .456, .406], np.float32)) / np.array([.229, .224, .225], np.float32)
         logits = self.session.run(None, {
@@ -77,7 +123,25 @@ class FaceParser:
         })[0]
         if logits.shape != (1, 19, 512, 512) or not np.isfinite(logits).all():
             raise ValueError("面部皮肤模型输出无效，照片未改变")
-        return logits[0].argmax(0).astype(np.uint8)
+        return logits[0]
+
+    def predict(self, image):
+        return self._scores(image).argmax(0).astype(np.uint8)
+
+    def predict_native(self, image):
+        scores = self._scores(image)
+        rough = np.isin(scores.argmax(0), tuple(range(1,14))).astype(np.uint8)
+        x, y, w, h = cv2.boundingRect(rough)
+        if not w or not h:
+            return np.zeros((image.height, image.width), np.uint8)
+        # Spend the native classification work on the model's face context.
+        # Include two model cells and two source pixels around it for score
+        # interpolation and protection; other crop content remains background.
+        bounds = (max(0, int(np.floor((x-2)*image.width/512))-2),
+                  max(0, int(np.floor((y-2)*image.height/512))-2),
+                  min(image.width, int(np.ceil((x+w+2)*image.width/512))+2),
+                  min(image.height, int(np.ceil((y+h+2)*image.height/512))+2))
+        return native_labels(scores, image.size, bounds)
 
 
 def backend():
@@ -98,13 +162,18 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     box = crop_pixels(crop or region_crop(hint, (384, 384)), image.size)
     left, top, right, bottom = box
     patch = image.crop(box).convert("RGB")
-    labels = np.asarray((engine or backend()).predict(patch))
-    if labels.shape != (512, 512) or labels.dtype != np.uint8 or labels.max() > 18:
+    engine = engine or backend()
+    native = callable(getattr(engine, "predict_native", None))
+    labels = np.asarray(engine.predict_native(patch) if native else engine.predict(patch))
+    expected = (patch.height, patch.width) if native else (512, 512)
+    if labels.shape != expected or labels.dtype != np.uint8 or labels.max() > 18:
         raise ValueError("面部皮肤分区无效，照片未改变")
+    grid_height, grid_width = labels.shape
     x, y = points[0][:2]
-    px = round((x * image.width - left) / patch.width * 511)
-    py = round((y * image.height - top) / patch.height * 511)
-    if not (0 <= px < 512 and 0 <= py < 512):
+    scale_x, scale_y = (grid_width, grid_height) if native else (511, 511)
+    px = round((x * image.width - left) / patch.width * scale_x)
+    py = round((y * image.height - top) / patch.height * scale_y)
+    if not (0 <= px < grid_width and 0 <= py < grid_height):
         raise ValueError("面部定位点不在放大范围内，照片未改变")
     if target not in ("face", "face_skin"):
         raise ValueError("面部目标类型无效")
@@ -114,7 +183,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         # A detector's nose landmark can lie under a hat. Recover only from
         # the parser's visible nose pixels inside this detector's face hint;
         # never choose an arbitrary skin-coloured region elsewhere in the crop.
-        support = raster_mask(hint,image.size).crop(box).resize((512,512),Image.Resampling.NEAREST)
+        support = raster_mask(hint,image.size).crop(box).resize((grid_width,grid_height),Image.Resampling.NEAREST)
         ys,xs = np.nonzero((labels==10)&(np.asarray(support)>0))
         if len(xs):
             closest = np.argmin((xs-px)**2+(ys-py)**2)
@@ -132,10 +201,14 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     protected = cv2.dilate(protected, np.ones((3, 3), np.uint8)) > 0
     if target=='face_skin' and features is not None:
         features = validate_features(features)
-        mapped = {name:[[(x*image.width-left)/patch.width*511,(y*image.height-top)/patch.height*511]
+        mapped = {name:[[(x*image.width-left)/patch.width*scale_x,(y*image.height-top)/patch.height*scale_y]
                         for x,y in points] for name,points in features.items()}
-        protected |= feature_guard_pixels(mapped,labels)
+        face_width = cv2.boundingRect(selected.astype(np.uint8))[2]
+        protected |= feature_guard_pixels(mapped,labels,face_width)
     hard = (selected & ~protected).astype(np.uint8)
+    # Production scores are classified on the original crop. Protection and
+    # inward feathering are now measured in source pixels, not scaled 512px
+    # cells that can eat a narrow nose/eye boundary on a large photograph.
     # An inward transition preserves exact zeros on eyes, lips, hair, clothes
     # and background. RGB-guided outward expansion could fill those holes.
     distance = cv2.distanceTransform(hard, cv2.DIST_L2, 5)
@@ -155,6 +228,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         "warnings": [("人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "mask_size": list(image.size), "crop_size": list(patch.size),
+        "boundary_grid": "source" if native else "model", "boundary_size": [grid_width, grid_height],
         "coverage": round(float(hard.mean()) * patch.width * patch.height / (image.width * image.height) * 100, 2),
         "anchor_recovered": recovered,
         "landmark_protection": target=='face_skin' and features is not None,
