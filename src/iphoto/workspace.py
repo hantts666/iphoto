@@ -44,6 +44,11 @@ from .controllers.selection_controller import SelectionController
 
 
 class Editor(QObject):
+    @Property(str, constant=True)
+    def applicationVersion(self):
+        from . import __version__
+        return __version__
+
     changed = Signal()
     layersChanged = Signal()
     conversationChanged = Signal()
