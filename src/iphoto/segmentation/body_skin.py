@@ -41,7 +41,9 @@ def segment(image, parts, *, engine=None, progress=None):
         local_hint = {**empty_mask(), "label": hint["label"], "bitmap": encode_bitmap(local_guide)}
         if progress:
             progress(index + 1, len(parts))
-        mask, quality = segment_target(patch, local_hint, [local_point], engine=engine)
+        # Bare-part crops keep their dedicated protocol. The generic object
+        # detail adapter cannot infer anatomy from these reduced patches.
+        mask, quality = segment_target(patch, local_hint, [local_point], engine=engine,native_detail=False)
         alpha = raster_mask(mask, patch.size)
         support = alpha.point(lambda v: 255 if v else 0).resize((right-left, bottom-top), Image.Resampling.NEAREST)
         alpha = alpha.resize(support.size, Image.Resampling.BILINEAR)

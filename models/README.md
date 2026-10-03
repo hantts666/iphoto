@@ -2,13 +2,30 @@
 
 ## EfficientSAM 像素分割（1.5）
 
-基础依赖包含 ONNX Runtime 1.24.4；显式运行 `.venv\Scripts\python.exe scripts/setup_segmentation.py` 安装 S；添加 `--variant ti` 安装用于对比测试的 Ti。
+基础依赖包含 ONNX Runtime 1.24.4（Windows 使用支持 CPU 的 DirectML 发行包）；显式运行 `.venv\Scripts\python.exe scripts/setup_segmentation.py` 安装 S；添加 `--variant ti` 安装用于对比测试的 Ti。
 
 权重位于 `models/segmentation/`，S 两个文件合计 106,124,065 字节；Ti 合计 41,365,489 字节。编码器/解码器来自[作者官方 Space](https://huggingface.co/spaces/yunyangx/EfficientSAM/tree/d8dbb1eee73bfb3392aa6f6e8944aeb13f3f4036)，固定该修订；文件大小和 SHA-256 全部列于 `src/iphoto/segmentation/models.py`，下载及推理加载均验证哈希。
 
 作者：Yunyang Xiong 等，EfficientSAM，2023；ONNX 拆分导出贡献 Kentaro Wada。来源与许可：[EfficientSAM Apache-2.0](https://github.com/yformer/EfficientSAM/blob/main/LICENSE)、[ONNX Runtime MIT](https://github.com/microsoft/onnxruntime/blob/main/LICENSE)。后续分发安装包须保留第三方版权与许可文件，以及现有 Qt/PySide 的许可要求。
 
 模型只接受图像和点/框，不读取用户文字。千问负责把文字转换成目标位置，本地分割负责像素。无需 GPU；实际首次 CPU 编码耗时见 v1.5 验收报告。并非发丝 matting 模型。当前应用默认 S，Ti 通过 QA 脚本选择。
+
+## 原图细节透明度 · ViTMatte-S
+
+智能选区在模型已配置时自动复用 EfficientSAM 的对象轮廓、置信度排序和原照片细化透明度。小区域只保留模型最确定的少量内部参照，其余内部结构交给 ViTMatte 判断，可靠条件下无需补充排除点；颜色阈值不参与这条路径的像素分类。大区域、弱或均匀的模型输出保留普通边缘细化；已有明确正负点的高反差局部约束仍作后备。相近背景、低置信边界、复杂透明材质仍需检查，ViTMatte不是独立通用语义分割器。最多四个局部区域与普通边缘共同受未知像素、推理块数和时间预算约束，完成后一次交付。
+
+模型来自[官方 ViTMatte](https://github.com/hustvl/ViTMatte)，使用官方 Transformers 内置实现与固定 HF 修订 `6a58ad7646403c1df626fbd746900aec7361ea1d`。本项目导出固定640×640 ONNX（512核心、64原像素上下文，不缩放原图细节）。文件103,959,533字节，SHA256为 `dbbe16723638209f1883d1499060f43e249afe55a2411a70bfb6e7932560ffdb`，安装和进程首次加载均校验。[MIT许可](../docs/licenses/ViTMatte-MIT.txt)。运行应用无需Torch/Transformers；模型不随Git提交，也不在UI中自动下载。
+
+首次生成在独立转换环境进行，避免改动应用依赖。固定转换器已在本机重复导出并验证同一SHA；不同版本未通过校验时不会安装。
+
+```powershell
+python -m venv artifacts/matting-converter
+artifacts/matting-converter/Scripts/python.exe -m pip install torch==2.10.0 torchvision==0.25.0 transformers==5.18.0 onnx==1.23.1 Pillow==12.3.0
+artifacts/matting-converter/Scripts/python.exe scripts/export_matting.py --output artifacts/vitmatte-small-640.onnx --cache-dir artifacts/matting-model-cache
+.venv/Scripts/python.exe scripts/setup_matting.py --from-onnx artifacts/vitmatte-small-640.onnx
+```
+
+重新打开应用后生效。Windows依赖配置使用 `onnxruntime-directml==1.24.4`，神经透明度会优先用可用的DirectML设备，启动/推理失败后重试CPU；EfficientSAM仍指定CPU，保持缓存与定位行为。CPU版与DirectML版共享Python导入目录，更新用 `scripts/setup.ps1`；先关闭应用，脚本先移除旧发行包再安装当前依赖。[微软要求](https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html)采用顺序执行、禁用memory patterns、同一session单线程调用，当前像素进程遵守这些约束。
 
 ## 面部皮肤分区 · BiSeNet
 

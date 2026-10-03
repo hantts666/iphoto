@@ -54,10 +54,11 @@ def main():
                                       "generation": request.get("generation", 0),
                                       "progress": {"kind": "body", "part": part, "total": total}}), flush=True)
 
-                def detail_progress(phase, part, total):
+                def detail_progress(phase, part, total, tile=None, tiles=None):
+                    details = {"tile": tile,"tiles": tiles} if tile is not None else {}
                     print(json.dumps({"id": request["id"], "op": "segment",
                                       "generation": request.get("generation", 0),
-                                      "progress": {"kind": "object", "phase": phase, "part": part, "total": total}}), flush=True)
+                                      "progress": {"kind": "object", "phase": phase, "part": part, "total": total,**details}}), flush=True)
 
                 result = segment_jobs(
                     image, jobs, tolerant=request.get("priority") == "low", source=source,
