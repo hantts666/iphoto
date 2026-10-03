@@ -119,15 +119,27 @@ def solve(image, trimap, *, engine=None, progress=None):
     return output, len(cores)
 
 
-def refine(image, mask, radius=8, *, progress=None):
+def refine(image, mask, radius=8, *, points=None, progress=None):
     from ..document import empty_mask, raster_mask
     from ..masks import encode_bitmap
     from .trimap import make_trimap
+    from ..segmentation.prompts import validate_points
 
     started = perf_counter()
+    points = validate_points([] if points is None else points)
     guide = make_trimap(raster_mask({**mask, "feather": 0}, image.size), radius)
     trimap = np.rint(guide * 255).astype(np.uint8)
     del guide
+    anchors = {}
+    for x, y, label in points:
+        coordinate = (round(y * (image.height - 1)), round(x * (image.width - 1)))
+        value = 255 if label else 0
+        if coordinate in anchors and anchors[coordinate] != value:
+            raise ValueError("保留点和排除点重叠，请先修正提示点")
+        if trimap[coordinate] not in (128, value):
+            raise ValueError("提示点与已有确定范围冲突，请先补点修正轮廓")
+        anchors[coordinate] = value
+        trimap[coordinate] = value
     pixels, tiles = solve(image, trimap,progress=progress)
     result = empty_mask()
     result.update(bitmap=encode_bitmap(Image.fromarray(pixels), sampling="alpha", preserve_resolution=True), label=mask["label"])

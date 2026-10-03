@@ -17,8 +17,8 @@ ColumnLayout {
 
     RowLayout { Layout.fillWidth: true; spacing: 5
         Action {
-            objectName: root.prefix+"refineAutoButton"; text: "智能细化"; primary: true; Layout.fillWidth: true
-            hint: root.selection.autoRefineMethod!=="" ? "自动选择当前可用的最佳方法（下拉可手动指定）" : "没有可用的细化方法；请在扩展 → 图像能力中查看配置"
+            objectName: root.prefix+"refineAutoButton"; text: "智能修边"; primary: true; Layout.fillWidth: true
+            hint: root.selection.autoRefineMethod==="details" ? "AI 按原图细化已有范围边缘，保留提示点；处理时可取消" : root.selection.autoRefineMethod!=="" ? "自动选择当前可用修边方法" : "没有可用的细化方法；请在扩展 → 图像能力中查看配置"
             enabled: root.active && !root.editor.busy && root.selection.autoRefineMethod!==""
             onClicked: root.selection.refine("auto", matteRadius.value)
         }

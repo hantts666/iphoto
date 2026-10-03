@@ -172,7 +172,7 @@ ColumnLayout {
                 }
             }
             RowLayout { Layout.fillWidth: true; spacing: 6
-                Action { objectName: "refineAutoButton"; text: "智能修边"; primary: true; Layout.fillWidth: true; hint: selection.autoRefineMethod !== "" ? "自动选择当前最佳修边方法" : "没有可用方法；请在扩展 → 图像能力中查看"; enabled: !editor.busy && selection.autoRefineMethod !== ""; onClicked: selection.refine("auto", matteRadius.value) }
+                Action { objectName: "refineAutoButton"; text: "智能修边"; primary: true; Layout.fillWidth: true; hint: selection.autoRefineMethod === "details" ? "AI 按原图细化已有范围边缘，保留提示点；处理时可取消" : selection.autoRefineMethod !== "" ? "自动选择当前可用修边方法" : "没有可用方法；请在扩展 → 图像能力中查看"; enabled: !editor.busy && selection.autoRefineMethod !== ""; onClicked: selection.refine("auto", matteRadius.value) }
                 Action {
                     objectName: "refineMethodMenuButton"; text: "选方法"; subtle: true; implicitHeight: 30
                     hint: "手动选择修边方法"

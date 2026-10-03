@@ -60,6 +60,36 @@ def test_definite_trimap_needs_no_model():
     assert np.array_equal(neural.solve(Image.new("RGB",(2,2)),guide)[0],guide)
 
 
+def test_edge_refine_preserves_known_pixels_explicit_anchors_and_mask_metadata(monkeypatch):
+    from iphoto.matting.trimap import make_trimap
+
+    seed = np.zeros((64, 96), np.uint8); seed[:,48:] = 255
+    seed[20:24,67:71] = 0  # Small protected hole inside the selected object.
+    image = Image.new("RGB", (96,64), (90,90,90))
+    mask = {**bitmap(seed), "edge_protection": .8}
+    snapshot = deepcopy(mask); before = image.tobytes()
+    engine = ColorEngine()
+    monkeypatch.setattr(neural, "backend", lambda: engine)
+    points = [[48/95,10/63,1], [47/95,10/63,0]]
+    result, quality = neural.refine(image, mask, 4, points=points)
+    actual = np.array(raster_mask(result, image.size))
+    guide = make_trimap(Image.fromarray(seed), 4)
+    assert np.array_equal(actual[guide==0], seed[guide==0])
+    assert np.array_equal(actual[guide==1], seed[guide==1])
+    assert actual[10,48] == 255 and actual[10,47] == 0
+    assert np.any((actual>0)&(actual<255)) and quality["tiles"] == 1
+    assert result["edge_protection"] == .8 and result["label"] == mask["label"]
+    assert mask == snapshot and image.tobytes() == before
+
+
+@pytest.mark.parametrize("points", [[[.1,.5,1]], [[.9,.5,0]], [[48/95,10/63,1],[48/95,10/63,0]], [[True,.5,1]], "invalid"])
+def test_invalid_or_conflicting_edge_anchors_fail_before_model_inference(points, monkeypatch):
+    seed = np.zeros((64,96),np.uint8);seed[:,48:] = 255
+    monkeypatch.setattr(neural, "backend", lambda: pytest.fail("Invalid constraints reached model"))
+    with pytest.raises(ValueError):
+        neural.refine(Image.new("RGB",(96,64)),bitmap(seed),4,points=points)
+
+
 @pytest.mark.parametrize("bad",[np.zeros((10,10),np.float32),np.ones((10,10),np.uint8),np.zeros((8,8),np.uint8)])
 def test_invalid_guide_does_not_load_a_model(bad,monkeypatch):
     monkeypatch.setattr(neural,"backend",lambda:pytest.fail("Invalid trimap reached ONNX"))

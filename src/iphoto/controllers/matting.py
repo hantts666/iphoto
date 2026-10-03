@@ -3,14 +3,18 @@
 from copy import deepcopy
 
 
-def start(self, radius):
+def start(self, radius, *, method="classic"):
     if self.busy or not self.hasImage:
         return
-    if not self.matteAvailable:
+    neural = method == "neural"
+    available = (any(c["id"] == "details" and c["available"] for c in self.imageCapabilities)
+                 if neural else self.matteAvailable)
+    if not available:
         return self._notify(
-            "透明边缘组件未安装，请运行 scripts/setup.ps1 更新依赖", True
+            "AI 细节模型未配置，请在扩展 → 图像能力中查看" if neural
+            else "透明边缘组件未安装，请运行 scripts/setup.ps1 更新依赖", True
         )
-    if not 1 <= radius <= 64:
+    if type(radius) is not int or not 1 <= radius <= 64:
         return self._notify("边缘范围应为 1～64 像素", True)
     if self._region_candidate:
         mask = self._region_candidate["layers"][self._region_index]["mask"]
@@ -18,8 +22,10 @@ def start(self, radius):
         if self._candidate is None:
             self.beginSelection("current")
         mask = self._candidate
-    self._status = "正在按原图分辨率细化边缘…可随时取消，大图需要更长时间"
-    self._request("matte", mask=deepcopy(mask), radius=radius)
+    self._status = ("正在准备 AI 边缘细化…保留当前范围和提示点，可随时取消" if neural
+                    else "正在按原图分辨率细化边缘…可随时取消，大图需要更长时间")
+    self._request("matte", mask=deepcopy(mask), radius=radius, method=method,
+                  points=deepcopy(self._pixel_points) if neural and not self._region_candidate else [])
 
 
 def cancel(self):
@@ -29,7 +35,7 @@ def cancel(self):
         self.changed.emit()
 
 
-def complete(self, result):
+def complete(self, result, *, points=None):
     mask, quality = result["mask"], result["quality"]
     if self._region_candidate:
         self._region_candidate["layers"][self._region_index]["mask"] = mask
@@ -39,16 +45,23 @@ def complete(self, result):
         self._schedule_render()
     else:
         self._set_candidate(mask)
+        if points is not None:
+            self._pixel_points = deepcopy(points)
+            self._pixel_hint = deepcopy(self._candidate)
+    neural = quality.get("backend") == "ViTMatte-S · ONNX"
     self._selection_quality = (
-        f"连续透明度 · {quality['partial_pixels']:,} 个过渡像素"
+        ("AI 原图边缘 · " if neural else "")
+        + f"连续透明度 · {quality['partial_pixels']:,} 个过渡像素"
         f" · {quality['elapsed_ms'] / 1000:.1f}s"
     )
+    if quality.get("warnings"):
+        self._selection_quality += " · " + "；".join(quality["warnings"])
     self._status = "透明边缘已就绪；可查看黑白透明度或调色效果，确认后再输出"
     self._message(
         "assistant",
         self._selection_quality + "\n已取消额外羽化；透明度已细化，未改写照片颜色。",
         state="region_draft" if self._region_candidate else "draft",
-        origin={"mode": "selection", "model": "PyMatting（本地）"},
+        origin={"mode": "selection", "model": "ViTMatte-S（本地 AI）" if neural else "PyMatting（本地）"},
     )
     self._notify("透明边缘已细化，请对照调色效果；不合适可以撤销")
     self.changed.emit()

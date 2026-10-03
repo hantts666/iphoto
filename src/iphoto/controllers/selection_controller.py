@@ -669,6 +669,12 @@ class SelectionController(QObject):
     def autoRefineMethod(self):
         editor = self._editor
         caps = {c["id"]: c["available"] for c in editor.imageCapabilities}
+        mask = (editor._region_candidate["layers"][editor._region_index]["mask"]
+                if editor._region_candidate else editor._candidate)
+        # A precise mask already defines the target. Refining its alpha must
+        # not replace that target with another semantic prediction.
+        if mask is not None and "bitmap" in mask and caps.get("details"):
+            return "details"
         if editor._candidate is not None and caps.get("pixels"):
             return "sam"
         if caps.get("grabcut"):
@@ -680,7 +686,7 @@ class SelectionController(QObject):
     @Property("QVariantList", notify=changed)
     def refineMethods(self):
         caps = {c["id"]: c for c in self._editor.imageCapabilities}
-        names = {"sam": "重识轮廓", "grabcut": "经典优化", "matte": "透明边缘"}
+        names = {"details": "AI 边缘", "sam": "重识轮廓", "grabcut": "经典优化", "matte": "透明边缘"}
         auto = self.autoRefineMethod
         rows = [
             {
@@ -691,6 +697,12 @@ class SelectionController(QObject):
                 + (f"（当前：{names[auto]}）" if auto else "；请先在图像能力中配置"),
             },
             {
+                "id": "details",
+                "name": "AI 细化边缘",
+                "available": bool(caps.get("details", {}).get("available")),
+                "description": "读取原图与已有范围，用 AI 估计边缘透明度；保留提示点和远离边缘的确定范围",
+            },
+            {
                 "id": "matte",
                 "name": "细化透明边缘",
                 "available": bool(caps.get("matte", {}).get("available")),
@@ -698,7 +710,7 @@ class SelectionController(QObject):
             },
             {
                 "id": "sam",
-                "name": "重识轮廓",
+                "name": "重新识别轮廓",
                 "available": bool(caps.get("pixels", {}).get("available")),
                 "description": "以当前选区为提示，用像素模型重新分割一遍",
             },
@@ -725,7 +737,9 @@ class SelectionController(QObject):
         editor = self._editor
         if method == "auto":
             method = self.autoRefineMethod
-        if method == "matte":
+        if method == "details":
+            editor.refineDetails(radius)
+        elif method == "matte":
             editor.refineMatte(radius)
         elif method == "sam":
             editor.pixelRefine()

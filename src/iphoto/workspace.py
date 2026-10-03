@@ -674,6 +674,10 @@ class Editor(QObject):
     def refineMatte(self, radius=8):
         return matting.start(self, radius)
 
+    @Slot(int)
+    def refineDetails(self, radius=8):
+        return matting.start(self, radius, method="neural")
+
     @Slot()
     def cancelMatte(self):
         return matting.cancel(self)

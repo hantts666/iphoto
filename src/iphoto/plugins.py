@@ -131,7 +131,7 @@ def capabilities():
     detail_ready = detail_available()
     rows.insert(2, {
         "id": "details", "name": "细节透明度 · ViTMatte-S",
-        "description": "智能选区自动细化原图边缘；有可靠保留/排除点且颜色区分明显时恢复局部细枝孔洞。相近颜色仍需修正。",
+        "description": "神经模型读取原图与范围约束，细化边缘透明度；智能点选结合分割置信度恢复局部孔洞。已有精细范围修边时保留提示点；相近颜色仍需检查。",
         "available": detail_ready,
         "status": "可用 · 本地 ONNX" if detail_ready else "需要配置细节模型",
         "license": "MIT / ONNX Runtime MIT", "source": "https://github.com/hustvl/ViTMatte",

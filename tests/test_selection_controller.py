@@ -214,6 +214,46 @@ def test_refine_routing_and_methods(editor, monkeypatch):
     assert notes and notes[-1][1]
 
 
+def test_precise_masks_use_ai_edges_without_reidentifying_the_target(editor, monkeypatch):
+    from PIL import ImageDraw
+    from iphoto.document import empty_mask
+    from iphoto.masks import encode_bitmap
+    from iphoto.controllers import matting
+
+    pixels = Image.new("L", (240, 160))
+    ImageDraw.Draw(pixels).rectangle((70, 30, 170, 130), fill=255)
+    mask = {**empty_mask(), "label": "已确认皮肤",
+            "bitmap": encode_bitmap(pixels, sampling="alpha", preserve_resolution=True)}
+    editor._set_candidate(mask)
+    wait_for(lambda: settled(editor))
+    editor._pixel_points = [[.5, .5, 1], [.1, .1, 0]]
+    editor._capabilities = caps(details=True, pixels=True, matte=True, grabcut=True)
+    requests = []
+    monkeypatch.setattr(Editor, "_request", lambda self, op, **data: requests.append((op, data)))
+    assert editor.selection.autoRefineMethod == "details"
+    editor.selection.refine("auto", 12)
+    op, request = requests.pop()
+    assert op == "matte" and request["method"] == "neural" and request["radius"] == 12
+    assert request["mask"] == mask and request["points"] == editor.pixelPoints
+    assert request["points"] is not editor._pixel_points
+    before_layers = deepcopy(editor._layers)
+    quality = {"backend": "ViTMatte-S · ONNX", "partial_pixels": 100, "elapsed_ms": 200}
+    matting.complete(editor, {"mask": mask, "quality": quality}, points=request["points"])
+    assert editor.pixelPoints == request["points"] and editor._pixel_hint == mask
+    assert editor._layers == before_layers and "AI 原图边缘" in editor.selectionQuality
+    wait_for(lambda: settled(editor))
+    # A region draft uses its own mask, never another draft's point constraints.
+    editor._region_candidate = {"layers": [{"mask": mask}]}
+    editor._region_index = 0
+    assert editor.selection.autoRefineMethod == "details"
+    editor.selection.refine("auto")
+    assert requests[-1][1]["points"] == [] and requests[-1][1]["mask"] == mask
+    editor._region_candidate = None
+    monkeypatch.setattr(pixel_selections, "select_hint", lambda *args: requests.append(("segment", {})))
+    editor.selection.refine("sam")
+    assert requests[-1][0] == "segment"
+
+
 def test_apply_branches(editor):
     sel = editor.selection
     editor.beginSelection("empty")

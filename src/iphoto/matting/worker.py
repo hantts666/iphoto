@@ -22,12 +22,26 @@ def main():
         request = json.loads(line)
         if request.get("op") != "matte":
             raise ValueError("未知边缘细化操作")
+        method = request.get("method", "classic")
+        if method not in ("classic", "neural"):
+            raise ValueError("未知边缘细化方法")
         source = load_source(Path(request["source_path"]))
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，原选区保持不变")
-        mask, quality = refine_alpha(
-            source.image, validate_mask(request["mask"]), request["radius"]
-        )
+        mask = validate_mask(request["mask"])
+        if method == "neural":
+            from .neural import refine
+
+            def progress(tile=None, tiles=None):
+                phase = {"phase": "prepare"} if tile is None else {"phase": "details", "tile": tile, "tiles": tiles}
+                print(json.dumps({"id": request["id"], "op": "matte", "generation": request["generation"],
+                                  "progress": phase}, ensure_ascii=False), flush=True)
+
+            progress()
+            mask, quality = refine(source.image, mask, request["radius"],
+                                   points=request.get("points", []), progress=progress)
+        else:
+            mask, quality = refine_alpha(source.image, mask, request["radius"])
         response = {
             "id": request["id"], "op": "matte",
             "generation": request["generation"], "ok": True,

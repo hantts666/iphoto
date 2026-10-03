@@ -56,17 +56,26 @@ def read(self):
             continue
         try:
             response = json.loads(line)
+            if not isinstance(response, dict):
+                continue
             if response.get("id") != active["id"]:
                 continue
-            self._matte_active = None
             current = (
                 active["generation"] == self._generation
                 and active["source_sha"] == self._sha
+                and response.get("generation") == active["generation"]
+                and response.get("op") == "matte"
+                and not self._closing and not self._matte_aborting
             )
+            if "progress" in response:
+                if current and active.get("method") == "neural":
+                    _progress(self, active, response["progress"])
+                continue
+            self._matte_active = None
             if current and response.get("ok"):
                 from .matting import complete
 
-                complete(self, response["result"])
+                complete(self, response["result"], points=active.get("points", []) if active.get("method") == "neural" else None)
             elif current:
                 self._status = "选区处理失败，原选区保留；可减小边缘范围后重试"
                 self._notify(response.get("error", "边缘细化失败"), True)
@@ -74,6 +83,25 @@ def read(self):
         except Exception as exc:
             self._matte_active = None
             self._notify("处理边缘细化结果失败：" + str(exc), True)
+
+
+def _progress(self, active, progress):
+    """Progress is informational; only the final reply may publish a mask."""
+    if not isinstance(progress, dict):
+        return
+    if progress == {"phase": "prepare"} and not active.get("detail_tile"):
+        self._status = "正在读取原图并准备 AI 边缘模型…可随时取消"
+    elif progress.get("phase") == "details":
+        tile, tiles = progress.get("tile"), progress.get("tiles")
+        if (type(tile) is not int or type(tiles) is not int or not 1 <= tile <= tiles <= 128
+                or tile <= active.get("detail_tile", 0)
+                or tiles != active.get("detail_tiles", tiles)):
+            return
+        active["detail_tile"], active["detail_tiles"] = tile, tiles
+        self._status = f"正在用 AI 细化原图边缘 {tile}/{tiles} 块…保留提示点，可随时取消"
+    else:
+        return
+    self.changed.emit()
 
 
 def stderr(self):
