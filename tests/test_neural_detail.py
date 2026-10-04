@@ -80,7 +80,7 @@ def test_edge_refine_preserves_known_pixels_explicit_anchors_and_mask_metadata(m
     seed = np.zeros((64, 96), np.uint8); seed[:,48:] = 255
     seed[20:24,67:71] = 0  # Small protected hole inside the selected object.
     image = Image.new("RGB", (96,64), (90,90,90))
-    mask = {**bitmap(seed), "edge_protection": .8}
+    mask = {**bitmap(seed), "edge_protection": .8, "color_recovery": True}
     snapshot = deepcopy(mask); before = image.tobytes()
     engine = ColorEngine()
     monkeypatch.setattr(neural, "backend", lambda: engine)
@@ -93,6 +93,7 @@ def test_edge_refine_preserves_known_pixels_explicit_anchors_and_mask_metadata(m
     assert actual[10,48] == 255 and actual[10,47] == 0
     assert np.any((actual>0)&(actual<255)) and quality["tiles"] == 1
     assert result["edge_protection"] == .8 and result["label"] == mask["label"]
+    assert result["color_recovery"] is True
     assert mask == snapshot and image.tobytes() == before
 
 

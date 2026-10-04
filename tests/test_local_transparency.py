@@ -42,7 +42,9 @@ def scene():
     return image,mask,stroke
 
 
-@pytest.mark.parametrize("extra", [{}, {"feather":.01}, {"edge_shift":1}, {"inverted":True}])
+@pytest.mark.parametrize("extra", [{}, {"feather":.01}, {"edge_shift":1},
+                                 {"color_recovery":True},
+                                 {"inverted":True,"color_recovery":True}])
 def test_every_unpainted_effective_alpha_byte_survives(extra):
     image,mask,stroke=scene();mask.update(extra)
     original=deepcopy(mask);engine=Engine()
@@ -54,6 +56,8 @@ def test_every_unpainted_effective_alpha_byte_survives(extra):
     assert q["local_refinement"] and q["mask_size"]==list(image.size)
     assert result["bitmap"]["width"]==image.width
     assert mask==original and result["feather"]==0 and result["ops"]==[]
+    for key in ("color_recovery",):
+        if key in mask:assert result[key]==mask[key]
 
 
 def test_painted_opaque_interior_is_reopened_even_away_from_the_old_contour():

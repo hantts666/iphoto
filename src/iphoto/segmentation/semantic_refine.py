@@ -12,6 +12,7 @@ from PIL import Image
 
 from ..document import empty_mask, raster_mask, validate_mask
 from ..masks import encode_bitmap
+from ..matting.metadata import copy_metadata
 from .edges import guided_edge
 from .prompts import from_hint, validate_points
 
@@ -120,15 +121,9 @@ def refine(image, hint, points, *, engine=None, progress=None):
             raise ValueError("局部结果未满足保留/排除点，原范围保留；请调整点位或用画笔修正")
     if not result_pixels.getbbox():
         raise ValueError("修正后的范围为空，原范围保留")
-    result = empty_mask()
+    result = copy_metadata(hint, empty_mask())
     result.update(label=hint["label"], semantic_target=hint["semantic_target"],
                   bitmap=encode_bitmap(result_pixels, sampling="alpha", preserve_resolution=True))
-    if "face_binding" in hint:
-        result["face_binding"] = hint["face_binding"]
-    if "face_part" in hint:
-        result["face_part"] = hint["face_part"]
-    if 'face_part_scope' in hint:
-        result['face_part_scope'] = hint['face_part_scope']
     quality.update(timing, model=timing.get("model", "EfficientSAM-S")+" · 语义范围保护", resolution="source",
                    semantic_target=hint["semantic_target"], crop_box=list(box), crop_size=list(patch.size),
                    mask_size=list(image.size), elapsed_ms=round((perf_counter()-started)*1000, 1))

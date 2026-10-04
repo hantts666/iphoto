@@ -19,9 +19,10 @@ from test_scene_object_actions_ui import reveal
 canvas = shared_canvas
 
 
-def prepare(ui,tmp_path):
+def prepare(ui,tmp_path,*,color=False):
     assert models.available(), "Configured native AI is required for this gate"
     image,_,mask=soft_scene(960,640)
+    if color:mask.update(color_recovery=True)
     source=tmp_path/"soft-edge.png";image.save(source)
     ui.e.openImage(str(source));wait_for(lambda:settled(ui.e) and ui.w.property("previewReady"))
     ui.e._layer()["mask"]=deepcopy(mask);ui.e._load_layer();ui.e._commit()
@@ -56,7 +57,7 @@ def test_single_repair_group_and_advanced_options_use_actual_clicks(canvas,tmp_p
 
 
 def test_real_local_stroke_preserves_outside_binding_and_saves_one_undo(canvas,tmp_path,monkeypatch):
-    ui=canvas;source=prepare(ui,tmp_path)
+    ui=canvas;source=prepare(ui,tmp_path,color=True)
     sha=hashlib.sha256(source.read_bytes()).hexdigest()
     ui.e.setMaskView("grayscale");wait_for(lambda:settled(ui.e))
     ui.click("transparentDraftMaskButton");ui.e.selection.setBrushDiameter(54)
@@ -73,6 +74,7 @@ def test_real_local_stroke_preserves_outside_binding_and_saves_one_undo(canvas,t
     old=np.asarray(raster_mask(before[0],(960,640)));new=np.asarray(raster_mask(ui.e._candidate,(960,640)))
     assert np.array_equal(old[~scope],new[~scope]) and np.any(old!=new)
     assert (ui.e._layers,ui.e._cursor,ui.e._selection_target_id)==before[1:]
+    assert ui.e._candidate['color_recovery'] is True
     assert ui.e.selection.editingLayerMask and "局部 AI" in ui.e.selectionQuality
     changed=deepcopy(ui.e._candidate)
     ui.e.undo();wait_for(lambda:settled(ui.e));assert ui.e._candidate==before[0]
@@ -82,7 +84,8 @@ def test_real_local_stroke_preserves_outside_binding_and_saves_one_undo(canvas,t
     ui.click("selectionToLayerButton");wait_for(lambda:not ui.e.hasSelectionDraft and settled(ui.e))
     assert len(ui.e._layers)==1 and ui.e._layer()["mask"]==changed and ui.e._cursor==before[2]+1
     project=tmp_path/"local.iphoto";ui.e.saveProject(str(project));wait_for(lambda:not ui.e.savingProject)
-    assert read_project(project)["layers"]==ui.e._layers
+    saved=read_project(project)
+    assert saved["layers"]==ui.e._layers and saved['schema_version']=='1.12'
     ui.e.undo();wait_for(lambda:settled(ui.e));assert ui.e._layers==before[1]
     assert hashlib.sha256(source.read_bytes()).hexdigest()==sha
 

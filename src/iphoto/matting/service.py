@@ -9,6 +9,7 @@ from ..document import empty_mask, raster_mask, validate_mask
 from ..masks import encode_bitmap
 from .trimap import make_trimap
 from .solver import solve_alpha
+from .metadata import copy_metadata
 
 
 def refine_alpha(image, mask, radius=8, *, linear=True):
@@ -29,13 +30,7 @@ def refine_alpha(image, mask, radius=8, *, linear=True):
     unknown_pixels = int(np.count_nonzero(trimap == 0.5))
     del trimap
     partial_pixels = int(np.count_nonzero((pixels > 0) & (pixels < 255)))
-    result = empty_mask()
-    if not mask['inverted']:
-        for key in ('semantic_target','face_binding','face_part','face_part_scope'):
-            if key in seed:
-                result[key] = deepcopy(seed[key])
-    if "edge_protection" in mask:
-        result["edge_protection"] = mask["edge_protection"]
+    result = copy_metadata(seed, empty_mask())
     result.update(
         bitmap=encode_bitmap(Image.fromarray(pixels), sampling="alpha", preserve_resolution=True),
         label=mask["label"],

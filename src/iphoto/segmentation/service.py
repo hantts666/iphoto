@@ -247,4 +247,7 @@ def segment(image, hint=None, points=None, *, engine=None, soften=True, progress
         elapsed_ms=round((perf_counter() - started) * 1000, 1),
         mask_size=[result["bitmap"]["width"], result["bitmap"]["height"]],
     )
+    if hint:
+        from ..matting.metadata import copy_metadata
+        result = copy_metadata(hint, result)
     return result, quality

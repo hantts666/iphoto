@@ -20,7 +20,7 @@ def fixture(target="face_skin"):
     draw = ImageDraw.Draw(alpha)
     draw.rectangle((100, 100, 500, 420), fill=255)
     draw.rectangle((310, 240, 345, 265), fill=0)  # protected mouth/eye
-    hint = {**empty_mask(), "label": "existing semantic range", "semantic_target": target,
+    hint = {**empty_mask(), "label": "existing semantic range", "semantic_target": target, 'color_recovery':True,
             "bitmap": encode_bitmap(alpha, sampling="alpha", preserve_resolution=True)}
     if target != "body_skin":
         hint["face_binding"] = {"face_id": "stable-person", "source_sha256": "a"*64}
@@ -55,6 +55,7 @@ def test_neural_refinement_preserves_class_zeros_identity_and_native_pixels(targ
     actual, old = np.asarray(raster_mask(result, image.size)), np.asarray(prior)
     assert actual[250, 325] == 0 and np.all(actual[old == 0] == 0)
     assert result["semantic_target"] == target
+    assert result['color_recovery'] is True
     assert result.get("face_binding") == hint.get("face_binding")
     assert quality["mask_size"] == list(image.size) and quality["resolution"] == "source"
     assert "语义范围保护" in quality["model"] and phases == [("semantic_points",)]

@@ -110,6 +110,7 @@ def test_prompt_budget_and_negative_only_rejection():
 
 def test_pipeline_preserves_holes_and_curves_instead_of_clipping_to_hint():
     photo, mask, hint = ring()
+    hint['color_recovery']=True
     hard = np.asarray(mask) > 0
 
     class Predictor:
@@ -124,6 +125,7 @@ def test_pipeline_preserves_holes_and_curves_instead_of_clipping_to_hint():
     result, quality = segment(photo, hint, [[0.25, 0.5, 1]], engine=Predictor())
     out = np.asarray(raster_mask(result, photo.size))
     assert "bitmap" in result and not result["ops"]
+    assert result['color_recovery'] is True
     assert out[130, 200] == 0 and out[150, 100] == 255 and out[45, 55] == 0
     iou = ((out > 127) & hard).sum() / ((out > 127) | hard).sum()
     assert iou > 0.98 and quality["candidate"] == 0

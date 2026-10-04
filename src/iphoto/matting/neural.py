@@ -4,7 +4,6 @@ This model estimates alpha; it cannot infer missing semantic constraints.
 Only the unknown pixels are changed. Photo data is never modified.
 """
 import os
-from copy import deepcopy
 from time import perf_counter
 
 import numpy as np
@@ -12,6 +11,7 @@ from PIL import Image
 
 from ..segmentation.runtime import prepare_runtime
 from .models import verified_path
+from .metadata import copy_metadata
 
 TILE = 512
 STRIDE = 384
@@ -168,14 +168,8 @@ def refine(image, mask, radius=8, *, points=None, progress=None):
         anchors[coordinate] = value
         trimap[coordinate] = value
     pixels, tiles = solve(image, trimap,progress=progress)
-    result = empty_mask()
+    result = copy_metadata(mask, empty_mask())
     result.update(bitmap=encode_bitmap(Image.fromarray(pixels), sampling="alpha", preserve_resolution=True), label=mask["label"])
-    if "edge_protection" in mask:
-        result["edge_protection"] = mask["edge_protection"]
-    if not mask['inverted']:
-        for key in ('semantic_target','face_binding','face_part','face_part_scope'):
-            if key in mask:
-                result[key] = deepcopy(mask[key])
     model = backend()
     return result, {"backend": "ViTMatte-S · ONNX", "provider": model.provider,
                     "elapsed_ms": round((perf_counter()-started)*1000, 1), "radius": radius,

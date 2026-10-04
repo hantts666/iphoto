@@ -11,6 +11,7 @@ from ..document import empty_mask, raster_mask, validate_mask
 from ..masks import encode_bitmap
 from ..segmentation.prompts import validate_points
 from . import neural
+from .metadata import copy_metadata
 
 MAX_ROI = 16_000_000
 
@@ -98,10 +99,6 @@ def refine(image, mask, stroke, *, points=None, progress=None, engine=None):
     output = np.array(original)
     output[box[1]:box[3],box[0]:box[2]][changed] = pixels[changed]
     quality["partial_pixels"] = int(((output>0)&(output<255)).sum())
-    result = empty_mask()
+    result = copy_metadata(mask, empty_mask())
     result.update(bitmap=encode_bitmap(Image.fromarray(output), sampling="alpha", preserve_resolution=True), label=mask["label"])
-    if not mask["inverted"]:
-        for key in ("semantic_target", "face_binding", "face_part", "face_part_scope"):
-            if key in mask:
-                result[key] = deepcopy(mask[key])
     return result, quality

@@ -4,7 +4,6 @@ Only the reviewed crop interiors may change. Both model predictions and the
 joined result must satisfy the points; the controller reviews the actual
 composition again before it can publish the mask.
 """
-from copy import deepcopy
 from time import perf_counter
 
 import numpy as np
@@ -16,6 +15,7 @@ from ..masks import encode_bitmap
 from ..matte_review import validate_corrections
 from ..segmentation.service import choose_candidate
 from . import neural
+from .metadata import copy_metadata
 
 HALO = 96
 JOIN = 32
@@ -94,10 +94,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
                         'tiles':tiles,'predicted_iou':quality['predicted_iou'],'timing':timing})
     if not any(record['changed_pixels'] for record in records):
         raise ValueError('局部纠错没有产生有效改变，原范围保留')
-    result=empty_mask()
-    for key in ('edge_protection','color_recovery','semantic_target','face_binding','face_part','face_part_scope'):
-        if key in mask and (key in ('edge_protection','color_recovery') or not mask['inverted']):
-            result[key]=deepcopy(mask[key])
+    result=copy_metadata(mask, empty_mask())
     result.update(label=mask['label'],bitmap=encode_bitmap(Image.fromarray(output),sampling='alpha',preserve_resolution=True))
     if matte.fallback:warnings.append(matte.fallback)
     return validate_mask(result),{'backend':'SAM2.1 Small + ViTMatte-S','provider':matte.provider,'corrections':records,

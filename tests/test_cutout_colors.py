@@ -45,6 +45,27 @@ def test_recovery_removes_known_background_color_without_squaring_alpha():
     assert source.tobytes()==original and mask==before
 
 
+def test_classic_refinement_keeps_recovery_for_actual_preview_and_output():
+    from iphoto.matting.service import refine_alpha
+    source,mask,_,truth=scene()
+    before=deepcopy(mask);photo=source.tobytes()
+    result,_=refine_alpha(source,mask,4,linear=False)
+    alpha=raster_mask(result,source.size)
+    assert result['color_recovery'] is True
+    recovered=compose_cutout(source,alpha,color_patch(source,[],result,alpha))
+    raw=compose_cutout(source,alpha)
+    partial=(np.asarray(alpha)>20)&(np.asarray(alpha)<235)
+    assert partial.any()
+    error=lambda output:np.abs(np.asarray(output)[...,:3].astype(float)[partial]-truth).mean()
+    assert error(recovered)<error(raw)/4
+    for mode in ('white','black'):
+        actual=background_view(source,[],result,mode,source)
+        expected=Image.alpha_composite(Image.new('RGBA',source.size,mode),recovered).convert('RGB')
+        assert actual.tobytes()==expected.tobytes()
+    assert recovered.getchannel('A').tobytes()==alpha.tobytes()
+    assert source.tobytes()==photo and mask==before
+
+
 @pytest.mark.parametrize('mode',['white','black'])
 def test_native_and_small_background_checks_match_the_cutout(mode):
     source,mask,alpha,_ = scene()
