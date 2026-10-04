@@ -1,8 +1,8 @@
-# iPhoto 1.10.2
+# iPhoto 1.10.3
 
 基于 Qt 6 / PySide6 的 Windows 原生修图工作室。采用独立选区、调整图层和 AI 助手的操作方式，无需 Electron 或 WebView。
 
-双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.10.2**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
+双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.10.3**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
 
 ## 通道曲线 · 1.10
 
@@ -11,6 +11,8 @@
 手动曲线会锁定，AI保留；可点“已锁 · 解锁”让对话继续调整。可以说“用蓝通道曲线给低值加蓝，保持高值和已有颜色”。图层、预览、原像素、撤销与导出共用同一曲线；项目格式升级为 **1.10**，可读取旧项目，含曲线的项目需使用新版。RGB曲线并非RAW校准或按照片亮度自动划区。[架构与大图实测](planning/iphoto-v1.8/tone-curves-2026-10-04.md)。
 
 1.10.1 加快多曲线与 HSL／明暗混合调色，并修复 HSL 经过陡曲线后少量像素的舍入差异。安装时会一并准备曲线缓存；已有环境可运行 `.venv\Scripts\python.exe scripts/setup_color.py`，缺缓存时首次混合调色需要准备。加速不可用时仍可继续编辑，单纯通道曲线保持原有快速查表。[性能与精确性实测](planning/iphoto-v1.8/curve-performance-2026-10-04.md)。
+
+1.10.3 让范围、调色和分区预览分别保留浏览位置。磨皮后再次点击选中的图层返回范围，人脸和气色入口仍在原来的位置；浏览长元素清单再切回调色，也会回到此前的控制位置。打开另一张照片时回到面板开头，修蒙版后仍回到原调整控件。[连续操作与实际AI分层验证](planning/iphoto-v1.8/face-workflow-navigation-2026-10-04.md)。
 
 ## 人脸与颜色调整 · 1.9
 

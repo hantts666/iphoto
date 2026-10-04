@@ -95,8 +95,6 @@ def test_pending_parameter_reveal_cannot_scroll_the_range_view(canvas):  # noqa:
     ui = canvas
     ui.click("addLayerButton")
     wait_for(lambda: settled(ui.e))
-    scroll = ui.find("propertyScroll")
-    flick = scroll.property("contentItem")
     # Navigate before the deferred layout timer fires. The former parameter
     # target must not be interpreted in the newly visible range module.
     QTest.mouseClick(ui.w, Qt.LeftButton, Qt.NoModifier, ui.point("skinSmoothPresetButton"))
@@ -105,5 +103,5 @@ def test_pending_parameter_reveal_cannot_scroll_the_range_view(canvas):  # noqa:
     QTest.qWait(60)
     assert ui.e.selection.pickedLayerId == ""
     assert ui.find("selectionDescriptionInput").isVisible()
-    assert flick.property("contentY") == 0
+    assert ui.find("propertyScroll").property("contentItem").property("contentY") == 0
     assert ui.e.parameters["skin_smoothing"] == 35

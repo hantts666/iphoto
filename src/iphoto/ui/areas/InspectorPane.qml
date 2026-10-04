@@ -11,6 +11,7 @@ Rectangle {
     required property var editor
     readonly property var selection: editor.selection
     readonly property bool rangeMode: selection.pickedLayerId === "" && !workspace.regionModal
+    readonly property var propertyScroll: workspace.regionModal ? regionScroll : rangeMode ? rangeScroll : adjustmentScroll
     property Item pendingParameterRow: null
     property Item pendingParameterSection: null
     property string pendingParameterLayerId: ""
@@ -34,7 +35,15 @@ Rectangle {
         target: selection
         function onDraftEnded() { if (inspectorRoot.maskReturnLayerId) inspectorRoot.pendingMaskReturn = true }
     }
-    Connections { target: editor; function onImageOpened() { inspectorRoot.clearMaskPosition() } }
+    Connections {
+        target: editor
+        function onImageOpened() {
+            inspectorRoot.clearMaskPosition()
+            rangeScroll.contentItem.contentY = 0
+            adjustmentScroll.contentItem.contentY = 0
+            regionScroll.contentItem.contentY = 0
+        }
+    }
     function queueParameterReveal(row, section) {
         pendingParameterRow = row
         pendingParameterSection = section
@@ -84,10 +93,26 @@ Rectangle {
             Caption { anchors.centerIn: parent; text: "分区草稿进行中 · 确认或取消后返回" }
         }
         Divider {}
-        ScrollView { id: propertyScroll; objectName: "propertyScroll"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
-            ColumnLayout { width: propertyScroll.availableWidth-28; x: 14; spacing: 11
-                AdjustmentPane { id: adjustmentPane; workspace: inspectorRoot.workspace; editor: inspectorRoot.editor; compactHeader: propertyScroll.height < 280; visible: editor.selection.pickedLayerId !== "" && !workspace.regionModal; onParameterRevealRequested: function(row, section) { inspectorRoot.queueParameterReveal(row, section) } }
-                SelectionGuide { id: rangePane; workspace: inspectorRoot.workspace; editor: inspectorRoot.editor; visible: inspectorRoot.rangeMode }
+        // Each mode owns its scroll geometry and position. Hidden layout items
+        // keep their viewport size, so a taller sibling cannot clamp it.
+        ScrollView { id: adjustmentScroll; objectName: inspectorRoot.rangeMode || workspace.regionModal ? "adjustmentPropertyScroll" : "propertyScroll"
+            visible: !inspectorRoot.rangeMode && !workspace.regionModal
+            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
+            ColumnLayout { width: adjustmentScroll.availableWidth-28; x: 14; spacing: 11
+                AdjustmentPane { id: adjustmentPane; workspace: inspectorRoot.workspace; editor: inspectorRoot.editor; compactHeader: adjustmentScroll.height < 280; onParameterRevealRequested: function(row, section) { inspectorRoot.queueParameterReveal(row, section) } }
+            }
+        }
+        ScrollView { id: rangeScroll; objectName: inspectorRoot.rangeMode ? "propertyScroll" : "rangePropertyScroll"
+            visible: inspectorRoot.rangeMode
+            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
+            ColumnLayout { width: rangeScroll.availableWidth-28; x: 14; spacing: 11
+                SelectionGuide { id: rangePane; workspace: inspectorRoot.workspace; editor: inspectorRoot.editor }
+            }
+        }
+        ScrollView { id: regionScroll; objectName: workspace.regionModal ? "propertyScroll" : "regionPropertyScroll"
+            visible: workspace.regionModal
+            Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
+            ColumnLayout { width: regionScroll.availableWidth-28; x: 14; spacing: 11
                 RegionPane { workspace: inspectorRoot.workspace; editor: inspectorRoot.editor }
             }
         }

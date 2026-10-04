@@ -44,6 +44,25 @@ def test_object_hover_click_combine_and_nested_group_controls(
     def click(name):
         item = find(name)
         assert item.property("enabled") and item.property("visible"), name
+        scroll = find("propertyScroll")
+        ancestor = item
+        while ancestor is not None and ancestor is not scroll:
+            ancestor = ancestor.parentItem()
+        if ancestor is scroll:
+            for _ in range(40):
+                top = item.mapToItem(scroll, QPointF()).y()
+                if 4 <= top and top + item.height() <= scroll.height() - 4:
+                    wait_for(lambda: not scroll.property("contentItem").property("moving"))
+                    QTest.qWait(40)
+                    top = item.mapToItem(scroll, QPointF()).y()
+                    if 4 <= top and top + item.height() <= scroll.height() - 4:
+                        break
+                delta = -120 if top >= scroll.height() - item.height() else 120
+                position = scroll.mapToScene(QPointF(scroll.width()/2,scroll.height()/2)).toPoint()
+                QTest.wheelEvent(window,position,QPointF(0,delta).toPoint())
+                QTest.qWait(35)
+            else:
+                raise AssertionError("Could not reveal " + name)
         point = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
         assert 0 < point.x() < size[0] and 0 < point.y() < size[1], (name, point)
         QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier, point)
