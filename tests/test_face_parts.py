@@ -53,7 +53,7 @@ def test_lips_exclude_skin_mouth_eyes_and_the_other_face_and_keep_source():
     assert alpha[65, 40] > 0 and alpha[80, 40] > 0
     assert not np.any(alpha[~np.isin(classes, (12, 13))]) and not np.any(alpha[:, 120:])
     assert image.tobytes() == original and mask['semantic_target'] == 'face'
-    assert mask['label'].endswith('嘴唇') and quality['face_part'] == 'lips'
+    assert mask['label'].endswith('嘴唇') and quality['face_part'] == mask['face_part'] == 'lips'
     assert '嘴内' in quality['protected_features'] and 'face_binding' not in mask
 
 

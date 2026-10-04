@@ -141,6 +141,16 @@ def capabilities():
         "model_path": str(MODEL_DIR / "face-parsing"),
     })
     detail_ready = detail_available()
+    from .segmentation.precise_sam import available as precise_available, MODEL_DIR as precise_dir
+    precise_ready = precise_available()
+    rows.append({
+        "id": "precise_points", "name": "精细排除点 · SAM2.1 Small",
+        "description": "已有鼻部、嘴唇分区中，结合蒙版和排除点进行神经修正；保留五官保护，结果仍需检查。",
+        "available": precise_ready,
+        "status": "可用 · 本地 CPU" if precise_ready else "需要配置精细提示点模型：scripts/setup_precise_points.py",
+        "license": "Apache-2.0 / ONNX Runtime MIT", "source": "https://github.com/facebookresearch/sam2",
+        "model_path": str(precise_dir),
+    })
     rows.insert(2, {
         "id": "details", "name": "细节透明度 · ViTMatte-S",
         "description": "神经模型读取原图与范围约束，细化边缘透明度；智能点选结合分割置信度恢复局部孔洞。已有精细范围修边时保留提示点；相近颜色仍需检查。",

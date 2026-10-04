@@ -31,7 +31,7 @@ def refine_alpha(image, mask, radius=8):
     partial_pixels = int(np.count_nonzero((pixels > 0) & (pixels < 255)))
     result = empty_mask()
     if not mask['inverted']:
-        for key in ('semantic_target','face_binding'):
+        for key in ('semantic_target','face_binding','face_part'):
             if key in seed:
                 result[key] = deepcopy(seed[key])
     if "edge_protection" in mask:

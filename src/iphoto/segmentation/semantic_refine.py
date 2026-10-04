@@ -51,6 +51,13 @@ def refine(image, hint, points, *, engine=None, progress=None):
     else:
         box = (max(0, bounds[0]-64), max(0, bounds[1]-64),
                min(width, bounds[2]+64), min(height, bounds[3]+64))
+    # Small parts need the original detail at a useful model scale. Keep the
+    # point neighborhood for large skin partitions, but trim unused space
+    # around a lip/nose partition when every explicit point stays inside.
+    tight = (max(box[0], bounds[0]-64), max(box[1], bounds[1]-64),
+             min(box[2], bounds[2]+64), min(box[3], bounds[3]+64))
+    if all(tight[0] <= x < tight[2] and tight[1] <= y < tight[3] for x, y, label in locations):
+        box = tight
     if (box[2]-box[0])*(box[3]-box[1]) > 16_000_000:
         raise ValueError("修正点跨越的范围过大，请分次修正邻近部位，原范围保留")
     patch = image.crop(box).convert("RGB")
@@ -74,9 +81,23 @@ def refine(image, hint, points, *, engine=None, progress=None):
             raise ValueError("排除点附近没有可保留的目标，请调整点位")
         mapped = [[strongest[0]/max(1, proxy.width-1), strongest[1]/max(1, proxy.height-1), 1], *mapped]
     coords, labels = from_hint(guide, mapped)
-    if progress is not None:
-        progress("semantic_points")
-    logits, scores, timing = (engine or backend()).predict(proxy, coords, labels)
+    fallback_warning = None
+    from . import precise_sam
+    precise = (engine is None and hint.get("face_part") in ("nose", "lips")
+               and any(label == 0 for label in labels) and precise_sam.available())
+    if precise:
+        try:
+            logits, scores, timing = precise_sam.backend(progress=progress).predict_with_prior(
+                proxy, coords, labels, guide, progress=progress)
+        except Exception:
+            # Optional model failures preserve the existing neural route. Its
+            # result still has to pass the same prompt/semantic constraints.
+            fallback_warning = "精细提示点模型未能完成，已尝试基础神经分割"
+            precise = False
+    if not precise:
+        if progress is not None:
+            progress("semantic_points")
+        logits, scores, timing = (engine or backend()).predict(proxy, coords, labels)
     hard, quality = choose_candidate(logits, scores, coords, labels, guide)
     alpha = guided_edge(proxy, hard, radius=2).resize(patch.size, Image.Resampling.BILINEAR)
     prior = np.asarray(local)
@@ -104,8 +125,12 @@ def refine(image, hint, points, *, engine=None, progress=None):
                   bitmap=encode_bitmap(result_pixels, sampling="alpha", preserve_resolution=True))
     if "face_binding" in hint:
         result["face_binding"] = hint["face_binding"]
-    quality.update(timing, model="EfficientSAM-S · 语义范围保护", resolution="source",
+    if "face_part" in hint:
+        result["face_part"] = hint["face_part"]
+    quality.update(timing, model=timing.get("model", "EfficientSAM-S")+" · 语义范围保护", resolution="source",
                    semantic_target=hint["semantic_target"], crop_box=list(box), crop_size=list(patch.size),
                    mask_size=list(image.size), elapsed_ms=round((perf_counter()-started)*1000, 1))
     quality["warnings"].append("已保留原分区的五官保护；扩大范围可用“补选”")
+    if fallback_warning:
+        quality["warnings"].append(fallback_warning)
     return validate_mask(result), quality

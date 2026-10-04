@@ -1,0 +1,213 @@
+{
+  "repository": "facebookresearch/sam2",
+  "revision": "2b90b9f5ceec907a1c18123530e92e794ad901a4",
+  "files": [
+    {
+      "path": "LICENSE",
+      "size": 11357,
+      "sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64"
+    },
+    {
+      "path": "README.md",
+      "size": 16249,
+      "sha": "85a7eb958bced5495ff990c2bcbe7d99662c660f"
+    },
+    {
+      "path": "sam2/__init__.py",
+      "size": 395,
+      "sha": "0712dd03cb280ab94ba04f8a32aa8ddc8aa3db4a"
+    },
+    {
+      "path": "sam2/automatic_mask_generator.py",
+      "size": 18461,
+      "sha": "065e469e27c2d3af40d51d072031e828692c799b"
+    },
+    {
+      "path": "sam2/benchmark.py",
+      "size": 2811,
+      "sha": "6519534c8619e04b9a632859a5128ad2cee34c13"
+    },
+    {
+      "path": "sam2/build_sam.py",
+      "size": 6405,
+      "sha": "3a3bef1e566d86c3ba0fd75f425530bc6505e9bf"
+    },
+    {
+      "path": "sam2/configs/sam2.1/sam2.1_hiera_b+.yaml",
+      "size": 3650,
+      "sha": "d7172f9b0b663aaaace97fed7e2a08db75150461"
+    },
+    {
+      "path": "sam2/configs/sam2.1/sam2.1_hiera_l.yaml",
+      "size": 3798,
+      "sha": "23073ea7a95901be656b3c6d1a66ce8736ab7ad3"
+    },
+    {
+      "path": "sam2/configs/sam2.1/sam2.1_hiera_s.yaml",
+      "size": 3761,
+      "sha": "fd8d40465b18b3de39b0a565aca712306306c4ed"
+    },
+    {
+      "path": "sam2/configs/sam2.1/sam2.1_hiera_t.yaml",
+      "size": 3855,
+      "sha": "e762aec932f26436d13798f3feb3ec82c360a943"
+    },
+    {
+      "path": "sam2/configs/sam2.1_training/sam2.1_hiera_b+_MOSE_finetune.yaml",
+      "size": 11256,
+      "sha": "9b6faa79f47ee576faf007bffd23fb6649bd881d"
+    },
+    {
+      "path": "sam2/configs/sam2/sam2_hiera_b+.yaml",
+      "size": 3548,
+      "sha": "0f435af02fc88e2d3b7bff06f8cf8013cc079c24"
+    },
+    {
+      "path": "sam2/configs/sam2/sam2_hiera_l.yaml",
+      "size": 3696,
+      "sha": "1092802b1d24be6fedf78939f45b0d021d4ec560"
+    },
+    {
+      "path": "sam2/configs/sam2/sam2_hiera_s.yaml",
+      "size": 3659,
+      "sha": "174e414f1467d80e94a34e9525dc373058f8caaa"
+    },
+    {
+      "path": "sam2/configs/sam2/sam2_hiera_t.yaml",
+      "size": 3753,
+      "sha": "121447aabd5318fac20efc2bc00d7c406ca26f01"
+    },
+    {
+      "path": "sam2/modeling/__init__.py",
+      "size": 197,
+      "sha": "5277f46157403e47fd830fc519144b97ef69d4ae"
+    },
+    {
+      "path": "sam2/modeling/backbones/__init__.py",
+      "size": 197,
+      "sha": "5277f46157403e47fd830fc519144b97ef69d4ae"
+    },
+    {
+      "path": "sam2/modeling/backbones/hieradet.py",
+      "size": 10003,
+      "sha": "19ac77b61d8e1345a301686d39ef2ab6e4b035fb"
+    },
+    {
+      "path": "sam2/modeling/backbones/image_encoder.py",
+      "size": 4706,
+      "sha": "37e9266bc98596e97ca303118c910ed24f6cee2c"
+    },
+    {
+      "path": "sam2/modeling/backbones/utils.py",
+      "size": 3007,
+      "sha": "930b1b7622e7b0e7270120dcafccc242ef0f4f28"
+    },
+    {
+      "path": "sam2/modeling/memory_attention.py",
+      "size": 5509,
+      "sha": "0b07f9d87e3d8194ca5e11fc20f01604d591a59d"
+    },
+    {
+      "path": "sam2/modeling/memory_encoder.py",
+      "size": 5657,
+      "sha": "f60202dfaba87232c3870fb2101b5322a119d985"
+    },
+    {
+      "path": "sam2/modeling/position_encoding.py",
+      "size": 8980,
+      "sha": "2241d4cf1a4495b4c67dc35cbed1c606357b9b7a"
+    },
+    {
+      "path": "sam2/modeling/sam/__init__.py",
+      "size": 197,
+      "sha": "5277f46157403e47fd830fc519144b97ef69d4ae"
+    },
+    {
+      "path": "sam2/modeling/sam/mask_decoder.py",
+      "size": 12657,
+      "sha": "9bebc0366b2703ffcb80a44bfd19cce8339b4fed"
+    },
+    {
+      "path": "sam2/modeling/sam/prompt_encoder.py",
+      "size": 7541,
+      "sha": "c57876264b51f8c5236867359350e32d590efcb5"
+    },
+    {
+      "path": "sam2/modeling/sam/transformer.py",
+      "size": 10761,
+      "sha": "f9fe9a3fbc5cce4f1abe8ee0ae3a8602bbe2ff1b"
+    },
+    {
+      "path": "sam2/modeling/sam2_base.py",
+      "size": 46983,
+      "sha": "d9f4e515b0d161942bf2bb64560056b3efbe6dac"
+    },
+    {
+      "path": "sam2/modeling/sam2_utils.py",
+      "size": 13173,
+      "sha": "e16caae3a9a49e451b2d03d1ee60c47f8e9ed23c"
+    },
+    {
+      "path": "sam2/sam2_hiera_b+.yaml",
+      "size": 31,
+      "sha": "998d9c98c9ff4e8ddd55deff72aa0d9067977418"
+    },
+    {
+      "path": "sam2/sam2_hiera_l.yaml",
+      "size": 30,
+      "sha": "c0e7e58e1951d5c55a3a3ebe6b803dd814cf9d86"
+    },
+    {
+      "path": "sam2/sam2_hiera_s.yaml",
+      "size": 30,
+      "sha": "41896a26beb2aa831d18b0bf3c349ed43deeef68"
+    },
+    {
+      "path": "sam2/sam2_hiera_t.yaml",
+      "size": 30,
+      "sha": "71ff3abbb1e11f8b82100a0a1d63cb267eefe52a"
+    },
+    {
+      "path": "sam2/sam2_image_predictor.py",
+      "size": 19937,
+      "sha": "41ce53af5924504c07216df52b2d2eefaeec7ae9"
+    },
+    {
+      "path": "sam2/sam2_video_predictor.py",
+      "size": 58921,
+      "sha": "5a7e1a01c4d6e89db0453ce982ea8a31b16651c8"
+    },
+    {
+      "path": "sam2/sam2_video_predictor_legacy.py",
+      "size": 58777,
+      "sha": "c7e01ccf972491904b013526333826b337354db1"
+    },
+    {
+      "path": "sam2/utils/__init__.py",
+      "size": 197,
+      "sha": "5277f46157403e47fd830fc519144b97ef69d4ae"
+    },
+    {
+      "path": "sam2/utils/amg.py",
+      "size": 12842,
+      "sha": "986842960cf5deca00614b7b1cde1ab77dad7e6e"
+    },
+    {
+      "path": "sam2/utils/misc.py",
+      "size": 13090,
+      "sha": "b65ee825732ff85137805be650edd4cbe8e6f6d4"
+    },
+    {
+      "path": "sam2/utils/transforms.py",
+      "size": 4885,
+      "sha": "cc17bebfab104b659c5469e8434cf357ae7e24b6"
+    }
+  ],
+  "wrappers": {
+    "image_encoder.py": "004161da976ac2626474a56ca309acd156bcc3cfa22a1b119391eee5e6a35b24",
+    "image_decoder.py": "5c2c428085d228b2af3b80905c6bb212ea177839fdcb1cbc46799f42000b3967",
+    "mask_decoder.py": "4309d98235b016c2dda0d9a7afb386f0a824e65ae965f1ce7851a0e4b2d7406d",
+    "prompt_encoder.py": "4933c6e8f359e68566b8d75f796b87931c51d9c3a2c173789582a7be6de9c8d0",
+    "sam2_utils.py": "80dcea7ccc1d9886e4582bd1aca789d6e629cfd7ea171ac634643d8a433145f7"
+  }
+}

@@ -33,10 +33,12 @@ def assess(mask, size=(256, 256)):
     coverage = float(np.mean(pixels > 0))
     warnings = []
     if coverage < 0.001:
-        warnings.append("选区几乎为空，请补选或重新描述目标")
+        warnings.append("局部分区较小，请放大检查范围与漏选"
+                        if mask.get("semantic_target") in ("face", "face_skin", "body_skin")
+                        else "选区几乎为空，请补选或重新描述目标")
     if coverage > 0.97:
         warnings.append("选区接近全图，请检查背景是否误入")
-    return {"coverage": round(coverage * 100, 1), "warnings": warnings}
+    return {"coverage": round(coverage * 100, 3 if coverage < 0.001 else 1), "warnings": warnings}
 
 
 def refine(image, mask):
@@ -103,7 +105,7 @@ def refine(image, mask):
         result['bitmap'] = encode_bitmap(alpha,sampling='alpha',preserve_resolution=True)
     result["feather"] = mask["feather"]
     if semantic:
-        for key in ('semantic_target','face_binding'):
+        for key in ('semantic_target','face_binding','face_part'):
             if key in mask:
                 result[key] = deepcopy(mask[key])
     return result, {

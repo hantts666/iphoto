@@ -60,7 +60,7 @@ def binding(editor, face):
 def _matches(editor, layer, face):
     mask = layer['mask']
     if (layer['kind']!='adjustment' or layer.get('inpaint') or layer.get('heal')
-            or mask.get('semantic_target')!='face_skin' or mask['inverted']):
+            or mask.get('semantic_target')!='face_skin' or mask['inverted'] or mask.get('face_part')):
         return False
     if 'face_binding' in mask:
         return mask['face_binding']==binding(editor,face)

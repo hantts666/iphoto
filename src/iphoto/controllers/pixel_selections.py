@@ -459,7 +459,7 @@ def complete(self, result, context):
         lid = None
         if context.get('face_binding') and candidate.get('semantic_target') in ('face','face_skin'):
             candidate = validate_mask({**candidate,'face_binding':context['face_binding']})
-        if context.get("face_hint") and candidate.get("semantic_target") == "face":
+        if context.get("face_hint") and candidate.get("semantic_target") == "face" and not candidate.get("face_part"):
             lid = self._scene.add_face(context["face_hint"])
             if lid:
                 candidate = validate_mask({**candidate,'face_binding':{'face_id':lid,'source_sha256':self._sha}})

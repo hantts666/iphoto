@@ -298,6 +298,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     result.update(bitmap=encode_bitmap(full, sampling="alpha", preserve_resolution=True),
                   label=(hint["label"] + (" · " + PARTS[part]['label'] if part in PARTS else " · 面部局部" if scope == 'region' else " · 人脸" if target == "face" else " · 面部皮肤"))[:200],
                   semantic_target=target)
+    if part in PARTS:
+        result["face_part"] = part
     quality = {
         "model": ("FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
         "protected_features": ["嘴内", "面部皮肤", "鼻子", "眼睛", "眉毛", "头发", "帽子", "衣物"] if part == 'lips' else ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],

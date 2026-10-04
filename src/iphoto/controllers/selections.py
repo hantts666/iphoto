@@ -7,7 +7,8 @@ from ..plugins import capabilities, assess
 
 def _quality_text(mask):
     quality = assess(mask)
-    return f"覆盖约 {quality['coverage']:g}%" + (
+    small_part = quality['coverage'] < .1 and mask.get("semantic_target") in ("face", "face_skin", "body_skin")
+    return ("局部分区" if small_part else f"覆盖约 {quality['coverage']:g}%") + (
         " · " + "；".join(quality["warnings"])
         if quality["warnings"]
         else " · 请检查边缘与漏选"

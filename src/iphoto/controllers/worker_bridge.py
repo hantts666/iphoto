@@ -191,11 +191,17 @@ def _pixel_read(self):
                     self._status = f"正在按原图细节分割身体部位 {progress['part']}/{progress['total']}；全部完成后建立图层…"
                     self.changed.emit()
                 elif (isinstance(progress, dict) and progress.get("kind") == "object"
-                        and progress.get("phase") in ("segment", "edges", "local_edges", "details", "semantic_points")
+                        and progress.get("phase") in ("segment", "edges", "local_edges", "details", "semantic_points", "semantic_model", "semantic_encode")
                         and type(progress.get("part")) is int and type(progress.get("total")) is int
                         and 1 <= progress["part"] <= progress["total"] <= 16
                         and progress["total"] == len(active.get("jobs", []))
                         and active["jobs"][progress["part"] - 1].get("mask_target", "object") == "object"
+                        and (not progress["phase"].startswith("semantic_")
+                             or (response.get("op") == "segment" and active.get("op") == "segment"
+                                 and not getattr(self, "_closing", False)
+                                 and isinstance(active["jobs"][progress["part"] - 1].get("hint"), dict)
+                                 and active["jobs"][progress["part"] - 1].get("hint", {}).get("semantic_target")
+                                     in ("face", "face_skin", "body_skin")))
                         and response.get("generation") == self._generation
                         and active.get("generation") == self._generation
                         and (("tile" not in progress and "tiles" not in progress)
@@ -206,7 +212,9 @@ def _pixel_read(self):
                     phase = {"segment": "识别对象范围", "edges": "按原图恢复边缘透明度",
                              "local_edges": "按原图颜色恢复边缘",
                              "details": "恢复细枝、孔洞和透明边缘",
-                             "semantic_points": "按原图局部修正保留/排除点、保护五官"}[progress["phase"]]
+                             "semantic_points": "按原图局部修正保留/排除点、保护五官",
+                             "semantic_model": "首次加载精细提示点模型",
+                             "semantic_encode": "读取局部原图、准备精细修正"}[progress["phase"]]
                     self._status = f"正在{phase} {progress['part']}/{progress['total']}…可随时取消"
                     if "tile" in progress:
                         self._status = f"正在细化原图细节 {progress['tile']}/{progress['tiles']} 块（对象 {progress['part']}/{progress['total']}）…可随时取消"

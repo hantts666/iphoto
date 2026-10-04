@@ -11,3 +11,4 @@ models/segmentation/*.onnx
 models/face-parsing/*.onnx
 models/face-detection/*.onnx
 models/matting/*.onnx
+models/precise-points/*.onnx

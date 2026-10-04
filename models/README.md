@@ -64,6 +64,35 @@ artifacts/face-converter/Scripts/python.exe -m pip install onnx==1.17.0
 
 `--source`可复用已下载的官方JIT文件；大小和摘要不符时不加载、不安装。权重位于 `models/face-parsing/farl-lapa-448.onnx`，不入Git，不在UI下载。当前机器已安装，重新打开应用后使用。较大的模型增加第一次等待及内存占用；遮挡侧脸上唇仍可能带入周围皮肤，小脸也可能漏掉细唇，须放大检查，不能称为任意照片精确五官选择。
 
+## 精细排除点 · SAM2.1 Small（1.9.14，可选）
+
+明确的鼻部、嘴唇分区含排除点时，可使用[Meta 官方 SAM2.1 Small](https://huggingface.co/facebook/sam2.1-hiera-small)结合分区蒙版进行神经修正。没有模型或旧蒙版没有 `face_part` 信息时沿用 EfficientSAM；旧蒙版可重新选择鼻部/嘴唇取得部位信息。整脸、磨皮皮肤、身体和普通选物不切到此模型。真实整脸排除测试出现碎孔，不能把嘴唇排除成功推广到整脸选择。
+
+运行时仅用现有 ONNX Runtime CPU，最多八线程，主环境无需 Torch。局部 RGB 按作者方式以浮点双线性缩放到1024，蒙版变为256×256连续 logit 提示；单掩膜预测关闭动态多掩膜稳定性切换、自动填孔和小块删除。结果仍需满足全部提示点、与原范围有交叠、保留原零区与裁切区外像素；低置信提示检查，不作为准确率。单局部编码缓存核对实际RGB与尺寸，不缓存点预测。首次模型加载、原图局部编码和预测分别显示状态，可取消。
+
+固定[官方源码](https://github.com/facebookresearch/sam2/tree/2b90b9f5ceec907a1c18123530e92e794ad901a4)，检查源码Git blob摘要；使用[Microsoft官方ONNX封装](https://github.com/microsoft/onnxruntime/tree/v1.24.4/onnxruntime/python/tools/transformers/models/sam2)，核对五份封装文件SHA。保留 [SAM2 Apache-2.0](../docs/licenses/SAM2-Apache-2.0.txt) 和 [ONNX Runtime MIT](../docs/licenses/ONNX-Runtime-MIT.txt) 许可。固定官方checkpoint版本 ee5bba1d82bb8749febdf90f45e84b687142ba03，184,416,285字节，SHA256 `6d1aa6f30de5c92224f8172114de081d104bbd23dd9dc5c58996f0cad5dc4d38`。
+
+本轮使用隔离torch2.10.0、onnx1.23.1、onnxruntime1.24.4转换，opset17。重复导出摘要相同；七张照片对照原作者CPU模型，硬分类变化0，不代表人工真值准确率。安装后文件在 `models/precise-points`，不入Git：
+
+| 文件 | 字节 | SHA256 |
+|---|---:|---|
+| sam21-small-encoder.onnx | 138,018,674 | 73f90685bf0a2a252a6cdf04d5bd5e0f77a96aada8b0c47dd328fc420bb45194 |
+| sam21-small-decoder.onnx | 16,564,074 | 0abf6e5a21ce63ee4faad1943ef676d7985b8d1f5fa66c1115e787f631daa31b |
+
+已有验证导出时：
+
+```powershell
+.venv/Scripts/python.exe scripts/setup_precise_points.py --onnx-dir artifacts/precise-points-onnx
+```
+
+从官方来源转换时，提供包含上述固定版本和SAM2作者依赖的独立Python环境。脚本显式下载固定源码/checkpoint、校验、转换、同时核对两个输出，再原子安装；不会覆盖未知已有文件：
+
+```powershell
+.venv/Scripts/python.exe scripts/setup_precise_points.py --python artifacts/point-converter/Scripts/python.exe
+```
+
+可同时指定 `--checkpoint` 和 `--sam2-source` 复用已下载的固定来源。全部大小和摘要匹配才安装；应用界面不下载。当前机器已配置，重新打开应用后加载。首次自动识别上唇仍可能选入皮肤或漏掉细唇，SAM2修正不能恢复原分区已排除的像素；需要放大检查，扩大范围可补选。部位信息随项目、修边和笔画保存，不把局部鼻部/嘴唇当作整脸磨皮层；旧应用重存会丢此可选信息。
+
 ## 人脸检测 · YuNet 与 RetinaFace
 
 显式运行 `.venv\Scripts\python.exe scripts/setup_face_detection.py`，安装并校验以下两个模型。已有YuNet环境可以再次运行，安装侧脸补充；应用本身不下载权重。
