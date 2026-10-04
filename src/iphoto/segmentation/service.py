@@ -109,7 +109,7 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                 native = source is not None and not tolerant
                 mask, quality = segment(source if native else image, job.get("hint"), job.get("points"),
                                         progress=report, model_image=image, native_detail=native)
-                quality["model"] = "EfficientSAM-S"
+                quality.setdefault("model", "EfficientSAM-S")
                 quality["resolution"] = "source" if native else "preview"
             else:
                 raise ValueError("未知分区目标类型，照片未改变")
@@ -122,6 +122,9 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
 
 
 def segment(image, hint=None, points=None, *, engine=None, soften=True, progress=None, model_image=None, native_detail=True):
+    from .semantic_refine import supported, refine
+    if supported(hint):
+        return refine(image, hint, points, engine=engine, progress=progress)
     started = perf_counter()
     points = validate_points(points or [])
     # Resize before converting/copying so a 60 MP source does not allocate

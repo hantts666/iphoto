@@ -191,7 +191,7 @@ def _pixel_read(self):
                     self._status = f"正在按原图细节分割身体部位 {progress['part']}/{progress['total']}；全部完成后建立图层…"
                     self.changed.emit()
                 elif (isinstance(progress, dict) and progress.get("kind") == "object"
-                        and progress.get("phase") in ("segment", "edges", "local_edges", "details")
+                        and progress.get("phase") in ("segment", "edges", "local_edges", "details", "semantic_points")
                         and type(progress.get("part")) is int and type(progress.get("total")) is int
                         and 1 <= progress["part"] <= progress["total"] <= 16
                         and progress["total"] == len(active.get("jobs", []))
@@ -205,7 +205,8 @@ def _pixel_read(self):
                         and not active.get("cancelled") and active.get("priority") != "low"):
                     phase = {"segment": "识别对象范围", "edges": "按原图恢复边缘透明度",
                              "local_edges": "按原图颜色恢复边缘",
-                             "details": "恢复细枝、孔洞和透明边缘"}[progress["phase"]]
+                             "details": "恢复细枝、孔洞和透明边缘",
+                             "semantic_points": "按原图局部修正保留/排除点、保护五官"}[progress["phase"]]
                     self._status = f"正在{phase} {progress['part']}/{progress['total']}…可随时取消"
                     if "tile" in progress:
                         self._status = f"正在细化原图细节 {progress['tile']}/{progress['tiles']} 块（对象 {progress['part']}/{progress['total']}）…可随时取消"
@@ -272,7 +273,7 @@ def _pixel_read(self):
                 if (
                     context.get("purpose") == "points"
                     and context.get("points")
-                    and ("可靠目标" in error or "满足提示点" in error)
+                    and ("可靠目标" in error or "满足提示点" in error or "满足保留/排除点" in error)
                 ):
                     from .pixel_selections import keep_points
 
@@ -292,7 +293,9 @@ def _pixel_read(self):
             elif (response["generation"] == self._generation or current_scene_cache) and not active.get("cancelled"):
                 from .pixel_selections import complete
 
-                if any(job.get("mask_target", "object") == "object" for job in active.get("jobs", [])) or context.get("purpose") == "warm":
+                from ..segmentation.semantic_refine import supported
+                if any(job.get("mask_target", "object") == "object" and not supported(job.get("hint"))
+                       for job in active.get("jobs", [])) or context.get("purpose") == "warm":
                     self._warm_ready_sha = self._sha
                 complete(self, response["result"], active["context"])
             elif context.get("purpose") != "precache":

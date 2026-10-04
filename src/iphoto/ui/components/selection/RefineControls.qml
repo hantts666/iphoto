@@ -55,7 +55,7 @@ ColumnLayout {
     }
     Action {
         objectName: root.prefix+"refineSelectionButton"; text: "重新识别轮廓"; visible: !root.regionMode; Layout.fillWidth: true
-        hint: "以当前选区为提示，用像素模型重新分割一遍"
+        hint: "以当前选区为提示，用像素模型重新分割；人脸范围保留五官保护和人脸关联"
         enabled: root.active && !root.editor.busy && root.editor.pixelAvailable
         onClicked: root.selection.refine("sam")
     }

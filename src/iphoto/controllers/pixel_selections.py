@@ -21,10 +21,15 @@ def reset_prompts(self, refine=False):
         return
     self._pixel_points = []
     self._pixel_hint = deepcopy(self._candidate) if refine else None
+    from ..segmentation.semantic_refine import supported
+    if supported(self._pixel_hint):
+        self._stop_warm()
     self.changed.emit()
 
 
 def start(self, jobs, context, priority=None, composition=None):
+    from ..segmentation.semantic_refine import supported
+    semantic_correction = any(supported(job.get("hint")) and job.get("mask_target", "object") == "object" for job in jobs)
     facial = any(job.get("mask_target") in ("face", "face_skin") for job in jobs)
     body = any(job.get("mask_target") == "body_skin" for job in jobs)
     if facial:
@@ -35,7 +40,7 @@ def start(self, jobs, context, priority=None, composition=None):
             return False
     if (composition is None or jobs) and (not jobs or any(job.get("mask_target", "object") in ("object", "body_skin") for job in jobs)) and not ready(self):
         return False
-    if facial or body:
+    if facial or body or semantic_correction:
         self._stop_warm()
     context.setdefault(
         "origin",
@@ -55,6 +60,8 @@ def start(self, jobs, context, priority=None, composition=None):
                             else "正在自动分离面部皮肤、保护眉眼和嘴唇…")
         elif body:
             self._status = "正在按原图细节分别生成身体部位范围…"
+        elif semantic_correction:
+            self._status = "正在按原图局部修正保留/排除点，保留五官保护…可随时取消"
         elif getattr(self, "_warm_sha", "") == self._sha:
             self._status = "照片首次编码中；点选已排队，完成后会自动生成选区…"
         else:
@@ -73,6 +80,9 @@ def start(self, jobs, context, priority=None, composition=None):
 
 def warm(self):
     """Pre-encode the embedding so the first point click responds in seconds."""
+    from ..segmentation.semantic_refine import supported
+    if supported(self._candidate) or supported(self._pixel_hint):
+        return
     if self.busy or self._pixel_active or self._pixel_queue or not self.hasImage or not available():
         return
     self._start_warm()
@@ -256,7 +266,8 @@ def point(self, position, positive):
         points = validate_points(
             self._pixel_points + [[*position, 1 if positive else 0]]
         )
-        if not any(p[2] for p in points):
+        from ..segmentation.semantic_refine import supported
+        if not any(p[2] for p in points) and not supported(self._pixel_hint):
             return self._notify("先在目标内部点一下，再按 Alt 点击排除背景")
         return start(
             self,
@@ -335,7 +346,7 @@ def keep_points(self, points, message):
     self._pixel_points = deepcopy(points)
     self._status = message
     self.changed.emit()
-    self._notify(message)
+    self._notify(message, scope="draft")
 
 
 def failed_result(self, context, error):

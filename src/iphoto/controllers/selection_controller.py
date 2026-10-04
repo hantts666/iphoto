@@ -456,6 +456,8 @@ class SelectionController(QObject):
         self.setMode(mode)
         if editor.maskView != "overlay":
             self.setMaskView("overlay")
+        editor._status = "补选模式：在漏选处拖动画笔，可逐笔撤销" if mode == "add" else "擦除模式：在误选处拖动画笔，可逐笔撤销"
+        editor.changed.emit()
         return True
 
     @Slot(str)

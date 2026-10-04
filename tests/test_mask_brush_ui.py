@@ -193,9 +193,12 @@ def test_draft_correction_preserves_ai_bitmap_identity_holes_and_history(canvas,
     for name in ("addDraftMaskButton", "eraseDraftMaskButton"):
         button, point = ui.find(name), ui.point(name)
         assert button.isVisible() and 0 < point.y() < ui.w.height()
+    ui.e._notify("提示点已保留，原选区未改变", scope="draft")
+    assert ui.find("workspaceToast").isVisible()
     ui.click("eraseDraftMaskButton")
     wait_for(lambda: ready(ui) and ui.w.property("selectionPreviewReady"))
     assert ui.e.selection.tool == "brush" and ui.e.selection.mode == "subtract"
+    assert not ui.find("workspaceToast").isVisible() and ui.e.status.startswith("擦除模式")
     assert ui.e.maskView == "overlay" and not ui.w.property("compare")
     assert not ui.find("selectionMode_replace").isVisible()
     assert ui.find("selectionMode_add").property("text") == "补选"

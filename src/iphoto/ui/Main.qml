@@ -76,6 +76,7 @@ ApplicationWindow {
     }
     function correctDraft(mode) {
         if (selection.correctDraft(mode)) {
+            toast.expireDraft()
             compare = false
             sceneHoverId = ""
             canvasPane.focusCanvas()

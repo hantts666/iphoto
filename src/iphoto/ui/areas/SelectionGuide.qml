@@ -220,7 +220,7 @@ ColumnLayout {
                 SpinBox { id: matteRadius; objectName: "matteRadiusBox"; from: 1; to: 64; value: 8; enabled: !editor.busy; implicitWidth: 88; implicitHeight: 28 }
             }
             Action { objectName: "refineMatteButton"; text: "按原图细化透明边缘"; Layout.fillWidth: true; hint: "保留发丝等半透明过渡"; enabled: !editor.busy && editor.matteAvailable; onClicked: selection.refine("matte", matteRadius.value) }
-            Action { objectName: "correctPixelPointsButton"; text: "补点 / 排除点"; Layout.fillWidth: true; hint: "点击目标内部保留，Alt＋点击排除漏选的背景；可叠加提示点"; enabled: !editor.busy; onClicked: selection.refinePixelPoints() }
+            Action { objectName: "correctPixelPointsButton"; text: "保留 / 排除点"; Layout.fillWidth: true; hint: "点击目标内部保留，Alt＋点击排除误选；人脸范围保留五官保护，扩大范围可用补选"; enabled: !editor.busy; onClicked: selection.refinePixelPoints() }
             RowLayout { Layout.fillWidth: true
                 Caption { text: "羽化" }
                 FineSlider { from: 0; to: 5; stepSize: .1; value: editor.draftFeather; Layout.fillWidth: true; enabled: !editor.busy; onMoved: editor.setDraftFeather(value); onPressedChanged: if(!pressed) editor.finishSelectionGesture() }
