@@ -36,13 +36,13 @@ Item {
         objectName: "brushFootprint"
         readonly property point center: root.input.mapToItem(root, root.input.mouseX, root.input.mouseY)
         visible: root.input.enabled && (root.input.containsMouse || root.input.pressed)
-            && ["brush", "heal"].includes(root.workspace.selectionTool)
+            && ["brush", "heal", "transparency"].includes(root.workspace.selectionTool)
             && !root.editor.viewport.spaceHeld && !root.editor.viewport.temporaryZoom
         width: Math.max(2, root.workspace.brushRadius * 2 * Math.min(root.photo.width, root.photo.height))
         height: width; radius: width / 2
         x: center.x - width / 2; y: center.y - height / 2
         color: "transparent"; border.width: 1
-        border.color: root.workspace.selectionTool === "brush" && (root.input.pressed ? root.input.strokeMode : root.editor.viewport.altHeld ? "subtract" : root.editor.viewport.shiftHeld ? "add" : root.workspace.selectionMode) === "subtract" ? "#ffad8d" : "#d7fff1"
+        border.color: root.workspace.selectionTool === "transparency" ? "#e4c6ff" : root.workspace.selectionTool === "brush" && (root.input.pressed ? root.input.strokeMode : root.editor.viewport.altHeld ? "subtract" : root.editor.viewport.shiftHeld ? "add" : root.workspace.selectionMode) === "subtract" ? "#ffad8d" : "#d7fff1"
         Rectangle { anchors.fill: parent; anchors.margins: -1; radius: width / 2; color: "transparent"; border.width: 1; border.color: "#25282c"; z: -1 }
     }
     Image { objectName: "objectHoverPreview"; x: root.photo.x; y: root.photo.y; width: root.photo.width; height: root.photo.height; source: root.hoverPreview; visible: root.activeHover!=="" && !root.editor.viewport.spaceHeld; fillMode: Image.Stretch }
@@ -72,14 +72,14 @@ Item {
             }
             var points = root.input.points, tool = root.workspace.selectionTool
             if (points.length && tool !== "object" && tool !== "wand" && tool !== "smart") {
-                c.strokeStyle = root.input.strokeMode === "subtract" ? "#ffad8d" : "#d7fff1"; c.lineWidth = 2
+                c.strokeStyle = tool === "transparency" ? "#a876d0" : root.input.strokeMode === "subtract" ? "#ffad8d" : "#d7fff1"; c.lineWidth = 2
                 var a = points[0], b = points[points.length - 1]; c.beginPath()
                 if (tool === "rect") c.rect(px+a[0]*pw, py+a[1]*ph, (b[0]-a[0])*pw, (b[1]-a[1])*ph)
                 else if (tool === "ellipse") c.ellipse(px+Math.min(a[0],b[0])*pw, py+Math.min(a[1],b[1])*ph, Math.abs(b[0]-a[0])*pw, Math.abs(b[1]-a[1])*ph)
                 else {
                     c.moveTo(px+a[0]*pw, py+a[1]*ph)
                     for (var n = 1; n < points.length; n++) c.lineTo(px+points[n][0]*pw, py+points[n][1]*ph)
-                    if (tool === "brush" || tool === "heal") { c.lineWidth = root.workspace.brushRadius*2*Math.min(pw,ph); c.lineCap = "round"; c.lineJoin = "round" }
+                    if (["brush", "heal", "transparency"].includes(tool)) { c.lineWidth = root.workspace.brushRadius*2*Math.min(pw,ph); c.lineCap = "round"; c.lineJoin = "round" }
                 }
                 c.stroke()
             }

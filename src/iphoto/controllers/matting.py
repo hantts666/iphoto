@@ -2,6 +2,25 @@
 
 from copy import deepcopy
 
+from ..document import empty_mask, validate_mask
+
+
+def paint(self, points, radius):
+    if self.busy or not self.hasImage or not self.hasSelectionDraft or self.hasRegionDraft:
+        return False
+    if not any(c["id"] == "details" and c["available"] for c in self.imageCapabilities):
+        self._notify("AI 细节模型未配置，请在图像能力中查看", True)
+        return False
+    try:
+        stroke = {"points": deepcopy(points), "radius": radius}
+        validate_mask({**empty_mask(), "ops": [{"kind": "brush", "mode": "add", **stroke}]})
+    except (ValueError, TypeError) as exc:
+        self._notify(str(exc), True)
+        return False
+    self._status = "AI 正在细化涂抹区域的透明度，其他范围保留…可随时取消"
+    return self._request("matte", mask=deepcopy(self._candidate), method="neural", stroke=stroke,
+                         points=deepcopy(self._pixel_points)) is not False
+
 
 def start(self, radius, *, method="classic"):
     if self.busy or not self.hasImage:
@@ -37,6 +56,9 @@ def cancel(self):
 
 def complete(self, result, *, points=None):
     mask, quality = result["mask"], result["quality"]
+    local = quality.get("local_refinement", False)
+    if local and quality.get("changed_pixels") == 0:
+        return self._notify("本次透明细化没有改变范围；可扩大问题区域或改用补选 / 擦除")
     if self._region_candidate:
         self._region_candidate["layers"][self._region_index]["mask"] = mask
         self._mark_dirty()
@@ -49,17 +71,17 @@ def complete(self, result, *, points=None):
             self._pixel_points = deepcopy(points)
             self._pixel_hint = deepcopy(self._candidate)
     neural = quality.get("backend") == "ViTMatte-S · ONNX"
-    self._selection_quality = (
+    self._selection_quality = (f"局部 AI 透明度 · 已修改 {quality['changed_pixels']:,} 个像素 · {quality['elapsed_ms']/1000:.1f}s" if local else (
         ("AI 原图边缘 · " if neural else "")
         + f"连续透明度 · {quality['partial_pixels']:,} 个过渡像素"
         f" · {quality['elapsed_ms'] / 1000:.1f}s"
-    )
+    ))
     if quality.get("warnings"):
         self._selection_quality += " · " + "；".join(quality["warnings"])
     self._status = "透明边缘已就绪；可查看黑白透明度或调色效果，确认后再输出"
     self._message(
         "assistant",
-        self._selection_quality + "\n已取消额外羽化；透明度已细化，未改写照片颜色。",
+        self._selection_quality + ("\n涂抹区域外的透明度保持；照片颜色未改写，可逐笔撤销。" if local else "\n已取消额外羽化；透明度已细化，未改写照片颜色。"),
         state="region_draft" if self._region_candidate else "draft",
         origin={"mode": "selection", "model": "ViTMatte-S（本地 AI）" if neural else "PyMatting（本地）"},
     )

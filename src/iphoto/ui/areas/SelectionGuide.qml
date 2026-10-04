@@ -185,7 +185,7 @@ ColumnLayout {
             id: edgeCol
             anchors.fill: parent; anchors.margins: 10; spacing: 7
             RowLayout { Layout.fillWidth: true; spacing: 6
-                Text { text: "修边缘"; color: Theme.ink; font.bold: true; font.pixelSize: 12; Layout.fillWidth: true }
+                Text { text: "修细节"; color: Theme.ink; font.bold: true; font.pixelSize: 12; Layout.fillWidth: true }
                 SelectBox {
                     objectName: "maskViewBox"
                     Layout.preferredWidth: 120
@@ -195,47 +195,7 @@ ColumnLayout {
                     onActivated: selection.setMaskView(currentIndex === 2 ? "adjustment" : currentIndex === 1 ? "grayscale" : "overlay")
                 }
             }
-            RowLayout { Layout.fillWidth: true; spacing: 6
-                Action { objectName: "refineAutoButton"; text: "智能修边"; primary: true; Layout.fillWidth: true; hint: selection.autoRefineMethod === "details" ? "AI 按原图细化已有范围边缘，保留提示点；处理时可取消" : selection.autoRefineMethod !== "" ? "自动选择当前可用修边方法" : "没有可用方法；请在扩展 → 图像能力中查看"; enabled: !editor.busy && selection.autoRefineMethod !== ""; onClicked: selection.refine("auto", matteRadius.value) }
-                Action {
-                    objectName: "refineMethodMenuButton"; text: "选方法"; subtle: true; implicitHeight: 30
-                    hint: "手动选择修边方法"
-                    enabled: !editor.busy
-                    onClicked: refineMenu.popup()
-                    Menu {
-                        id: refineMenu
-                        Repeater {
-                            model: selection.refineMethods
-                            delegate: MenuItem {
-                                required property var modelData
-                                text: modelData.name + (modelData.available ? "" : "（未配置）") + (modelData.id === "sam" ? "（仅独立范围）" : "")
-                                enabled: modelData.available && !editor.busy && !(editor.hasRegionDraft && modelData.id === "sam")
-                                onTriggered: selection.refine(modelData.id, matteRadius.value)
-                                ToolTip.visible: hovered; ToolTip.text: modelData.description; ToolTip.delay: 400
-                            }
-                        }
-                    }
-                }
-                SpinBox { id: matteRadius; objectName: "matteRadiusBox"; from: 1; to: 64; value: 8; enabled: !editor.busy; implicitWidth: 88; implicitHeight: 28 }
-            }
-            Action { objectName: "refineMatteButton"; text: "按原图细化透明边缘"; Layout.fillWidth: true; hint: "保留发丝等半透明过渡"; enabled: !editor.busy && editor.matteAvailable; onClicked: selection.refine("matte", matteRadius.value) }
-            Action { objectName: "correctPixelPointsButton"; text: "保留 / 排除点"; Layout.fillWidth: true; hint: "点击目标内部保留，Alt＋点击排除误选；人脸范围保留五官保护，扩大范围可用补选"; enabled: !editor.busy; onClicked: selection.refinePixelPoints() }
-            RowLayout { Layout.fillWidth: true
-                Caption { text: "羽化" }
-                FineSlider { from: 0; to: 5; stepSize: .1; value: editor.draftFeather; Layout.fillWidth: true; enabled: !editor.busy; onMoved: editor.setDraftFeather(value); onPressedChanged: if(!pressed) editor.finishSelectionGesture() }
-                Caption { text: editor.draftFeather.toFixed(1) + "%" }
-            }
-            RowLayout { Layout.fillWidth: true
-                Caption { text: "边缘位移" }
-                FineSlider { objectName: "edgeShiftSlider"; from: -5; to: 5; stepSize: 1; value: editor.edgeShift; Layout.fillWidth: true; enabled: !editor.busy; onMoved: editor.setEdgeShift(value); onPressedChanged: if(!pressed) editor.finishSelectionGesture() }
-                Caption { text: (editor.edgeShift>0 ? "+" : "") + editor.edgeShift + "%" }
-            }
-            RowLayout { Layout.fillWidth: true
-                Caption { text: "色彩保护" }
-                FineSlider { objectName: "edgeProtectionSlider"; from: 0; to: 100; stepSize: 10; value: editor.edgeProtection; Layout.fillWidth: true; enabled: !editor.busy; onMoved: editor.setEdgeProtection(value); onPressedChanged: if(!pressed) editor.finishSelectionGesture() }
-                Caption { text: Math.round(editor.edgeProtection) + "%" }
-            }
-            Caption { visible: editor.selectionQuality.length > 0; text: editor.selectionQuality; wrapMode: Text.Wrap; color: "#c6d9ca"; Layout.fillWidth: true; font.pixelSize: 10 }
+            RefineControls { workspace: guide.workspace; editor: guide.editor }
         }
     }
 

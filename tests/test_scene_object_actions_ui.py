@@ -69,6 +69,8 @@ def test_left_click_with_hover_enabled_keeps_cached_warning_and_can_correct(canv
     mask = deepcopy(ui.e._candidate)
     monkeypatch.setattr(pixel_selections, "available", lambda: True)
     monkeypatch.setattr(pixel_selections, "warm", lambda _: None)
+    reveal(ui, "refineAdvancedButton")
+    ui.click("refineAdvancedButton")
     reveal(ui, "correctPixelPointsButton")
     clicked = QSignalSpy(ui.find("correctPixelPointsButton").clicked)
     ui.click("correctPixelPointsButton")

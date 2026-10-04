@@ -25,6 +25,8 @@ def main():
         method = request.get("method", "classic")
         if method not in ("classic", "neural"):
             raise ValueError("未知边缘细化方法")
+        if "stroke" in request and method != "neural":
+            raise ValueError("局部透明细化需要 AI 方法")
         source = load_source(Path(request["source_path"]))
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，原选区保持不变")
@@ -38,8 +40,14 @@ def main():
                                   "progress": phase}, ensure_ascii=False), flush=True)
 
             progress()
-            mask, quality = refine(source.image, mask, request["radius"],
-                                   points=request.get("points", []), progress=progress)
+            if "stroke" in request:
+                from .local import refine as refine_local
+
+                mask, quality = refine_local(source.image, mask, request["stroke"],
+                                             points=request.get("points", []), progress=progress)
+            else:
+                mask, quality = refine(source.image, mask, request["radius"],
+                                       points=request.get("points", []), progress=progress)
         else:
             mask, quality = refine_alpha(source.image, mask, request["radius"])
         response = {

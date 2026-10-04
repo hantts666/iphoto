@@ -1,6 +1,6 @@
 # iPhoto 源码仓库说明
 
-本项目是 Python 3.12 + PySide6 / Qt Quick 的原生桌面照片编辑器。照片合成与本地分割运行在独立工作进程，云端 AI 返回经过校验的参数、对象位置或内部点。运行入口为 `run.py`，应用版本 1.9.14，项目格式为 1.9。
+本项目是 Python 3.12 + PySide6 / Qt Quick 的原生桌面照片编辑器。照片合成与本地分割运行在独立工作进程，云端 AI 返回经过校验的参数、对象位置或内部点。运行入口为 `run.py`，应用版本 1.10.6，项目格式为 1.10。
 
 ## 从哪里开始
 
@@ -387,3 +387,11 @@ CurveEditor在原调整面板增添可折叠“通道曲线”，选择RGB/红/�
 1.10.5：SelectionGuide仅aiSelectionButton，旁接selectionDescriptionInput，点击与回车同selectByDescription。无目录直接selection，不自动scene；有目录targets用selected／locate／unsupported，locate必须空id，禁止以人物相减替代不存在的局部。conversation保留原pending请求及binding，用原text续selection；状态、取消、过期门槛与原像素任务共用，不发布中间粗范围或第二条用户消息。已有选中层范围绑定保持。旧selectByTextDirect槽保留兼容，无对应UI按钮。
 
 补本地人脸后的目录内容相同不调用SceneIndex.set，避免重置revision、precise、pixel_status、hover；变化则仍完整替换。preview第一次必须升级source，原尺寸缓存可直接复用。第121轮实际千问分析九对象、帽子两次、头发自动定位共5HTTP，第二次帽子0本地模型任务且bitmap／cache／revision保持；头发未再带手臂。最终相关132通过，实际原尺寸PNG／ICC／tile／重开／撤销／源与设置保持。详见planning/iphoto-v1.8/selection-routing-2026-10-04.md；透明材质入口／通道尚未实现。
+
+## 局部透明细化与共享修细节
+
+1.10.6的透明细化工具沿已有画笔原像素大小／坐标／快捷键，在release时调用SelectionController.paintTransparency，核对照片URL／当前层／代次。matting.paint校验严格笔触协议、已有草稿和details能力，深拷贝蒙版及提示点发到可取消的一次性matte进程。局部任务额外绑定当前层／目标层／开始时蒙版，progress和final均核对，不接到不同草稿或分区；只有最终结果发布。
+
+matting/local.py以原有效alpha生成局部三分图，涂抹区标未知128，灰度上下文保持未知，明确0／255作两类参考；无参考、无保护范围、超过16M ROI／4M未知提前拒绝。既有neural.solve保持原尺寸分块及128块／180秒门槛。结果只修改笔触，内侧距离场smoothstep接合旧alpha，最大32px，明确提示点覆盖接合；语义皮肤零像素和原部位scope继续保护。变化才展平有效alpha成原尺寸bitmap并保留非反选语义来源，无变化不增历史。每笔草稿撤销，保存绑定层一步文档撤销，项目仍1.10，无新增模型或依赖。
+
+DraftOutputBar快速补选／擦除／透明细化，SelectionGuide与RegionPane共用RefineControls，方法／提示点／羽化／位移折叠到高级。移除没有蒙版字段及算子的色彩保护滑杆；前景颜色去污染另立能力。真实发丝接缝失败与修复、RGBA灯泡夹具失败与原程序最终验收见local-transparency-2026-10-04.md；未宣称薄纱已解决或完成通道抠图。

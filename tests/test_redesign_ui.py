@@ -1,5 +1,6 @@
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QObject,QPointF,Qt,QUrl
 from PySide6.QtGui import QFontDatabase
@@ -9,6 +10,7 @@ from iphoto.workspace import Editor,ROOT
 from test_redesign import scene,region_completion
 from test_editor import settled
 from test_ai import wait_for,mock_api,configure
+from test_scene_object_actions_ui import reveal
 
 LIVE=[]
 
@@ -83,6 +85,15 @@ def test_draft_output_and_region_review_are_separate_from_chat(qt_app,ai_store,t
             wait_for(lambda:editor.hasRegionDraft and settled(editor) and window.property("previewReady") and window.property("selectionPreviewReady"))
         assert editor._layers==original
         assert not find("exportButton").property("enabled")
+        # The shared refinement group also stays simple in the region modal.
+        assert find("regionrefineAutoButton").isVisible()
+        assert not find("regionrefineMethodMenuButton").isVisible()
+        ui = SimpleNamespace(w=window,find=find,point=lambda name:find(name).mapToScene(QPointF(find(name).width()/2,find(name).height()/2)).toPoint())
+        reveal(ui,"regionrefineAdvancedButton");click("regionrefineAdvancedButton")
+        assert find("regionrefineMethodMenuButton").isVisible() and find("regionmatteRadiusBox").isVisible()
+        assert not find("regioncorrectPixelPointsButton").isVisible() and not find("regionrefineSelectionButton").isVisible()
+        reveal(ui,"regionrefineAdvancedButton");click("regionrefineAdvancedButton")
+        assert not find("regionmatteRadiusBox").isVisible()
         assert window.grabWindow().save(str(ROOT/f"artifacts/v13-regions-mock-{size[0]}.png"))
         click("selectionToLayerButton")
         assert len(editor.layers)==3 and not editor.hasRegionDraft

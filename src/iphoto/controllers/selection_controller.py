@@ -19,7 +19,7 @@ from ..document import MIN_STROKE_RADIUS
 from . import adjustment_review, heal, matting, objects, pixel_selections, selections
 
 NAVIGATION_TOOLS = ("inspect", "hand", "zoom")
-DRAFT_FREE_TOOLS = ("object", "smart", "heal")
+DRAFT_FREE_TOOLS = ("object", "smart", "heal", "transparency")
 MODES = ("replace", "add", "subtract")
 BRUSH_MAX = 0.15
 HEAL_MAX = 0.025
@@ -434,6 +434,8 @@ class SelectionController(QObject):
             not navigation and (editor.busy or editor.hasRegionDraft)
         ):
             return
+        if tool == "transparency" and (not editor.hasSelectionDraft or not self.transparencyAvailable):
+            return editor._notify("请先选择范围，并在图像能力中配置 AI 细节模型", True)
         if tool == "brush" and self._tool != "brush":
             self._mode = "add"
         if tool == "smart" and self._tool != "smart":
@@ -455,6 +457,29 @@ class SelectionController(QObject):
                 self._show_mask = tool != "heal"
         self.changed.emit()
         self.toolChosen.emit(tool)
+
+    @Property(bool, notify=changed)
+    def transparencyAvailable(self):
+        return any(c["id"] == "details" and c["available"] for c in self._editor.imageCapabilities)
+
+    @Slot()
+    def chooseTransparency(self):
+        editor = self._editor
+        if editor.busy or not editor.hasSelectionDraft or not self.transparencyAvailable:
+            return
+        self.chooseTool("transparency")
+        if editor.maskView != "overlay":
+            self.setMaskView("overlay")
+        editor._status = "透明细化：在发丝或纱边涂抹，松开后 AI 处理；附近保留部分目标与背景作为参考"
+        editor.changed.emit()
+
+    @Slot(str, str, int, "QVariantList", float, result=bool)
+    def paintTransparency(self, layer, photo, generation, points, radius):
+        editor = self._editor
+        if (layer != editor.activeLayerId or photo != editor.originalUrl or generation != editor._generation
+                or self._tool != "transparency"):
+            return False
+        return matting.paint(editor, points, radius)
 
     @Slot()
     def reviewMask(self):

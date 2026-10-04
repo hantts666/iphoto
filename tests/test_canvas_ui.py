@@ -333,19 +333,17 @@ def test_draft_output_jumps_to_edge_refinement(canvas):
     edge = ui.find("edgeRefineCard")
     flick = scroll.property("contentItem")
     top_before = edge.mapToItem(scroll, QPointF()).y()
-    matte = ui.find("refineMatteButton")
-    matte_before = matte.mapToItem(scroll, QPointF()).y()
+    automatic = ui.find("refineAutoButton")
     scroll_before = flick.property("contentY")
-    if ui.size[0] == 1080:
-        assert matte_before + matte.height() / 2 >= scroll.height()
+    assert not ui.find("refineMatteButton").isVisible()
     assert edge.property("visible")
     assert ui.find("jumpToRefineButton").property("visible")
     ui.click("jumpToRefineButton")
     top_after = edge.mapToItem(scroll, QPointF()).y()
     assert flick.property("contentY") >= scroll_before
-    assert top_after < top_before
+    assert top_after <= top_before
     assert 0 <= top_after < scroll.height() * 0.5
-    assert 0 <= matte.mapToItem(scroll, QPointF()).y() < scroll.height()
+    assert 0 <= automatic.mapToItem(scroll, QPointF()).y() < scroll.height()
     if ui.size[0] == 1080:
         assert ui.w.grabWindow().save(str(ROOT / "artifacts/refine-shortcut-1080.png"))
 

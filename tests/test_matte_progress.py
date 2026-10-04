@@ -55,7 +55,7 @@ def test_all_progress_lines_precede_the_single_final_atomic_result(monkeypatch):
     assert owner._matte_active is None and calls == [({"fixture":"final"},{"points":active["points"]})]
 
 
-@pytest.mark.parametrize("failure", ["changed", "missing", "bad_method", "bad_points"])
+@pytest.mark.parametrize("failure", ["changed", "missing", "bad_method", "bad_points", "bad_stroke", "classic_stroke"])
 def test_actual_neural_worker_rejects_invalid_requests_without_a_result(tmp_path, failure):
     source = tmp_path/"source.png"
     Image.new("RGB",(96,64),(100,100,100)).save(source)
@@ -66,6 +66,10 @@ def test_actual_neural_worker_rejects_invalid_requests_without_a_result(tmp_path
     mask["ops"] = [{"kind":"rect","mode":"add","points":[[.4,.2],[.8,.8]],"radius":0}]
     request = {"id":7,"op":"matte","generation":10,"source_path":str(source),"source_sha":sha,
                "method":"invalid" if failure == "bad_method" else "neural","radius":4,"mask":mask,"points":[[True,.5,1]]}
+    if failure in ("bad_stroke", "classic_stroke"):
+        request.update(points=[], stroke={"points":[[True,.5]], "radius":.01})
+    if failure == "classic_stroke":
+        request.update(method="classic", stroke={"points":[[.5,.5]], "radius":.01})
     child = subprocess.run([sys.executable,str(ROOT/"run.py"),"--matte-worker"], input=json.dumps(request)+"\n",
                            capture_output=True,text=True,encoding="utf8",timeout=30)
     assert child.returncode == 0
@@ -73,3 +77,33 @@ def test_actual_neural_worker_rejects_invalid_requests_without_a_result(tmp_path
     final = messages[-1]
     assert final["id"] == 7 and final["generation"] == 10 and final["ok"] is False and "result" not in final
     assert all("result" not in message for message in messages)
+
+
+@pytest.mark.parametrize("phase", ["progress", "final"])
+@pytest.mark.parametrize("binding", ["current", "layer", "target", "candidate", "region"])
+def test_local_result_requires_the_same_recipient_and_range(monkeypatch, phase, binding):
+    mask = empty_mask(True)
+    active = {"id":7, "op":"matte", "generation":10, "source_sha":"photo", "method":"neural",
+              "stroke":{"points":[[.5,.5]], "radius":.01}, "mask":deepcopy(mask),
+              "layer_id":"original", "target_id":"original", "points":[[.5,.5,1]]}
+    payload = {"progress":{"phase":"details", "tile":1, "tiles":1}} if phase == "progress" else {"ok":True,"result":{"fixture":"final"}}
+    response = {"id":7, "op":"matte", "generation":10, **payload}
+    calls = []
+    monkeypatch.setattr(matting,"complete",lambda owner,result,**kwargs:calls.append((result,kwargs)))
+    owner = SimpleNamespace(_matte_active=active, _matte_buffer=b"", _generation=10, _sha="photo", _closing=False, _matte_aborting=False,
+                            _selected="different" if binding == "layer" else "original",
+                            _selection_target_id="different" if binding == "target" else "original",
+                            _candidate=empty_mask() if binding == "candidate" else deepcopy(mask), hasRegionDraft=binding=="region",
+                            _layers=[{"id":"original"}], _status="previous",
+                            _matte_process=SimpleNamespace(readAllStandardOutput=lambda:(json.dumps(response)+"\n").encode()),
+                            changed=SimpleNamespace(emit=lambda:None))
+    snapshot = deepcopy((owner._candidate,owner._layers,owner._generation))
+    matte_process.read(owner)
+    assert snapshot == (owner._candidate,owner._layers,owner._generation)
+    if phase == "progress":
+        assert owner._matte_active is active and not calls
+        assert (owner._status != "previous") == (binding == "current")
+        if binding == "current": assert "涂抹区域 1/1 块" in owner._status
+    else:
+        assert owner._matte_active is None
+        assert calls == ([({"fixture":"final"},{"points":active["points"]})] if binding == "current" else [])

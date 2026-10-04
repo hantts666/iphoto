@@ -166,7 +166,7 @@ Rectangle {
                 anchors.fill: parent
                 enabled: editor.hasImage && !editor.busy && !editor.hasRegionDraft && root.selectionTool && !workspace.compare
                 cursorShape: workspace.selectionTool === "object" ? Qt.PointingHandCursor : Qt.CrossCursor
-                preventStealing: true; hoverEnabled: ["object", "brush", "heal"].includes(workspace.selectionTool)
+                preventStealing: true; hoverEnabled: ["object", "brush", "heal", "transparency"].includes(workspace.selectionTool)
                 property var points: []
                 property string strokeMode: "replace"
                 property string repairLayer: ""
@@ -186,7 +186,7 @@ Rectangle {
                     if (workspace.selectionTool === "object") { overlays.hoverId=editor.objectAt(mouse.x/width,mouse.y/height); return }
                     if (workspace.selectionTool === "smart") return
                     if (pressed && points.length) {
-                        if (workspace.selectionTool === "brush" || workspace.selectionTool === "polygon" || workspace.selectionTool === "heal") appendPoint(point(mouse))
+                        if (["brush", "polygon", "heal", "transparency"].includes(workspace.selectionTool)) appendPoint(point(mouse))
                         else points = [points[0],point(mouse)]
                         overlays.repaint()
                     }
@@ -199,6 +199,10 @@ Rectangle {
                     else if (workspace.selectionTool === "heal") {
                         appendPoint(point(mouse))
                         editor.selection.paintRepair(repairLayer, repairPhoto, repairGeneration, points, workspace.brushRadius)
+                    }
+                    else if (workspace.selectionTool === "transparency") {
+                        appendPoint(point(mouse))
+                        editor.selection.paintTransparency(repairLayer, repairPhoto, repairGeneration, points, workspace.brushRadius)
                     }
                     else {
                         if (workspace.selectionTool === "brush" || workspace.selectionTool === "polygon") appendPoint(point(mouse))
