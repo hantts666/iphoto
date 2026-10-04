@@ -107,6 +107,13 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                 # Background catalog previews stay cheap. Foreground requests
                 # must use the native RGB for refinement, not an enlarged proxy.
                 native = source is not None and not tolerant
+                if 'part_boundary' in job:
+                    from .part_boundary import refine as refine_part
+                    if not native or job.get('points'):
+                        raise ValueError('五官边缘修正需要原图与独立语义保留点')
+                    mask, quality = refine_part(source,job['hint'],job['part_boundary'],progress=report)
+                    items.append({'id':job['id'],'mask':mask,'quality':quality})
+                    continue
                 mask, quality = segment(source if native else image, job.get("hint"), job.get("points"),
                                         progress=report, model_image=image, native_detail=native)
                 quality.setdefault("model", "EfficientSAM-S")

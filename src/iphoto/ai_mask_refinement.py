@@ -14,8 +14,9 @@ from .engine import Recipe, RANGES
 MASK_REFINEMENT_SCHEMA = {"anyOf": [{
     "type": "object", "additionalProperties": False,
     "properties": {"layer_id": {"type": ["string", "null"]},
+                   "method": {"type": "string", "enum": ["exclude", "boundary"]},
                    "recipe": LAYER_EDITS_SCHEMA["items"]["properties"]["recipe"]},
-    "required": ["layer_id", "recipe"],
+    "required": ["layer_id", "recipe", "method"],
 }, {"type": "null"}]}
 POINTS_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -48,7 +49,7 @@ def eligible(mask):
 
 
 def validate_request(value, scope, current, offered, workspace):
-    if (not isinstance(value, dict) or set(value) != {'layer_id', 'recipe'}
+    if (not isinstance(value, dict) or not {'layer_id','recipe'} <= set(value) <= {'layer_id','recipe','method'}
             or not workspace.get('mask_refinement_available')):
         raise ValueError('精细范围修正不可用，已有范围和参数保留')
     lid = value['layer_id']
@@ -64,6 +65,11 @@ def validate_request(value, scope, current, offered, workspace):
         part, base, locked = target['mask_part'], target['recipe'], target.get('locked', [])
     else:
         raise ValueError('精细范围修正的作用范围无效')
+    method=value.get('method','exclude')
+    if method not in ('exclude','boundary'):
+        raise ValueError('五官范围修正方式无效')
+    if method=='boundary' and not (workspace.get('selection_mask_boundary_refinable') if scope=='current_selection' else target.get('mask_boundary_refinable')):
+        raise ValueError('此范围缺少可靠的五官边缘修正条件，原范围保留')
     recipe = value['recipe']
     if recipe is not None:
         if not isinstance(recipe, dict) or set(recipe) != set(RANGES):
@@ -75,7 +81,7 @@ def validate_request(value, scope, current, offered, workspace):
             raise ValueError('嘴唇范围修正不能夹带磨皮')
         if recipe == base:
             recipe = None
-    return {'layer_id': lid, 'recipe': recipe}
+    return {'layer_id': lid, 'recipe': recipe, 'method': method}
 
 
 def mask_data_url(path):

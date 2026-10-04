@@ -191,7 +191,7 @@ def _pixel_read(self):
                     self._status = f"正在按原图细节分割身体部位 {progress['part']}/{progress['total']}；全部完成后建立图层…"
                     self.changed.emit()
                 elif (isinstance(progress, dict) and progress.get("kind") == "object"
-                        and progress.get("phase") in ("segment", "edges", "local_edges", "details", "semantic_points", "semantic_model", "semantic_encode")
+                        and progress.get("phase") in ("segment", "edges", "local_edges", "details", "semantic_points", "semantic_model", "semantic_encode", "semantic_parts")
                         and type(progress.get("part")) is int and type(progress.get("total")) is int
                         and 1 <= progress["part"] <= progress["total"] <= 16
                         and progress["total"] == len(active.get("jobs", []))
@@ -212,6 +212,7 @@ def _pixel_read(self):
                     phase = {"segment": "识别对象范围", "edges": "按原图恢复边缘透明度",
                              "local_edges": "按原图颜色恢复边缘",
                              "details": "恢复细枝、孔洞和透明边缘",
+                             "semantic_parts": "核对目标五官的语义保留点",
                              "semantic_points": "按原图局部修正保留/排除点、保护五官",
                              "semantic_model": "首次加载精细提示点模型",
                              "semantic_encode": "读取局部原图、准备精细修正"}[progress["phase"]]

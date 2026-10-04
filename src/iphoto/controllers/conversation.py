@@ -382,6 +382,7 @@ def sendMessage(self, text, mode):
     selection.pop("face_binding", None)
     from ..ai_mask_refinement import eligible as refinable_mask
     from ..segmentation.precise_sam import available as precise_available
+    from .mask_refinement import boundary_context
     selection["description"] = self._quality_text(
         self._candidate or self._layer()["mask"]
     )
@@ -414,6 +415,7 @@ def sendMessage(self, text, mode):
                     "locked": l["locked"],
                     "mask_part": l["mask"].get("face_part"),
                     "mask_refinable": refinable_mask(l["mask"]) and l["kind"] == "adjustment" and not l.get("heal") and not l.get("inpaint"),
+                    "mask_boundary_refinable": bool(boundary_context(self,l["mask"])) if l["kind"] == "adjustment" and not l.get("heal") and not l.get("inpaint") else False,
                     "mask_label": l["mask"]["label"],
                     "visible": l["visible"],
                     "opacity": l["opacity"],
@@ -430,6 +432,7 @@ def sendMessage(self, text, mode):
             "body_skin_available": pixel_selections.available(),
             "mask_refinement_available": precise_available() and pixel_selections.available(),
             "selection_mask_refinable": self.hasSelectionDraft and refinable_mask(self._candidate),
+            "selection_mask_boundary_refinable": self.hasSelectionDraft and bool(boundary_context(self,self._candidate)),
         },
     )
     self.changed.emit()

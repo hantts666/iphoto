@@ -60,6 +60,8 @@ def start(self, jobs, context, priority=None, composition=None):
                             else "正在自动分离面部皮肤、保护眉眼和嘴唇…")
         elif body:
             self._status = "正在按原图细节分别生成身体部位范围…"
+        elif any('part_boundary' in job for job in jobs):
+            self._status = '正在结合面部分区与原图核对五官边缘…可随时取消'
         elif semantic_correction:
             self._status = "正在按原图局部修正保留/排除点，保留五官保护…可随时取消"
         elif getattr(self, "_warm_sha", "") == self._sha:

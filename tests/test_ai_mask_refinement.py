@@ -157,8 +157,11 @@ def setup(ui, mode):
     return mask, lid
 
 
-def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, review=None, points_reply=None, verification=None):
+def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, review=None, points_reply=None, verification=None, method="exclude"):
     e = ui.e; mask, lid = setup(ui, mode)
+    if method=='boundary':
+        monkeypatch.setattr(mask_refinement,'boundary_context',lambda owner,mask:{'crop':[0,0,1,1],
+            'features':{'eyes':[[.3,.2],[.6,.2]],'mouth':[[.3,.6],[.6,.6]]},'anchor':[.5,.4]})
     pending_jobs = []
     request = e._request
     def intercept(op, **data):
@@ -176,8 +179,10 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, revie
         if context['mode'] == 'mask_review': return response(review(context) if callable(review) else review or {'status':'keep', 'summary':'未发现可明确排除的残留', 'exclude_regions':[]})
         target = next((l for l in context['existing_layers'] if l['id'] == lid), None)
         recipe = {**(target['recipe'] if target else Recipe().to_dict()), 'hsl_red_lightness': 6, 'warmth': 40} if color else None
-        return response(proposal(context['current_recipe'], 'existing_layers' if mode == 'existing' else 'current_selection',
-                                 lid if mode == 'existing' else None, recipe))
+        plan=proposal(context['current_recipe'], 'existing_layers' if mode == 'existing' else 'current_selection',
+                      lid if mode == 'existing' else None, recipe)
+        plan['mask_refinement']['method']=method
+        return response(plan)
     ui.w.setProperty('chatOpen', True)
     return mask, lid, pending_jobs, mock_api(body, delay=delay)
 
@@ -340,3 +345,58 @@ def test_preparation_is_cancellable_and_late_crop_cannot_start_cloud(canvas, mon
         mask_refinement.crop_ready(e, {}, crops[0]['context'], e._generation)
         assert len(requests) == 1 and not jobs and not e.aiMaskPreparing
         assert e._layers == before and e._candidate == mask
+
+
+@pytest.mark.parametrize('mode,color', [('new',False),('bound',True),('existing',True)])
+def test_boundary_tool_skips_cloud_points_and_publishes_once(canvas,monkeypatch,mode,color):  # noqa: F811
+    ui=canvas;e=ui.e
+    mask,lid,jobs,api=start_chat(ui,monkeypatch,mode,color,method='boundary')
+    before,cursor=deepcopy(e._layers),e._cursor
+    with api as (url,requests):
+        configure(e.ai,url);e.sendMessage('检查嘴唇边缘','auto');wait_for(lambda:bool(jobs))
+        assert len(requests)==1 and jobs[0]['jobs'][0]['points']==[] and 'part_boundary' in jobs[0]['jobs'][0]
+        assert e._layers==before and e._candidate==(mask if mode!='existing' else None)
+        controlled=deepcopy(jobs[0]);controlled['jobs'][0]['points']=[[.5,.4,0]]
+        result=neural_result(controlled,mask);mask_refinement.complete(e,result,jobs[0]['context']);finished(e)
+        assert len(requests)==3 and all(json.loads(r[2]['messages'][1]['content'][0]['text'])['mode']!='mask_points' for r in requests)
+        if mode=='new':
+            assert e._candidate==result['items'][0]['mask'] and e._layers==before and e._cursor==cursor
+            e.undo();wait_for(lambda:settled(e));assert e._candidate==mask
+        else:
+            assert e._cursor==cursor+1 and e.activeLayerId==lid and e.parameters['warmth']==4 and e.parameters['hsl_red_lightness']==6
+            e.undo();wait_for(lambda:settled(e));assert e._layers==before
+
+
+@pytest.mark.parametrize('case',['cancel','reject','unavailable'])
+def test_boundary_tool_cancel_reject_or_missing_context_keeps_everything(canvas,monkeypatch,case):  # noqa: F811
+    ui=canvas;e=ui.e
+    mask,_,jobs,api=start_chat(ui,monkeypatch,'bound',True,method='boundary',
+        verification={'status':'reject','summary':'真实目标误删'} if case=='reject' else None)
+    before,cursor=deepcopy(e._layers),e._cursor
+    with api as (url,requests):
+        configure(e.ai,url);e.sendMessage('修边并调颜色','auto');wait_for(lambda:bool(jobs))
+        if case=='cancel':
+            e.selection.cancelTask();finished(e)
+        else:
+            controlled=deepcopy(jobs[0]);controlled['jobs'][0]['points']=[[.5,.4,0]]
+            if case=='unavailable':mask_refinement.failed(e,'模型未能完成',jobs[0]['context'])
+            else:mask_refinement.complete(e,neural_result(controlled,mask),jobs[0]['context'])
+            finished(e)
+        assert e._layers==before and e._candidate==mask and e._cursor==cursor
+        assert len(requests)==(3 if case=='reject' else 1)
+
+
+@pytest.mark.parametrize('color',[False,True])
+def test_boundary_without_range_change_does_not_claim_range_repair(canvas,monkeypatch,color):  # noqa: F811
+    ui=canvas;e=ui.e
+    mask,_,jobs,api=start_chat(ui,monkeypatch,'bound',color,method='boundary')
+    before,cursor=deepcopy(e._layers),e._cursor
+    with api as (url,requests):
+        configure(e.ai,url);e.sendMessage('检查边缘，保持明确五官','auto');wait_for(lambda:bool(jobs))
+        mask_refinement.complete(e,{'items':[{'id':'target','mask':mask,'quality':{'model':'controlled','warnings':[]}}]},jobs[0]['context']);finished(e)
+        assert '已修正' not in e.conversation[-1]['text']
+        if color:
+            assert len(requests)==2 and e._layer()['mask']==mask and e.parameters['hsl_red_lightness']==6 and e._cursor==cursor+1
+        else:
+            assert len(requests)==1 and e._layers==before and e._candidate==mask and e._cursor==cursor
+            assert e.conversation[-1]['state']=='answered'

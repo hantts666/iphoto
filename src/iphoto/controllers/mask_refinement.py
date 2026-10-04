@@ -27,6 +27,19 @@ def _current(self, pending):
     return state
 
 
+def boundary_context(self, mask):
+    from .face_inventory import grounding_context
+    from ..segmentation import face_precision, precise_sam
+
+    if not eligible(mask) or not face_precision.available() or not precise_sam.available():
+        return None
+    bounds=raster_mask_cached(mask,(384,384)).getbbox()
+    face=grounding_context(self,[(bounds[0]+bounds[2])/768,(bounds[1]+bounds[3])/768]) if bounds else None
+    if not face or not face.get('face_features'):
+        return None
+    return deepcopy({'crop':face['skin_crop'],'features':face['face_features'],'anchor':face['anchor']})
+
+
 def begin(self, result):
     pending = self._pending_request
     try:
@@ -50,7 +63,7 @@ def begin(self, result):
             raise ValueError('当前目标不是明确的鼻部或嘴唇范围，照片未改变')
         state = {'token': uuid4().hex, 'mask': deepcopy(mask), 'source_sha': self._sha, 'generation': self._generation,
                  'candidate': deepcopy(self._candidate), 'draft_target': self._selection_target_id,
-                 'draft': draft, 'target_id': lid, 'recipe': deepcopy(plan['recipe']),
+                 'draft': draft, 'target_id': lid, 'recipe': deepcopy(plan['recipe']), 'method': plan.get('method','exclude'),
                  'stage': 'points_preparing', 'preparing': True}
         from .face_inventory import grounding_context
         from ..ai_grounding import region_crop
@@ -60,6 +73,18 @@ def begin(self, result):
         state['context_crop'] = region_crop(face['mask'], (384, 384)) if face else None
         pending['mask_refinement'] = state
         _current(self, pending)
+        if plan.get('method')=='boundary':
+            part_context=boundary_context(self,mask)
+            if not part_context:
+                raise ValueError('缺少可靠的五官边缘修正条件，原范围和参数保留')
+            state['summary']='根据面部分区分别保留目标五官，结合原图核对边缘'
+            state['stage'],state['preparing']='neural',False
+            if pixel_selections.start(self,[{'id':'target','hint':state['mask'],'points':[],
+                    'part_boundary':part_context}],{'purpose':'ai_mask_refinement','mask_token':state['token'],
+                    'mask_stage':state['stage'],'origin':_origin(pending)}) is False:
+                raise ValueError('五官边缘修正未能启动，原范围和参数保留')
+            self.changed.emit()
+            return
         self._status = '正在从原图准备五官与蒙版对照…可随时取消'
         self.changed.emit()
         if self._request('mask_refinement_crop', mask=state['mask'], source_sha=self._sha,
@@ -189,6 +214,8 @@ def complete(self, result, context):
         if not raster_mask_cached(mask, (512, 512)).getbbox():
             raise ValueError('精细修正结果为空，已有范围保留')
         if mask == state['mask'] and state['recipe'] is None:
+            if state.get('method')=='boundary':
+                return preserve_original(self,'unchanged')
             raise ValueError('本次修正没有改变范围，已有范围保留')
         state['result'], state['quality'] = mask, deepcopy(item.get('quality', {}))
         state['stage'], state['preparing'] = 'review_preparing', True
@@ -261,8 +288,9 @@ def preserve_original(self, status):
     pending = self._pending_request
     state = _current(self, pending)
     part = '嘴唇' if state['mask']['face_part'] == 'lips' else '鼻部'
-    output = (f'AI复查发现可能误删真实{part}' if status == 'reject'
-              else f'AI复查未确认本次修正保留了真实{part}')+'，原范围与参数保持'
+    output = ('本次边缘核对未产生范围修改，原范围与参数保持' if status=='unchanged' else
+              (f'AI复查发现可能误删真实{part}' if status == 'reject'
+               else f'AI复查未确认本次修正保留了真实{part}')+'，原范围与参数保持')
     self._pending_request = None
     self._message('assistant', output+'。请放大检查范围边缘。', state='answered', origin=_origin(pending))
     self._notify(output)
@@ -341,6 +369,8 @@ def publish(self):
             self.selection.showAppliedResult(lid)
             self.selection.focusChangedParameters(previous_recipe)
             message_state, output = 'applied', '已修正已有图层的范围'+('并调整参数' if state['recipe'] is not None else '，颜色参数保持')
+        if mask==state['mask'] and state['recipe'] is not None:
+            output='已建立独立调整层，范围保持' if state['draft'] and not state['target_id'] else '已调整已有层参数，范围保持'
         quality = state['quality']
         warnings = [warning.replace('请补充提示点', '请放大检查边缘')
                     for warning in quality.get('warnings', [])]

@@ -123,9 +123,10 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
 
 AUTO_PROMPT += """
 action=refine_mask：用户要求排除已有鼻部/嘴唇蒙版的误选、修正其范围时使用；mask_refinement_available=true才可用。程序会放大当前原图和蒙版，再由你定位排除点，随后调用本地神经模型。不要让用户先手动画或重新建层。这里只能减少当前覆盖，不能扩大范围、恢复隐藏或未选入的像素、修整整脸皮肤或普通物体。
+mask_refinement.method必须为exclude或boundary。明确排除某块错选皮肤用exclude，会放大对照后定位排除点。用户要求让边缘贴合、检查锯齿且未明确指出整块误选时，若目标mask_boundary_refinable或selection_mask_boundary_refinable为true，优先boundary；程序结合面部分区分别保留上下唇/鼻部并用原图神经模型核对边缘，无需你猜排除点。两种方式均仅减少原覆盖，之后复查并单独核对是否误删；通过才提交，无法可靠修改则保持。不要声称补上了未选范围或边缘已经精准。
 用户称某处“选多了／是皮肤”不代表原图事实，必须自行看图确认。上下唇之间的暗线不是上唇外缘，不能因为上唇较浅或在暗线上方就删除上唇。准备后会对比修改前范围和本次减少，由AI复查是否误删真实目标；拒绝或不能确认时原范围和参数保持。
-有当前草稿时scope=current_selection、mask_refinement={layer_id:null,recipe:null或最终全部参数}，selection_mask_refinable必须为true；只修范围用recipe=null，保留草稿和颜色。有绑定图层则保存原层；无绑定且同时调色时才新建层。不能丢掉草稿去改另一层。
-没有草稿时scope=existing_layers，从existing_layers中mask_refinable=true的明确目标选择layer_id，mask_refinement={layer_id:其精确id,recipe:null或该目标层全部最终参数}。层名改变仍使用mask_part与id；可以修正未选中的已有层，不能用当前层配方覆盖目标层。未要求调色时recipe=null；要求同时调色时以该目标层已有配方为基础，仅修改用户要求的参数，保留锁定。嘴唇不能加磨皮。
+有当前草稿时scope=current_selection、mask_refinement={layer_id:null,recipe:null或最终全部参数,method:上述方式}，selection_mask_refinable必须为true；只修范围用recipe=null，保留草稿和颜色。有绑定图层则保存原层；无绑定且同时调色时才新建层。不能丢掉草稿去改另一层。
+没有草稿时scope=existing_layers，从existing_layers中mask_refinable=true的明确目标选择layer_id，mask_refinement={layer_id:其精确id,recipe:null或该目标层全部最终参数,method:上述方式}。层名改变仍使用mask_part与id；可以修正未选中的已有层，不能用当前层配方覆盖目标层。未要求调色时recipe=null；要求同时调色时以该目标层已有配方为基础，仅修改用户要求的参数，保留锁定。嘴唇不能加磨皮。
 两种情况的顶层recipe保持current_recipe，regions=[]、layer_edits=[]、group=null、repairs=[]。summary只说明将检查和修正，不提前声称已修好。已有目标不匹配或不能可靠识别误选时用answer/unsupported说明未修改。每次回复都带mask_refinement字段；其他动作该字段必须为null。
 """
 
