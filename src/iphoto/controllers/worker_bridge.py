@@ -737,7 +737,8 @@ def preview_payload(self):
     self._sync_layer()
     layers = deepcopy(self._layers)
     mask = deepcopy(self._candidate or self._layer()["mask"])
-    if self._candidate is not None and self._mask_view == "adjustment":
+    if self._candidate is not None and (self._mask_view == "adjustment"
+            or self._mask_view in ('white','black') and self._selection_target_id):
         # Preview a draft with the active layer's current adjustments.
         # Never mutate its real mask or the history until confirmation.
         for layer in layers:

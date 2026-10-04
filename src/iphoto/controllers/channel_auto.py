@@ -45,7 +45,7 @@ def prepare(e, mask, token):
         state['mask'] = deepcopy(mask)
         e._status = '2/3 正在比较通道，准备原图透明度…可取消'
         options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,
-                   'ai':True,'interior':state['interior']}
+                   'ai':True,'interior':state['interior'],'detail':True,'color':True}
         e._request('channel_preview',mask=state['mask'],options=options,initial=True,expected_sha256=e._sha,
                    context={'channel_auto':True,'token':token})
     except (ValueError, KeyError) as exc:
@@ -58,7 +58,7 @@ def ready(e, result, context, generation):
         if current is None or generation != e._generation:
             return
         _, state = current
-        options = {**result['options'],'interior':state['interior']}
+        options = {**result['options'],'interior':state['interior'],'detail':True,'color':True}
         e._status = '3/3 正在结合通道与 AI 细化原图透明边缘…可取消'
         e._request('matte',method='channel',mask=state['mask'],channel_options=options,auto_token=state['token'])
     except (ValueError, KeyError) as exc:
@@ -79,15 +79,25 @@ def complete(e, result, token):
         quality = result['quality']
         names = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度'}
         detail = f"{names[quality['channel']]}通道 + AI 透明边缘 · {quality['elapsed_ms']/1000:.1f}s"
+        if quality.get('native_detail'):
+            detail += ' · 原像素细纹理'
+        if quality.get('color_recovery'):
+            detail += ' · 透明输出去背景串色'
         if quality['warnings']:
             detail += ' · ' + '；'.join(quality['warnings'])
         e._selection_quality = detail
         e._message('assistant',detail + ('\n已更新原层范围，颜色和强度保留；可一步撤销。' if state['bound']
-                   else '\n范围已准备好，可以直接调整或继续修边。') + '\n请放大检查细丝、孔洞与透明内部。',
+                   else '\n范围已准备好，可以直接调整或继续修边。') + '\n可切换白底或黑底检查，透明 PNG 使用相同的前景颜色恢复；仍请检查细丝、孔洞与透明内部。',
                    state='applied' if state['bound'] else 'draft',origin=pending)
         e._notify('通道与 AI 透明度处理已完成；可撤销或检查边缘')
     except (ValueError, KeyError) as exc:
         e._notify(str(exc), True)
+
+
+def discard(e, token):
+    state = (e._pending_request or {}).get('channel_auto',{})
+    if state.get('token') == token:
+        e._notify('照片或范围已变化，过期通道结果未应用；原范围保留', True)
 
 
 def cancel(e):

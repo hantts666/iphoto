@@ -59,12 +59,17 @@ def main():
             mask_target = None
             if "mask" in request:
                 mode = request.get("mask_view", "overlay")
-                if mode not in ("overlay", "grayscale"):
+                if mode not in ("overlay", "grayscale", "white", "black"):
                     raise ValueError("蒙版视图无效")
                 mask_target = directory / f"detail-mask-{request['id']}.png"
-                overlay_mask_tile(
-                    validate_mask(request["mask"]), source.image.size, box, mode
-                ).save(mask_target, compress_level=DETAIL_PNG_COMPRESSION)
+                mask = validate_mask(request['mask'])
+                if mode in ('white','black'):
+                    from .cutout import background_view
+                    background_view(source.image, validate_layers(request['layers']), mask, mode, tile, box).save(
+                        mask_target, compress_level=DETAIL_PNG_COMPRESSION)
+                else:
+                    overlay_mask_tile(mask, source.image.size, box, mode).save(
+                        mask_target, compress_level=DETAIL_PNG_COMPRESSION)
                 assets.append(mask_target)
             while len(assets) > 8:
                 assets.pop(0).unlink(missing_ok=True)

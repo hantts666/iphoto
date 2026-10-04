@@ -78,6 +78,55 @@ def test_missing_anchors_and_full_selection_do_not_invoke_model():
     assert validate_options(proposed)==proposed
 
 
+def test_native_color_lines_polish_fuzzy_ai_alpha_and_preserve_constraints(monkeypatch):
+    from iphoto.matting import channels
+    image,truth,mask,options=scene()
+    fields=channels._fields
+    def weak_contrast(*args):
+        alpha,inside,outside,planes,metrics=fields(*args)
+        return alpha,inside,outside,planes,[{**item,'score':1.5} for item in metrics]
+    monkeypatch.setattr(channels,'_fields',weak_contrast)
+    def fuzzy_ai(crop,guide,progress=None):
+        expected=np.rint(truth[6:154,31:209]*255*.7).astype(np.uint8)
+        expected[guide==0]=0;expected[guide==255]=255
+        return expected,1
+    before,_=estimate(image,mask,options,neural=fuzzy_ai)
+    phases=[]
+    after,quality=estimate(image,mask,{**options,'detail':True,'color':True},neural=fuzzy_ai,
+                           progress=lambda **value:phases.append(value))
+    raw=np.asarray(raster_mask(before,image.size))/255
+    fixed=np.asarray(raster_mask(after,image.size))/255
+    assert np.abs(fixed-truth).mean()<np.abs(raw-truth).mean()/5
+    assert quality['native_detail'] and quality['color_recovery'] and after['color_recovery']
+    assert phases==[{'phase':'polish'}]
+    assert (fixed[:20]==0).all() and (fixed[77:83,130:137]==0).all()
+
+
+@pytest.mark.parametrize('error',[ValueError('缺少参照'),ImportError('组件缺失')])
+def test_unstable_polish_keeps_ai_result_and_reports_failure(monkeypatch,error):
+    from iphoto.matting import channels,service
+    image,_,mask,options=scene()
+    fields=channels._fields
+    def weak_contrast(*args):
+        alpha,inside,outside,planes,metrics=fields(*args)
+        return alpha,inside,outside,planes,[{**item,'score':1.5} for item in metrics]
+    monkeypatch.setattr(channels,'_fields',weak_contrast)
+    def ai(crop,guide,progress=None):return np.where(guide==128,100,guide).astype(np.uint8),1
+    before,_=estimate(image,mask,options,neural=ai)
+    def fail(*args,**kwargs):raise error
+    monkeypatch.setattr(service,'refine_alpha',fail)
+    after,quality=estimate(image,mask,{**options,'detail':True},neural=ai)
+    assert after==before and not quality['native_detail'] and quality['warnings']
+
+
+def test_missing_color_component_keeps_alpha_and_reports_no_recovery(monkeypatch):
+    monkeypatch.setattr('iphoto.cutout.available',lambda:False)
+    image,_,mask,options=scene()
+    before,_=estimate(image,mask,{**options,'ai':False})
+    after,quality=estimate(image,mask,{**options,'ai':False,'color':True})
+    assert after==before and not quality['color_recovery'] and quality['warnings']
+
+
 def plan(scope='current_layer'):
     return {'action':'channel_mask','scope':scope,'summary':'结合通道与 AI 修透明边缘',
             'recipe':Recipe().to_dict(),'regions':[],'layer_edits':[], 'group':None,
@@ -98,7 +147,7 @@ def test_conversation_scope_and_capability_cannot_bypass_selection():
         parse_auto(completion(value),Recipe().to_dict(),[],current_scope='selection',workspace={'channel_mask_available':False})
 
 
-@pytest.mark.parametrize('outcome',['complete','cancel','stale','failure'])
+@pytest.mark.parametrize('outcome',['complete','cancel','stale','stale_matte','failure'])
 def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
     image,_,mask,_=scene();path=tmp_path/'cloth.png';image.save(path)
     editor=Editor(ai_store=ai_store)
@@ -112,6 +161,9 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
             wait_for(lambda:editor.aiChannelPreparing)
             if outcome=='cancel':editor.selection.cancelTask()
             elif outcome=='stale':editor._generation+=1
+            elif outcome=='stale_matte':
+                wait_for(lambda:editor.matteBusy)
+                editor._generation+=1
             elif outcome=='failure':path.unlink()
             wait_for(lambda:not editor.busy and settled(editor),seconds=45)
         if outcome=='complete':

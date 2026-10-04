@@ -33,9 +33,9 @@ def main():
         mask = validate_mask(request["mask"])
         if method == 'channel':
             from .channels import estimate
-            def channel_progress(tile, tiles):
+            def channel_progress(tile=None, tiles=None, phase='details'):
                 print(json.dumps({'id':request['id'], 'op':'matte', 'generation':request['generation'],
-                                  'progress':{'phase':'details','tile':tile,'tiles':tiles}}, ensure_ascii=False), flush=True)
+                                  'progress':({'phase':phase} if tile is None else {'phase':phase,'tile':tile,'tiles':tiles})}, ensure_ascii=False), flush=True)
             mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress)
         elif method == "neural":
             from .neural import refine

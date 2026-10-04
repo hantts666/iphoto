@@ -11,7 +11,7 @@ from .trimap import make_trimap
 from .solver import solve_alpha
 
 
-def refine_alpha(image, mask, radius=8):
+def refine_alpha(image, mask, radius=8, *, linear=True):
     started = perf_counter()
     # The source loader already supplies RGB for ordinary photos. Avoid a
     # second 180 MB image allocation on a 60 MP source.
@@ -25,7 +25,7 @@ def refine_alpha(image, mask, radius=8):
     if seed.get("semantic_target") in ("face","face_skin","body_skin"):
         trimap[np.asarray(original)==0] = 0
     del original
-    pixels, tiles = solve_alpha(rgb, trimap, byte_output=True)
+    pixels, tiles = solve_alpha(rgb, trimap, byte_output=True, linear=linear)
     unknown_pixels = int(np.count_nonzero(trimap == 0.5))
     del trimap
     partial_pixels = int(np.count_nonzero((pixels > 0) & (pixels < 255)))

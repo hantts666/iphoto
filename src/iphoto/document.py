@@ -81,6 +81,8 @@ def validate_mask(mask, *, cache_bitmap=False):
     if not isinstance(mask.get("inverted"), bool):
         raise ValueError("选区反选标记无效")
     number(mask.get("feather"), 0, 0.05)
+    if 'color_recovery' in mask and type(mask['color_recovery']) is not bool:
+        raise ValueError('去背景串色选项无效')
     if "semantic_target" in mask and mask["semantic_target"] not in ("face", "face_skin", "body_skin"):
         raise ValueError("选区语义目标无效")
     part = mask.get("face_part")
@@ -147,6 +149,7 @@ def validate_mask(mask, *, cache_bitmap=False):
         "base": mask["base"],
         "inverted": mask["inverted"],
         "label": mask["label"],
+        **({'color_recovery':mask['color_recovery']} if 'color_recovery' in mask else {}),
         **({"semantic_target":mask["semantic_target"]} if "semantic_target" in mask else {}),
         **({"face_part": part} if part is not None else {}),
         **({'face_part_scope': part_scope} if part_scope is not None else {}),
@@ -623,7 +626,7 @@ def _validate_project(payload):
             "active_layer": layer["id"],
             "conversation": [],
         }
-    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11"):
+    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12"):
         raise ValueError("不支持此项目版本")
     if (
         not isinstance(payload.get("source"), str)
@@ -660,7 +663,7 @@ def _validate_project(payload):
     from .scene import validate_catalog
 
     return {
-        "schema_version": "1.11" if any(l.get("pixel_patch") for l in layers) else "1.10",
+        "schema_version": project_version(layers, payload.get('selection_draft'), region_draft),
         "engine_version": ENGINE_VERSION,
         "source": payload["source"],
         "source_sha256": payload["source_sha256"].lower(),
@@ -676,6 +679,17 @@ def _validate_project(payload):
         "region_draft": region_draft,
         "scene_catalog": validate_catalog(payload.get("scene_catalog")),
     }
+
+
+def project_version(layers, draft=None, regions=None):
+    masks = [layer['mask'] for layer in layers]
+    if draft is not None:
+        masks.append(draft)
+    if regions:
+        masks.extend(layer['mask'] for layer in regions['layers'])
+    if any('color_recovery' in mask for mask in masks):
+        return '1.12'
+    return '1.11' if any(layer.get('pixel_patch') for layer in layers) else '1.10'
 
 
 def validate_region_draft(value):

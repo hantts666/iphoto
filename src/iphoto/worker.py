@@ -174,15 +174,25 @@ def main():
             mask_key = (
                 {k: v for k, v in mask.items() if k != "label"},
                 request.get("mask_view", "overlay"),
+                key if request.get('mask_view') in ('white','black') else None,
             )
             result["mask_cache_hit"] = (
                 current_overlay is not None and mask_key == previous_mask_key
             )
             if not result["mask_cache_hit"]:
                 current_overlay = cache / f"mask-{request['id']}.png"
-                overlay_mask(
-                    mask, proxy.size, request.get("mask_view", "overlay")
-                ).save(current_overlay)
+                mode = request.get('mask_view', 'overlay')
+                if mode in ('white','black'):
+                    from .cutout import background_view
+                    if cache_hit:
+                        from PIL import Image
+                        with Image.open(result['preview']) as cached:
+                            output = cached.copy()
+                    # Native colors and alpha share one context in preview,
+                    # detail and export; the ordinary photograph stays intact.
+                    background_view(source.image, layers or [], mask, mode, output).save(current_overlay)
+                else:
+                    overlay_mask(mask, proxy.size, mode).save(current_overlay)
                 assets.append(current_overlay)
                 previous_mask_key = mask_key
             result["mask"] = str(current_overlay)
@@ -334,6 +344,7 @@ def main():
         if request.get('initial'):
             options, _ = suggest(proxy, request['mask'], radius)
             options['radius'] = request['options']['radius']
+            options.update({k:request['options'][k] for k in ('interior','detail','color') if k in request['options']})
         alpha, channel, score = channel_preview(proxy, request['mask'], options, radius)
         path = cache / f"channel-preview-{request['id']}.png"
         alpha.save(path, compress_level=3)

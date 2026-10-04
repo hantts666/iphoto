@@ -863,7 +863,7 @@ class Editor(QObject):
 
     @Property(str, notify=changed)
     def exportProgress(self):
-        return export_process.PHASES[self._export_phase] if self._export_request else ""
+        return export_process.progress_text(self) if self._export_request else ""
 
     @Slot(int, result=str)
     def suggestExportPath(self, format_index):

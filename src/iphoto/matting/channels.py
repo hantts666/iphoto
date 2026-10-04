@@ -14,10 +14,13 @@ CHANNELS = ('red', 'green', 'blue', 'luminance')
 
 
 def validate_options(value):
-    if not isinstance(value, dict) or set(value) != {'channel', 'black', 'white', 'gamma', 'invert', 'radius', 'ai', 'interior'}:
+    required = {'channel', 'black', 'white', 'gamma', 'invert', 'radius', 'ai', 'interior'}
+    if not isinstance(value, dict) or not required <= set(value) or not set(value) <= required | {'detail','color'}:
         raise ValueError('通道抠图参数无效')
     if value['channel'] not in (*CHANNELS, 'auto') or any(type(value[k]) is not bool for k in ('invert','ai','interior')):
         raise ValueError('通道抠图方法无效')
+    if any(type(value[k]) is not bool for k in ('detail','color') if k in value):
+        raise ValueError('通道细节与去背景串色选项无效')
     if (any(type(value[k]) is not int for k in ('black', 'white', 'radius'))
             or not 0 <= value['black'] < value['white'] <= 255 or not 1 <= value['radius'] <= 256
             or isinstance(value['gamma'], bool) or not isinstance(value['gamma'], (int, float))
@@ -126,15 +129,45 @@ def estimate(image, mask, options, *, neural=None, progress=None):
         result[known_fg] = 255
         result[known_bg] = 0
         tiles, backend = 0, '通道透明度'
+    warnings = ['通道区分较弱，请放大检查颜色相近的边缘'] if score < 2 else []
+    polished = False
+    if options.get('detail') and options['ai'] and score < 4 and ((result>0)&(result<255)).any():
+        # Neural alpha supplies spatial context; native color lines recover
+        # fine texture in its uncertain band. Keep the original hard constraints.
+        from .service import refine_alpha
+        if progress is not None:
+            progress(phase='polish')
+        try:
+            seed = {**empty_mask(), 'bitmap':encode_bitmap(Image.fromarray(result), sampling='alpha', preserve_resolution=True)}
+            # This alpha comes from an RGB-composition model and channel values.
+            # Match that domain instead of changing its coverage with a second
+            # gamma transform. Standalone physical matting keeps its linear mode.
+            detailed, _ = refine_alpha(cropped, seed, 4, linear=False)
+            result = np.asarray(raster_mask(detailed, cropped.size)).copy()
+            result[known_fg], result[known_bg] = 255, 0
+            polished = True
+        except (ValueError, ImportError) as exc:
+            warnings.append('细纹理求解未完成，保留 AI 透明度：' + str(exc))
     result[~allowed] = alpha[~allowed]
     output = original.copy()
     output.paste(Image.fromarray(result), box[:2])
     final = validate_mask({**mask, 'base':'empty', 'ops':[], 'inverted':False, 'feather':0,
                            'edge_shift':0, 'bitmap':encode_bitmap(output, sampling='alpha', preserve_resolution=True)})
+    final.pop('color_recovery', None)
+    if options.get('color'):
+        from ..cutout import recovery_box, available
+        try:
+            if not available():
+                raise ValueError('前景颜色组件未安装，请更新依赖')
+            recovery_box(output)
+            final['color_recovery'] = True
+        except ValueError as exc:
+            warnings.append('未去背景串色：' + str(exc))
     return final, {'channel_mask':True, 'backend':backend, 'channel':channel, 'contrast_score':score,
+                   'native_detail':polished, 'color_recovery':final.get('color_recovery',False),
                    'mask_size':list(image.size), 'tiles':tiles, 'elapsed_ms':round((perf_counter()-started)*1000,1),
                    'unknown_pixels':int(unknown.sum()), 'partial_pixels':int(((result>0)&(result<255)).sum()),
-                   'warnings':['通道区分较弱，请放大检查颜色相近的边缘'] if score < 2 else []}
+                   'warnings':warnings}
 
 
 def preview(image, mask, options, radius):

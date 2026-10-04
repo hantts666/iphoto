@@ -41,10 +41,9 @@ def main():
         else:
             rendered = render_layers(source.image, layers)
             if output == 'cutout':
-                from PIL import ImageChops
-                rgba = rendered.convert('RGBA')
-                rgba.putalpha(ImageChops.multiply(rgba.getchannel('A'),alpha))
-                rendered = rgba
+                from .cutout import color_patch, compose_cutout
+                patch = color_patch(source.image, layers, validate_mask(request['mask']), alpha)
+                rendered = compose_cutout(rendered, alpha, patch)
         progress(3)
         if output == 'mask':
             from .storage import atomic_output

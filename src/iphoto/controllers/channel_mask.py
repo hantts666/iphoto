@@ -59,7 +59,8 @@ class ChannelMaskController(QObject):
         self.state = {'token':uuid4().hex, 'generation':e._generation, 'sha':e._sha,
                       'layer_id':e._selected, 'mask':deepcopy(e._candidate), 'revision':0}
         self._preview, self._note = '', '正在比较红、绿、蓝和亮度通道…'
-        self._options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,'ai':True,'interior':False}
+        self._options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,'ai':True,'interior':False,
+                         'detail':True,'color':True}
         self._refresh(initial=True)
 
     def _refresh(self, initial=False):

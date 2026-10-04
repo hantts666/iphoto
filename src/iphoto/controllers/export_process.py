@@ -20,11 +20,18 @@ PHASES = (
 )
 
 
+def progress_text(self):
+    request = self._export_request or {}
+    if self._export_phase == 2 and request.get('output') == 'cutout' and request.get('mask',{}).get('color_recovery'):
+        return '正在合成图层并恢复透明边缘颜色…可取消'
+    return PHASES[self._export_phase]
+
+
 def _phase(self, phase):
     if phase <= self._export_phase:
         return
     self._export_phase = phase
-    self._status = PHASES[phase]
+    self._status = progress_text(self)
     self.changed.emit()
 
 

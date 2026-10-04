@@ -105,7 +105,7 @@ Dialog {
             text: root.formatIndex === 0
                 ? "JPEG 92 适合分享；100 接近无损但体积更大。导出不会覆盖原图。"
                 : root.formatIndex === 1 ? "PNG 无损并保留透明通道；文件较大。导出不会覆盖原图。"
-                : root.formatIndex === 2 ? "按当前选区或当前层范围导出透明背景；保留灰度透明度与原图尺寸。边缘原有背景颜色可能需要继续修正。"
+                : root.formatIndex === 2 ? "按当前选区或当前层范围导出原图尺寸透明 PNG。通道抠图中的去背景串色选项同步用于导出，可先切换黑白底检查。"
                 : "按当前选区或当前层范围导出原图尺寸灰度蒙版：白色保留、黑色移除、灰色半透明。"
             wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 10
         }

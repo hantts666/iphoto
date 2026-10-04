@@ -23,7 +23,7 @@ def _enable_numba_cache():
 _enable_numba_cache()
 
 
-def solve_alpha(image, trimap, *, tile_size=256, byte_output=False):
+def solve_alpha(image, trimap, *, tile_size=256, byte_output=False, linear=True):
     # Lazy import in the image worker only. Avoid a CPU-wide parallel pool.
     os.environ.setdefault("NUMBA_NUM_THREADS", "4")
     from pymatting import estimate_alpha_cf, ichol
@@ -54,7 +54,8 @@ def solve_alpha(image, trimap, *, tile_size=256, byte_output=False):
             if perf_counter() - started > 180:
                 raise ValueError("边缘细化超时，原选区保留；请减小范围再试")
             rgb = np.asarray(image.crop((left, top, right, bottom)).convert("RGB"), dtype=np.float64) / 255
-            rgb = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+            if linear:
+                rgb = np.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
             try:
                 matte = estimate_alpha_cf(
                     rgb,

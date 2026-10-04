@@ -150,9 +150,10 @@ def openImage(self, url):
 
 
 def _payload(self):
+    from ..document import project_version
     self._sync_layer()
     return {
-        "schema_version": "1.11" if any(l.get("pixel_patch") for l in self._layers) else "1.10",
+        "schema_version": project_version(self._layers,self._candidate,self._region_candidate),
         "engine_version": ENGINE_VERSION,
         "source": self._path,
         "source_sha256": self._sha,

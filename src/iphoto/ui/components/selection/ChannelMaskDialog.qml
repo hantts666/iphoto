@@ -62,6 +62,8 @@ Dialog {
             Caption { text: "原图 px" }
         }
         CheckBox { objectName:"channelInteriorBox"; text:"处理内部透明与孔洞（薄纱、玻璃、细枝）"; checked:root.config.interior===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("interior",checked) }
+        CheckBox { objectName:"channelDetailBox"; text:"按原像素细化发丝纹理"; checked:root.config.detail===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("detail",checked) }
+        CheckBox { objectName:"channelColorBox"; text:"去背景串色（黑白底检查与透明 PNG）"; checked:root.config.color===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("color",checked) }
         Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:"先用 AI 或画笔选择目标，再用通道保留灰度透明度。预览只供调通道；应用时按原图与 AI 核对细节。颜色接近的区域仍需局部修正。" }
     }
     footer: RowLayout {

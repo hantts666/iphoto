@@ -1,6 +1,6 @@
 # iPhoto 源码仓库说明
 
-本项目是 Python 3.12 + PySide6 / Qt Quick 的原生桌面照片编辑器。照片合成与本地分割运行在独立工作进程，云端 AI 返回经过校验的参数、对象位置或内部点，也可通过专门图像接口生成选区像素并检查候选。运行入口为 `run.py`，应用版本 1.11.0；一般项目格式为 1.10，含生成像素资源时为1.11。
+本项目是 Python 3.12 + PySide6 / Qt Quick 的原生桌面照片编辑器。照片合成与本地分割运行在独立工作进程，云端 AI 返回经过校验的参数、对象位置或内部点，也可通过专门图像接口生成选区像素并检查候选。运行入口为 `run.py`，应用版本 1.11.1；一般项目格式为1.10，含生成像素资源为1.11，含前景颜色恢复策略为1.12。
 
 ## 从哪里开始
 
@@ -25,6 +25,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 | `run.py` / `process_runtime.py` | 在重型库导入前选择进程角色、设置图片进程默认BLAS线程配置 | 在GUI中全局覆盖模型进程的环境 |
 | `src/iphoto/app.py` | Qt 生命周期、字体、窗口加载、启动参数 | 修图规则和控件业务 |
 | `workspace.py` | 唯一的 Editor QObject，Qt 属性、信号、槽和状态所有权 | 新的大段业务逻辑 |
+| `cutout.py` | 有界原像素前景RGB恢复、共享黑白底检查与透明PNG合成 | 修改原照片、对alpha重复相乘、在视口中重新独立求解颜色 |
 | `controllers/worker_bridge.py` | 主工作进程队列、合并预览请求、结果代际校验、独立预热与像素进程生命周期 | 图像算法 |
 | `controllers/preview_updates.py` | 连续参数预览节奏、可显示的中间帧代次范围 | 文档历史、图像算法、跨照片复用 |
 | `controllers/detail_tiles.py` | 原图细节视口请求合并、裁剪范围、独立细节进程与过期结果隔离 | 图层算法 |
