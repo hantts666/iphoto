@@ -9,6 +9,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from .ai_settings import AISettings, PROVIDERS, SettingsStore
 from .engine import Recipe
 from .ai_protocol import build_payload, image_data_url, parse_auto, parse_plan
+from .ai_mask_refinement import parse_points
 from .ai_tasks import parse_selection, parse_regions
 from .ai_repair import parse_repair_spots
 from .scene import parse_scene, parse_targets
@@ -335,6 +336,7 @@ class AIController(QObject):
                 "regions": "AI 正在规划分区图层…",
                 "auto": "AI 正在判断调整范围并规划图层…",
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
+                "mask_points": "AI 正在对照原图与蒙版，定位误选范围…",
             }.get(mode, "AI 正在看图并生成修图参数…")
         )
 
@@ -405,11 +407,14 @@ class AIController(QObject):
                         context["workspace"].get("current_scope"),
                         context["workspace"].get("existing_layers"),
                         context["workspace"].get("current_display_enabled", True),
+                        context["workspace"],
                     )
                 elif context["mode"] == "selection":
                     result = parse_selection(response)
                 elif context["mode"] == "repair":
                     result = parse_repair_spots(response, context["workspace"])
+                elif context["mode"] == "mask_points":
+                    result = parse_points(response, context["workspace"])
                 elif context["mode"] == "scene":
                     result = parse_scene(response)
                 elif context["mode"] == "targets":
@@ -459,7 +464,7 @@ class AIController(QObject):
     def _retry_invalid_result(self, context, reason):
         if (
             context["testing"]
-            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair"}
+            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair", "mask_points"}
             or context["validation_retry"]
             or context["abort"]
         ):

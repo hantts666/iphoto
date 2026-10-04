@@ -263,8 +263,8 @@ class Editor(QObject):
             + ([self._matte_pending] if self._matte_pending else [])
             + ([self._export_request] if self._export_request else [])
         )
-        return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or any(
-            request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop"}
+        return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or self.aiMaskPreparing or any(
+            request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop"}
             or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations
         )
@@ -1020,6 +1020,10 @@ class Editor(QObject):
     @Property(bool, notify=changed)
     def aiObjectPreparing(self):
         return bool((self._pending_request or {}).get("object_grounding", {}).get("preparing"))
+
+    @Property(bool, notify=changed)
+    def aiMaskPreparing(self):
+        return bool((self._pending_request or {}).get("mask_refinement", {}).get("preparing"))
 
     @Slot()
     def cancelObjectPreparation(self):

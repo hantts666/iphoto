@@ -358,6 +358,10 @@ def failed_result(self, context, error):
 
 def complete(self, result, context):
     purpose = context["purpose"]
+    if purpose == "ai_mask_refinement":
+        from .mask_refinement import complete as mask_complete
+
+        return mask_complete(self, result, context)
     bindings = ([context['face_binding']] if context.get('face_binding') else [])
     bindings += [region['face_binding'] for region in context.get('regions',[]) if region.get('face_binding')]
     if any(binding['source_sha256']!=self._sha for binding in bindings):

@@ -540,7 +540,8 @@ class SelectionController(QObject):
             for request in list(self._editor._queue) + list(self._editor._pixel_queue)
         ):
             return "pixel"
-        if self._editor.ai.busy or self._editor.aiRepairPreparing or self._editor.aiObjectPreparing:
+        if (self._editor.ai.busy or self._editor.aiRepairPreparing or self._editor.aiObjectPreparing
+                or getattr(self._editor, 'aiMaskPreparing', False)):
             return "ai"
         if self._editor.photoPreparing:
             return "warm"
@@ -572,6 +573,10 @@ class SelectionController(QObject):
     def cancelTask(self):
         kind = self.taskKind
         editor = self._editor
+        if (getattr(editor, '_pending_request', None) or {}).get('mask_refinement'):
+            from .mask_refinement import cancel
+
+            return cancel(editor)
         if kind == "pixel":
             pixel_selections.cancel(editor)
         elif kind == "matte":

@@ -380,6 +380,8 @@ def sendMessage(self, text, mode):
         ).decode("ascii")
     selection.pop("bitmap", None)
     selection.pop("face_binding", None)
+    from ..ai_mask_refinement import eligible as refinable_mask
+    from ..segmentation.precise_sam import available as precise_available
     selection["description"] = self._quality_text(
         self._candidate or self._layer()["mask"]
     )
@@ -410,6 +412,8 @@ def sendMessage(self, text, mode):
                     "parent_id": l["parent_id"],
                     "recipe": l["recipe"],
                     "locked": l["locked"],
+                    "mask_part": l["mask"].get("face_part"),
+                    "mask_refinable": refinable_mask(l["mask"]) and l["kind"] == "adjustment" and not l.get("heal") and not l.get("inpaint"),
                     "mask_label": l["mask"]["label"],
                     "visible": l["visible"],
                     "opacity": l["opacity"],
@@ -424,6 +428,8 @@ def sendMessage(self, text, mode):
             "face_skin_available": face_skin_available(),
             "detected_faces": face_inventory.spatial_context(self),
             "body_skin_available": pixel_selections.available(),
+            "mask_refinement_available": precise_available() and pixel_selections.available(),
+            "selection_mask_refinable": self.hasSelectionDraft and refinable_mask(self._candidate),
         },
     )
     self.changed.emit()
@@ -525,6 +531,14 @@ def _cloud_plan(self, result, generation):
         from .object_grounding import planned
 
         return planned(self, result)
+    if pending.get("mask_refinement"):
+        from .mask_refinement import planned
+
+        return planned(self, result)
+    if result.get("mode") == "auto" and result.get("action") == "refine_mask":
+        from .mask_refinement import begin
+
+        return begin(self, result)
     if pending.get("face_grounding") and result.get("mode") == "selection":
         active = pending.pop("face_grounding")
         pending["face_grounded"] = True

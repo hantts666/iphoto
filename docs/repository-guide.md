@@ -310,3 +310,9 @@ SelectionController分别保留蒙版与修复画笔半径，默认0.025/0.003�
 已有精细bitmap与分区bitmap的智能修边优先沿`details → Editor.refineDetails → matting.start(method="neural")`进入独立一次性matte进程，直接用ViTMatte估计已有轮廓的窄带alpha；显式SAM重新识别和经典PyMatting仍单独可选。`neural.refine(points=...)`校验提示、冲突锚点和已知范围，未知区内的锚点固定为0/255。完成时恢复点列表，把最终mask用作下一次补点的空间参照；分区不带入独立选区的点。模型session各进程隔离，不在UI执行推理。
 
 matte进程的prepare/details进度绑定请求ID、op、双代次与源SHA，严格整数/1～128块/单调序号/固定总数校验，仅更新状态；不清理active或提交部分蒙版。取消终止该进程，立即重试待旧进程退出后启动新任务；晚到回复不能替换新照片。`test_matte_progress.py`覆盖协议、最终提交与真实坏源/坏输入子进程，控制器与神经测试覆盖路由、锚点、范围和元数据；完整入口与SegRefiner候选对照见第九十三轮。
+
+## AI 操作已有五官范围
+
+1.9.15的`ai_mask_refinement.py`定义`refine_mask`工具与局部点协议，`controllers/mask_refinement.py`编排裁切、云端定位和神经结果的原子发布。只允许已有明确nose/lips分区；当前草稿与指定已有层两种作用范围不能混用，目标层的配方与锁定独立校验。原图worker的`mask_refinement_crop`从实际alpha边界外扩64px，4MP预算后准备原图、L蒙版、覆盖对照，去源元数据；`mask_points`请求按此顺序发送三张图，私有路径与其他配方不发送。
+
+AI仅输出1～5个局部排除点，要求位于当前白色蒙版内，核对数值／尺寸／重复位置后按像素中心映射原图；实际修正沿`semantic_refine`的SAM2 dense先验路径，保留原零区与部位信息。源SHA、代次、token、层快照／锁定、草稿／绑定在各阶段一致才发布。草稿只修范围使用草稿历史；已有层的蒙版与颜色一起进入一次层历史。准备、云端、像素三阶段均经任务门面取消，过期／失败必须清理pending，晚到结果不再请求AI或修改文档。`test_ai_mask_refinement.py`覆盖这些边界，真实千问和24MP原应用证据见第109轮；该工具不恢复漏选或隐藏边缘。

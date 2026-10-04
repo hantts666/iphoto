@@ -14,6 +14,7 @@ from .ai_grounding import crop_pixels
 from .ai_layer_edits import LAYER_EDITS_SCHEMA, validate_layer_edits
 from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
+from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
     SELECTION_SCHEMA,
@@ -54,7 +55,7 @@ AUTO_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "action": {"type": "string", "enum": ["adjust", "update_layers", "group", "repair", "global", "layers", "answer", "unsupported"]},
+        "action": {"type": "string", "enum": ["adjust", "update_layers", "refine_mask", "group", "repair", "global", "layers", "answer", "unsupported"]},
         "scope": {"type": "string", "enum": ["current_layer", "current_selection", "existing_layers", "whole_image", "regions", "none"]},
         "summary": {"type": "string"},
         "recipe": RECIPE_SCHEMA["properties"]["recipe"],
@@ -62,14 +63,15 @@ AUTO_SCHEMA = {
         "layer_edits": LAYER_EDITS_SCHEMA,
         "group": GROUP_SCHEMA,
         "repairs": REPAIRS_SCHEMA,
+        "mask_refinement": MASK_REFINEMENT_SCHEMA,
     },
-    "required": ["action", "scope", "summary", "recipe", "regions", "layer_edits", "group", "repairs"],
+    "required": ["action", "scope", "summary", "recipe", "regions", "layer_edits", "group", "repairs", "mask_refinement"],
 }
 
 AUTO_PROMPT = (
     """你是 iPhoto 的修图助手，依据用户要求和照片返回一个可执行的 JSON 动作。你可以直接调整当前图层，也可以自己规划局部区域、生成独立调整层。不要要求用户先手动选择或建层，除非目标无法可靠定位。
 action=adjust：只修改当前图层已有范围且 current_display_enabled=true 时使用，scope=current_layer，recipe 给当前图层全部参数的最终值，regions=[]；锁定参数保持原值，未要求改变的参数沿用 current_recipe。只有 current_scope=whole_image 时才可使用 scope=whole_image，局部图层不能执行全图修改。current_display_enabled=false 时不能用 adjust 声称照片已变化；用户有意修改隐藏层参数时用 update_layers 保存，并说明效果暂不可见。
-current_scope=selection 表示用户已经选择或修正了范围，第二张蒙版图片的白色是允许修改的范围。此时只允许 action=adjust、scope=current_selection（或 answer/unsupported、scope=none）。直接使用此范围，不得重新识别、返回 regions、扩大到全图或修改其他层。selection_output=new_layer 时程序自动建立独立可见层，current_recipe 是新层的初始零值，不继承原层参数和锁定；max_new_layers=0 时不能调整。selection_output=replace_mask 时程序将当前范围和参数一起保存到 selection_layer_id 对应的已有层，锁定参数保持原值，其他参数沿用 current_recipe；效果不可见时说明原因，不声称已经修好。recipe 给全部参数最终值，regions=[]、layer_edits=[]、group=null、repairs=[]。范围已准备好，无需用户再建层或确认；回答建议不消耗范围。此模式暂不执行范围之外的修复、编组或其他层修改，不能悄悄丢弃当前范围。
+current_scope=selection 表示用户已经选择或修正了范围，第二张蒙版图片的白色是允许修改的范围。此时允许 action=adjust、scope=current_selection，或明确修正当前五官误选时使用下述refine_mask（也可answer/unsupported、scope=none）。直接使用此范围，不得重新识别、返回 regions、扩大到全图或修改其他层。selection_output=new_layer 时程序自动建立独立可见层，current_recipe 是新层的初始零值，不继承原层参数和锁定；max_new_layers=0 时不能调整。selection_output=replace_mask 时程序将当前范围和参数一起保存到 selection_layer_id 对应的已有层，锁定参数保持原值，其他参数沿用 current_recipe；效果不可见时说明原因，不声称已经修好。recipe 给全部参数最终值，regions=[]、layer_edits=[]、group=null、repairs=[]。范围已准备好，无需用户再建层或确认；回答建议不消耗范围。此模式暂不执行范围之外的修复、编组或其他层修改，不能悄悄丢弃当前范围。
 action=update_layers、scope=existing_layers：用户点名已有图层、要求减轻/加强已有面部或手臂效果，或要隐藏/显示/调整图层不透明度时，修改 existing_layers 中对应的调整层，无需用户先切换。layer_edits 给1～4个对象，每个有 layer_id（精确使用清单中的id）、recipe、visible、opacity。要调参数时 recipe 给该层全部参数最终绝对值；以该层已有配方为基础，仅改要求涉及的参数，锁定值保持该层原值。recipe=null 表示配方完全不变。visible=true/false 表示显示/隐藏自身，null 表示保持；opacity=0～1 是绝对不透明度（50%写为0.5），null 表示保持。至少一项不是null。例如只隐藏已有层时 recipe=null、visible=false、opacity=null，不能把磨皮强度归零来假装隐藏；显示时保留原强度，父组隐藏时不能声称照片已显示该效果。不要新建图层叠加已有磨皮，不要用当前全图层配方覆盖面部层。顶层 recipe 保持 current_recipe，regions=[]。不能修改不存在的图层，不能通过此动作改蒙版、删除或重排图层；组的参数必须为null，只允许显示状态和整体不透明度。已有层够用时不需要剩余图层位置。
 用户未要求显示/隐藏或改变不透明度时，visible/opacity 必须为null，保留原状态。用户要求整张照片提亮/调色而 current_display_enabled=false 时必须用 global；不能通过 update_layers 恢复之前隐藏的效果来替代。只有用户明确要求恢复该已有图层时才将 visible=true 或提高零不透明度。
 detected_faces中的id是完整人脸身份，display_name说明上下/左右位置。existing_layers中可选face_target提供已验证的面部皮肤关联；按face_target.id关联人脸和图层，改名、修边或移动图层后仍使用该关联，不能按层名、图层顺序或创建顺序猜上下人脸。layer_edits每项还必须给face_id：目标层有face_target时精确填写其id，没有时为null；人脸id和图层id必须匹配，程序会校验。用户继续调整整脸效果时优先update_layers并保留已有修正范围，不重新分割或建立重复层；只修鼻子等新局部范围仍按局部要求处理。同一人脸有多个关联层时，根据用户指定效果/层名或active_layer_id选择；目标仍不明确时说明需要明确哪个已有层，不任意叠加或修改多层。关联不代表效果一定可见，仍核对display与锁定参数。
@@ -95,6 +97,7 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
             "layer_edits": [],
             "group": None,
             "repairs": [],
+            "mask_refinement": None,
             "regions": [
                 {
                     "name": "面部皮肤",
@@ -115,6 +118,14 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
     + COORDINATE_PROMPT
     + RECIPE_LIMITS_PROMPT
 )
+
+
+AUTO_PROMPT += """
+action=refine_mask：用户要求排除已有鼻部/嘴唇蒙版的误选、修正其范围时使用；mask_refinement_available=true才可用。程序会放大当前原图和蒙版，再由你定位排除点，随后调用本地神经模型。不要让用户先手动画或重新建层。这里只能减少当前覆盖，不能扩大范围、恢复隐藏或未选入的像素、修整整脸皮肤或普通物体。
+有当前草稿时scope=current_selection、mask_refinement={layer_id:null,recipe:null或最终全部参数}，selection_mask_refinable必须为true；只修范围用recipe=null，保留草稿和颜色。有绑定图层则保存原层；无绑定且同时调色时才新建层。不能丢掉草稿去改另一层。
+没有草稿时scope=existing_layers，从existing_layers中mask_refinable=true的明确目标选择layer_id，mask_refinement={layer_id:其精确id,recipe:null或该目标层全部最终参数}。层名改变仍使用mask_part与id；可以修正未选中的已有层，不能用当前层配方覆盖目标层。未要求调色时recipe=null；要求同时调色时以该目标层已有配方为基础，仅修改用户要求的参数，保留锁定。嘴唇不能加磨皮。
+两种情况的顶层recipe保持current_recipe，regions=[]、layer_edits=[]、group=null、repairs=[]。summary只说明将检查和修正，不提前声称已修好。已有目标不匹配或不能可靠识别误选时用answer/unsupported说明未修改。每次回复都带mask_refinement字段；其他动作该字段必须为null。
+"""
 
 SYSTEM_PROMPT = (
     """你是 iPhoto 的摄影调色助手，返回 JSON。当前支持以下非破坏式调整，仅作用于当前图层选区。
@@ -175,6 +186,7 @@ def build_payload(
         **(workspace or {}),
     }
     selection_image = context.pop("selection_image", None)
+    selection_overlay = context.pop("selection_overlay", None)
     context.pop("_validation_feedback", None)
     if selection_image is None:
         context.pop("mask_image_note", None)
@@ -199,6 +211,9 @@ def build_payload(
     if mode == "targets":
         context = {"request": text, "objects": (workspace or {}).get("objects", [])}
         selection_image = None
+    if mode == "mask_points":
+        context = {"request": text, "mode": mode, "face_part": (workspace or {}).get("face_part"),
+                   "crop_size": (workspace or {}).get("crop_size"), "coordinate_system": "local_0_to_999"}
     payload = {
         "model": settings.model,
         "messages": [
@@ -209,6 +224,7 @@ def build_payload(
                     "selection": SELECTION_PROMPT,
                     "regions": REGION_PROMPT,
                     "repair": REPAIR_SPOTS_PROMPT,
+                    "mask_points": POINTS_PROMPT,
                     "scene": SCENE_PROMPT,
                     "targets": TARGETS_PROMPT,
                 }.get(mode, SYSTEM_PROMPT),
@@ -241,6 +257,9 @@ def build_payload(
         payload["messages"][1]["content"].append(
             {"type": "image_url", "image_url": {"url": selection_image}}
         )
+    if mode == "mask_points" and selection_overlay:
+        payload["messages"][1]["content"].append(
+            {"type": "image_url", "image_url": {"url": selection_overlay}})
     if settings.provider == "openai":
         payload.update(
             response_format={
@@ -253,6 +272,7 @@ def build_payload(
                         "selection": SELECTION_SCHEMA,
                         "regions": REGION_SCHEMA,
                         "repair": REPAIR_SPOTS_SCHEMA,
+                        "mask_points": POINTS_SCHEMA,
                         "scene": SCENE_SCHEMA,
                         "targets": TARGETS_SCHEMA,
                     }.get(mode, RECIPE_SCHEMA),
@@ -320,7 +340,7 @@ def parse_plan(data, current, locked):
         raise ValueError("服务返回的内容不是有效的修图 JSON；当前参数未改变") from None
 
 
-def parse_auto(data, current, locked, current_scope=None, existing_layers=None, current_display_enabled=True):
+def parse_auto(data, current, locked, current_scope=None, existing_layers=None, current_display_enabled=True, workspace=None):
     """Validate the chat decision, then reuse the established recipe/region gates."""
     def completion(plan):
         return {
@@ -350,13 +370,13 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             return {**result, "action": "adjust" if result["status"] == "applied" else "unsupported"}
         fields = {"action", "scope", "summary", "recipe", "regions", "layer_edits"}
         # JSON-object providers may omit the unused nullable group field.
-        if not fields <= set(plan) <= fields | {"group", "repairs"}:
+        if not fields <= set(plan) <= fields | {"group", "repairs", "mask_refinement"}:
             raise ValueError("AI 返回的动作字段不完整")
         action = plan["action"]
-        if action not in ("adjust", "update_layers", "group", "repair", "global", "layers", "answer", "unsupported"):
+        if action not in ("adjust", "update_layers", "refine_mask", "group", "repair", "global", "layers", "answer", "unsupported"):
             raise ValueError("AI 返回了未知修图动作")
         scope = plan["scope"]
-        if current_scope == "selection" and action not in ("adjust", "answer", "unsupported"):
+        if current_scope == "selection" and action not in ("adjust", "refine_mask", "answer", "unsupported"):
             raise ValueError("当前范围已准备好，请用 adjust/current_selection 直接调整，不能丢弃范围或修改其他层")
         if action == "adjust":
             if not current_display_enabled:
@@ -369,6 +389,9 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
                 raise ValueError("当前层调整的作用范围无效")
             if scope == "whole_image" and current_scope in ("local", "group"):
                 raise ValueError("当前层只作用于局部，不能执行全图调整；请用 global 动作建立全图层")
+        elif action == "refine_mask":
+            if scope != ("current_selection" if current_scope == "selection" else "existing_layers"):
+                raise ValueError("范围修正不能丢弃当前草稿或替换到其他范围")
         elif scope != {"update_layers": "existing_layers", "group": "existing_layers", "repair": "regions", "global": "whole_image", "layers": "regions", "answer": "none", "unsupported": "none"}[action]:
             raise ValueError("AI 的动作与作用范围不一致")
         if action != "update_layers" and plan["layer_edits"] != []:
@@ -377,6 +400,8 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             raise ValueError("此动作不能夹带编组")
         if action != "repair" and plan.get("repairs", []) != []:
             raise ValueError("此动作不能夹带修复部位")
+        if action != "refine_mask" and plan.get("mask_refinement") is not None:
+            raise ValueError("此动作不能夹带范围修正")
         recipe = parse_plan(
             completion({
                 "status": "applied",
@@ -385,6 +410,13 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             }), Recipe().to_dict() if action == "global" else current,
             [] if action == "global" else locked,
         )
+        if action == "refine_mask":
+            if plan["regions"] != [] or plan["recipe"] != current:
+                raise ValueError("范围修正不能夹带新分区或改写顶层配方")
+            refinement = validate_mask_refinement(plan.get("mask_refinement"), scope, current,
+                                                 existing_layers, {**(workspace or {}), "locked": locked})
+            return {"status": "planned", "action": action, "scope": scope,
+                    "summary": recipe["summary"], "mask_refinement": refinement}
         if action == "repair":
             if plan["regions"] != [] or plan["recipe"] != current:
                 raise ValueError("局部修复不能夹带分区调色或改写当前配方")

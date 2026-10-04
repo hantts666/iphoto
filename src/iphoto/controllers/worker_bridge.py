@@ -278,7 +278,11 @@ def _pixel_read(self):
                         self._notify(self._status + "：" + response["error"], background=True)
             elif not response["ok"]:
                 error = response["error"]
-                if (
+                if context.get('purpose') == 'ai_mask_refinement':
+                    from .mask_refinement import failed
+
+                    failed(self, error, context)
+                elif (
                     context.get("purpose") == "points"
                     and context.get("points")
                     and ("可靠目标" in error or "满足提示点" in error or "满足保留/排除点" in error)
@@ -306,6 +310,10 @@ def _pixel_read(self):
                        for job in active.get("jobs", [])) or context.get("purpose") == "warm":
                     self._warm_ready_sha = self._sha
                 complete(self, response["result"], active["context"])
+            elif context.get('purpose') == 'ai_mask_refinement':
+                from .mask_refinement import failed
+
+                failed(self, '精细范围计算已取消或过期，已有范围和参数保留', context)
             elif context.get("purpose") != "precache":
                 self._status = "本次像素选区已取消或过期，原选区保留"
                 self._notify("本次像素选区已取消或过期，未改变当前选区")
@@ -313,7 +321,11 @@ def _pixel_read(self):
             self._pump_pixel()
         except Exception as exc:
             self._pixel_active = None
-            if active and active.get("context", {}).get("auto_apply"):
+            if active and active.get('context', {}).get('purpose') == 'ai_mask_refinement':
+                from .mask_refinement import failed
+
+                failed(self, str(exc), active['context'])
+            elif active and active.get("context", {}).get("auto_apply"):
                 from .pixel_selections import failed_result
 
                 failed_result(self, active["context"], exc)
@@ -440,7 +452,14 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
-            if op in ("repair_crop", "object_crop") and active.get("cancelled"):
+            if op in ("repair_crop", "object_crop", "mask_refinement_crop") and active.get("cancelled"):
+                self.changed.emit()
+                self._pump()
+                continue
+            if op == 'mask_refinement_crop' and not response['ok']:
+                from .mask_refinement import failed
+
+                failed(self, response['error'], active.get('context', {}))
                 self.changed.emit()
                 self._pump()
                 continue
@@ -605,6 +624,10 @@ def _read(self):
                 from .object_grounding import crop_ready
 
                 crop_ready(self, response["result"], active["context"], response["generation"])
+            elif op == 'mask_refinement_crop':
+                from .mask_refinement import crop_ready
+
+                crop_ready(self, response['result'], active['context'], response['generation'])
             elif op == "matte":
                 if response["generation"] == self._generation and not active.get(
                     "cancelled"

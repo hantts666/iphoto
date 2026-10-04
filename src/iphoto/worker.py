@@ -202,6 +202,20 @@ def main():
         assets.append(target)
         return {"path": str(target), "crop_size": crop_size, "image_size": list(picture.size)}
 
+    @register("mask_refinement_crop")
+    def _mask_refinement_crop(request):
+        from .ai_mask_refinement import prepare_crop
+
+        if request["source_sha"] != source.digest:
+            raise ValueError("照片已变化，过期范围修正图未准备")
+        picture, mask, overlay, box = prepare_crop(source.image, request["mask"])
+        paths = [cache / f"mask-refinement-{request['id']}-{kind}.png" for kind in ("photo", "mask", "overlay")]
+        for item, path in zip((picture, mask, overlay), paths):
+            item.save(path, **({"icc_profile": SRGB_PROFILE} if item.mode == 'RGB' else {}))
+            assets.append(path)
+        return {"path": str(paths[0]), "mask_path": str(paths[1]), "overlay_path": str(paths[2]),
+                "crop_box": box, "crop_size": list(picture.size), "source_size": list(source.image.size)}
+
     @register("selection")
     def _selection(request):
         mask, quality = run_selection(
