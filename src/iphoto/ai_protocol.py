@@ -16,6 +16,7 @@ from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
 from .photo_strategy import DEVELOP_PROMPT, REVIEW_PROMPT as PHOTO_REVIEW_PROMPT, REVIEW_SCHEMA as PHOTO_REVIEW_SCHEMA
+from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
 from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT, RESTORATION_PROMPT, RESELECTION_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
@@ -124,6 +125,7 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
 AUTO_PROMPT += DEVELOP_PROMPT
 AUTO_PROMPT += """
 新增action=channel_mask：用户要求通道抠图、修发丝/细枝或薄纱透明度时，channel_mask_available=true可执行。程序结合通道灰度与原图 AI 透明度，不只返回建议；不承诺一次完美。
+自动比较RGB、亮度和红−绿/红−蓝/绿−蓝通道计算，再对实际黑白底与原像素边缘进行独立视觉复查；效果明显有问题或无法确认时保留原范围，不提前声称抠图成功。
 有当前草稿必须scope=current_selection、regions=[]，沿用现有范围；当前局部层范围匹配时scope=current_layer、regions=[]，原层参数与强度保留。否则scope=regions，regions只有一个object目标，region.recipe全部0/[]，先定位目标再提取透明度。不能用整图代替目标、不能夹带调色或生成内容。顶层recipe保持current_recipe，layer_edits=[]、group=null、repairs=[]、mask_refinement=null、strategy=null、edit_prompt=null。summary说明将执行的步骤。颜色相近或主体背景混杂时仍需局部修正，不能声称精确。
 """
 
@@ -238,6 +240,7 @@ def build_payload(
                 "content": {
                     "auto": AUTO_PROMPT,
                     "photo_review": PHOTO_REVIEW_PROMPT,
+                    "matte_review": MATTE_REVIEW_PROMPT,
                     "selection": SELECTION_PROMPT,
                     "regions": REGION_PROMPT,
                     "repair": REPAIR_SPOTS_PROMPT,
@@ -260,7 +263,7 @@ def build_payload(
         ],
         "stream": False,
     }
-    if mode == "photo_review":
+    if mode in ("photo_review", "matte_review"):
         payload["messages"][1]["content"] = payload["messages"][1]["content"][:1]
         for item in review_images:
             payload["messages"][1]["content"].extend([{"type": "text", "text": item["label"]},
@@ -310,6 +313,7 @@ def build_payload(
                     "schema": {
                         "auto": AUTO_SCHEMA,
                         "photo_review": PHOTO_REVIEW_SCHEMA,
+                        "matte_review": MATTE_REVIEW_SCHEMA,
                         "selection": SELECTION_SCHEMA,
                         "regions": REGION_SCHEMA,
                         "repair": REPAIR_SPOTS_SCHEMA,

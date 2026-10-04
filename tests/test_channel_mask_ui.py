@@ -42,3 +42,28 @@ def test_escape_from_channel_popup_cancels_owned_calculation(canvas,tmp_path):  
     ui.click('channelApplyButton');wait_for(lambda:ui.e.matteBusy)
     ui.key(Qt.Key_Escape);wait_for(lambda:not ui.e.matteBusy and not ui.e.channelMask.opened)
     assert before==(ui.e._candidate,ui.e._layers,ui.e._draft_history,ui.e._generation)
+
+
+def test_calculation_channel_can_be_selected_and_exports_native_gray(canvas,tmp_path):  # noqa: F811
+    import numpy as np
+    from iphoto.document import raster_mask
+    from test_matte_review import calculation_scene
+    ui=canvas;image,truth,mask=calculation_scene();path=tmp_path/'color-difference.png';image.save(path)
+    ui.e.openImage(str(path));wait_for(lambda:ui.e.hasImage and settled(ui.e))
+    ui.e._set_candidate(mask);wait_for(lambda:settled(ui.e))
+    original=deepcopy(ui.e._layers)
+    ui.e.channelMask.open();wait_for(lambda:not ui.e.channelMask.loading and ui.e.channelMask.previewUrl)
+    wait_for(lambda:ui.find('channelMaskDialog').property('opened'))
+    ui.click('channelChoiceBox');ui.key(Qt.Key_Home)
+    for _ in range(5):ui.key(Qt.Key_Down)
+    ui.key(Qt.Key_Return)
+    wait_for(lambda:ui.e.channelMask.options['channel']=='red_green' and not ui.e.channelMask.loading)
+    ui.click('channelUseAiBox');wait_for(lambda:not ui.e.channelMask.loading)
+    ui.click('channelInteriorBox');wait_for(lambda:not ui.e.channelMask.loading)
+    for field,value in [('channelBlackBox','88'),('channelWhiteBox','168')]:
+        ui.click(field);ui.key(Qt.Key_A,Qt.ControlModifier);ui.type(value);ui.key(Qt.Key_Return)
+        wait_for(lambda:not ui.e.channelMask.loading)
+    wait_for(lambda:ui.find('channelApplyButton').property('enabled'))
+    ui.click('channelApplyButton');wait_for(lambda:not ui.e.busy and settled(ui.e) and not ui.e.channelMask.opened)
+    pixels=np.asarray(raster_mask(ui.e._candidate,image.size))/255
+    assert np.abs(pixels-truth).mean()<.003 and ui.e._layers==original

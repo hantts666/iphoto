@@ -352,6 +352,17 @@ def main():
         assets.append(path)
         return {'path':str(path), 'channel':channel, 'score':score, 'options':options}
 
+    @register('matte_candidate')
+    def _matte_candidate(request):
+        nonlocal current_crop_assets
+        from .matte_review import render_review
+        if request.get('expected_sha256') != source.digest:
+            raise ValueError('照片已变化，抠图检查未应用')
+        result=render_review(source.image,request['layers'],request['mask'],cache,request['id'])
+        current_crop_assets={Path(item['path']) for item in result['images']}
+        assets.extend(current_crop_assets)
+        return result
+
     @register("generative_crop")
     def _generative_crop(request):
         nonlocal current_crop_assets

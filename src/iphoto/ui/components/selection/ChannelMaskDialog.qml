@@ -36,7 +36,7 @@ Dialog {
             Caption { text: "通道" }
             ComboBox {
                 objectName: "channelChoiceBox"; Layout.fillWidth: true
-                model: [{text:"自动",value:"auto"},{text:"红",value:"red"},{text:"绿",value:"green"},{text:"蓝",value:"blue"},{text:"亮度",value:"luminance"}]
+                model: [{text:"自动",value:"auto"},{text:"红",value:"red"},{text:"绿",value:"green"},{text:"蓝",value:"blue"},{text:"亮度",value:"luminance"},{text:"红−绿（计算）",value:"red_green"},{text:"红−蓝（计算）",value:"red_blue"},{text:"绿−蓝（计算）",value:"green_blue"}]
                 textRole: "text"; valueRole: "value"
                 currentIndex: Math.max(0, model.findIndex(function(item) { return item.value===root.config.channel }))
                 enabled: !root.editor.busy

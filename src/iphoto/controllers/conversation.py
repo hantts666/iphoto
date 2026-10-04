@@ -553,6 +553,9 @@ def _cloud_plan(self, result, generation):
     if result.get("mode") == "photo_review" and pending.get('photo_strategy'):
         from .photo_strategy import reviewed
         return reviewed(self, result)
+    if result.get('mode') == 'matte_review' and pending.get('channel_auto'):
+        from .channel_auto import reviewed as matte_reviewed
+        return matte_reviewed(self,result)
     if result.get('mode') == 'auto' and result.get('action') == 'channel_mask':
         from .channel_auto import begin as begin_channel
         result = begin_channel(self, result)
@@ -948,7 +951,7 @@ def _cloud_plan(self, result, generation):
         status = ("正在自动分离面部皮肤、保护眉眼和嘴唇；完成后自动建立图层…" if facial
                   else "正在自动分离上下嘴唇、保护嘴内与周围皮肤；完成后自动建立图层…" if lips
                   else "正在按原图细节分别生成身体部位范围；完成后自动建立图层…" if body
-                  else "1/3 正在定位目标，随后提取通道与 AI 透明度…可取消" if pending.get('channel_auto')
+                  else "1/4 正在定位目标，随后提取通道与 AI 透明度并核对效果…可取消" if pending.get('channel_auto')
                   else "AI 已规划局部图层，正在本地生成蒙版；完成后自动建立图层…" if auto_layering
                   else "AI 已定位目标，正在本地生成像素选区…")
     elif auto_layering and len(self._layers) > layer_count_before:

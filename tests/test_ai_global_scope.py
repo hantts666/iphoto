@@ -1,6 +1,8 @@
 """Whole-image chat edits must preserve existing local work and escape groups."""
 
 from copy import deepcopy
+import base64
+from io import BytesIO
 import json
 from types import SimpleNamespace
 
@@ -16,7 +18,7 @@ from iphoto.engine import Recipe
 from test_ai import completion, configure, mock_api, wait_for
 from test_ai_auto_layers import auto_response
 from test_editor import settled
-from test_selection_ui_modes import ui, click
+from test_selection_ui_modes import ui, click  # noqa: F401
 
 
 def local_layer(editor):
@@ -30,7 +32,7 @@ def local_layer(editor):
     wait_for(lambda: settled(editor))
 
 
-def test_global_chat_button_preserves_local_layers_and_one_undo(ui, tmp_path):
+def test_global_chat_button_preserves_local_layers_and_one_undo(ui, tmp_path):  # noqa: F811
     editor, window, find, warnings = ui
     local_layer(editor)
     before = deepcopy(editor._layers)
@@ -68,7 +70,7 @@ def test_global_chat_button_preserves_local_layers_and_one_undo(ui, tmp_path):
     assert not warnings, warnings
 
 
-def test_full_adjust_on_local_layer_is_repaired_before_any_edit(ui):
+def test_full_adjust_on_local_layer_is_repaired_before_any_edit(ui):  # noqa: F811
     editor, _, _, warnings = ui
     local_layer(editor)
     before = deepcopy(editor._layers)
@@ -92,7 +94,7 @@ def test_full_adjust_on_local_layer_is_repaired_before_any_edit(ui):
     assert not warnings, warnings
 
 
-def test_legacy_scope_free_local_reply_cannot_erase_skin_smoothing(ui):
+def test_legacy_scope_free_local_reply_cannot_erase_skin_smoothing(ui):  # noqa: F811
     editor, _, _, warnings = ui
     local_layer(editor)
     editor.unlock("skin_smoothing")
@@ -107,7 +109,7 @@ def test_legacy_scope_free_local_reply_cannot_erase_skin_smoothing(ui):
     assert not warnings, warnings
 
 
-def test_global_layer_escapes_current_clipped_group(ui):
+def test_global_layer_escapes_current_clipped_group(ui):  # noqa: F811
     editor, _, _, warnings = ui
     local_layer(editor)
     editor.groupLayer()
@@ -132,7 +134,7 @@ def test_global_layer_escapes_current_clipped_group(ui):
     assert not warnings, warnings
 
 
-def test_full_capacity_does_not_fall_back_to_local_adjustment(ui):
+def test_full_capacity_does_not_fall_back_to_local_adjustment(ui):  # noqa: F811
     editor, _, _, warnings = ui
     local_layer(editor)
     editor._layers.extend(new_layer("占位", True) for _ in range(MAX_LAYERS - len(editor._layers)))
@@ -150,7 +152,7 @@ def test_full_capacity_does_not_fall_back_to_local_adjustment(ui):
     assert not warnings, warnings
 
 
-def test_scope_uses_mask_pixels_not_the_mask_label(ui):
+def test_scope_uses_mask_pixels_not_the_mask_label(ui):  # noqa: F811
     editor, _, _, warnings = ui
     local_layer(editor)
     editor._layer()["mask"]["label"] = "全图"
@@ -163,7 +165,14 @@ def test_scope_uses_mask_pixels_not_the_mask_label(ui):
         payload = requests[0][2]["messages"][1]["content"]
         context = json.loads(payload[0]["text"])
         assert context["current_scope"] == "local"
-        assert len(payload) == 4  # Original photo plus the real local mask.
+        # Existing edits also send the composited preview. Scope still comes
+        # from the actual mask, never the deliberately misleading label.
+        images=[part['image_url']['url'] for part in payload if part['type']=='image_url']
+        assert len(images)==3
+        local=Image.open(BytesIO(base64.b64decode(images[1].split(',',1)[1]))).convert('L')
+        assert local.getextrema()==(0,255)
+        assert local.tobytes()==raster_mask(editor._layer()['mask'],local.size).tobytes()
+        assert any('当前合成效果' in part.get('text','') for part in payload)
         assert len(editor.layers) == 2 and editor._recipe["skin_smoothing"] == 30
     assert not warnings, warnings
 

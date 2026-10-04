@@ -3,6 +3,9 @@ from copy import deepcopy
 from uuid import uuid4
 
 from ..document import validate_mask
+from ..ai_protocol import image_data_url
+from ..engine import Recipe
+from ..matting.channels import CHANNEL_NAMES
 from . import pixel_selections
 
 
@@ -43,7 +46,7 @@ def prepare(e, mask, token):
             return
         _, state = current
         state['mask'] = deepcopy(mask)
-        e._status = '2/3 正在比较通道，准备原图透明度…可取消'
+        e._status = '2/4 正在比较通道与通道计算，准备原图透明度…可取消'
         options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,
                    'ai':True,'interior':state['interior'],'detail':True,'color':True}
         e._request('channel_preview',mask=state['mask'],options=options,initial=True,expected_sha256=e._sha,
@@ -59,7 +62,7 @@ def ready(e, result, context, generation):
             return
         _, state = current
         options = {**result['options'],'interior':state['interior'],'detail':True,'color':True}
-        e._status = '3/3 正在结合通道与 AI 细化原图透明边缘…可取消'
+        e._status = '3/4 正在结合通道与 AI 细化原图透明边缘…可取消'
         e._request('matte',method='channel',mask=state['mask'],channel_options=options,auto_token=state['token'])
     except (ValueError, KeyError) as exc:
         e._notify(str(exc), True)
@@ -72,13 +75,57 @@ def complete(e, result, token):
             return
         pending, state = current
         mask = validate_mask(result['mask'])
+        state['result'] = deepcopy(result)
+        staged = deepcopy(e._layers)
+        if state['bound']:
+            target = state['target_id'] or e._selected
+            next(layer for layer in staged if layer['id']==target)['mask'] = mask
+        e._status = '4/4 正在准备实际黑白底与原像素边缘，核对抠图质量…可取消'
+        e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
+                   context={'token':token})
+    except (ValueError, KeyError, StopIteration) as exc:
+        e._notify(str(exc), True)
+
+
+def review_ready(e, result, context, generation):
+    try:
+        current = _current(e, context['token'])
+        if current is None or generation != e._generation:
+            return
+        pending, state = current
+        state['reviewing'] = True
+        images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['images']]
+        e._status = '4/4 AI 正在对比原图、黑白底与原像素边缘，检查灰云、串色与遗漏…可取消'
+        e.changed.emit()
+        e.ai.plan(pending['text'], Recipe().to_dict(), [], result['images'][0]['path'], generation,
+                  'matte_review', {'target':state['mask']['label'],
+                                   'quality':state['result']['quality'],'review_images':images})
+    except (ValueError, KeyError, OSError) as exc:
+        e._notify(str(exc), True)
+
+
+def reviewed(e, review):
+    try:
+        state = (e._pending_request or {}).get('channel_auto')
+        if not state or not state.get('reviewing'):
+            return
+        current = _current(e,state['token'])
+        if current is None:
+            return
+        pending,state = current
+        if review['status'] != 'accept':
+            e._pending_request = None
+            e._message('assistant','候选抠图未通过实际效果检查，原范围保留。\n'+review['summary'],
+                       state='unsupported',origin=pending)
+            return e._notify('候选抠图未通过质量检查，原范围保留')
+        result=state['result']
+        mask=validate_mask(result['mask'])
         e._pending_request = None
         e._set_candidate(mask)
         if state['bound']:
             e.acceptSelection()
         quality = result['quality']
-        names = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度'}
-        detail = f"{names[quality['channel']]}通道 + AI 透明边缘 · {quality['elapsed_ms']/1000:.1f}s"
+        detail = f"{CHANNEL_NAMES[quality['channel']]}通道 + AI 透明边缘 · {quality['elapsed_ms']/1000:.1f}s"
         if quality.get('native_detail'):
             detail += ' · 原像素细纹理'
         if quality.get('color_recovery'):
@@ -86,7 +133,7 @@ def complete(e, result, token):
         if quality['warnings']:
             detail += ' · ' + '；'.join(quality['warnings'])
         e._selection_quality = detail
-        e._message('assistant',detail + ('\n已更新原层范围，颜色和强度保留；可一步撤销。' if state['bound']
+        e._message('assistant',detail + '\n效果核对：'+review['summary'] + ('\n已更新原层范围，颜色和强度保留；可一步撤销。' if state['bound']
                    else '\n范围已准备好，可以直接调整或继续修边。') + '\n可切换白底或黑底检查，透明 PNG 使用相同的前景颜色恢复；仍请检查细丝、孔洞与透明内部。',
                    state='applied' if state['bound'] else 'draft',origin=pending)
         e._notify('通道与 AI 透明度处理已完成；可撤销或检查边缘')

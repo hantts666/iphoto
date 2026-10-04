@@ -147,7 +147,7 @@ def test_conversation_scope_and_capability_cannot_bypass_selection():
         parse_auto(completion(value),Recipe().to_dict(),[],current_scope='selection',workspace={'channel_mask_available':False})
 
 
-@pytest.mark.parametrize('outcome',['complete','cancel','stale','stale_matte','failure'])
+@pytest.mark.parametrize('outcome',['complete','cancel','stale','stale_matte','failure','reject_review','cancel_review','stale_review','failure_review'])
 def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
     image,_,mask,_=scene();path=tmp_path/'cloth.png';image.save(path)
     editor=Editor(ai_store=ai_store)
@@ -155,7 +155,12 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
         editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
         editor._layer()['mask']=deepcopy(mask);editor._load_layer();editor._commit()
         original=deepcopy(editor._layers);cursor=editor._cursor
-        with mock_api(completion(plan())) as (endpoint,requests):
+        def server(payload):
+            if '独立抠图质量检查员' in payload['messages'][0]['content']:
+                if outcome=='failure_review':return completion({'status':'accept'})
+                return completion({'status':'reject' if outcome=='reject_review' else 'accept','summary':'核对实际黑白底边缘'})
+            return completion(plan())
+        with mock_api(server) as (endpoint,requests):
             configure(editor.ai,endpoint)
             assert editor.sendMessage('用通道和AI修这层薄纱透明内部','auto')
             wait_for(lambda:editor.aiChannelPreparing)
@@ -165,6 +170,10 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
                 wait_for(lambda:editor.matteBusy)
                 editor._generation+=1
             elif outcome=='failure':path.unlink()
+            elif outcome in ('cancel_review','stale_review'):
+                wait_for(lambda:(editor._pending_request or {}).get('channel_auto',{}).get('reviewing'))
+                if outcome=='cancel_review':editor.selection.cancelTask()
+                else:editor._generation+=1
             wait_for(lambda:not editor.busy and settled(editor),seconds=45)
         if outcome=='complete':
             assert editor._layers!=original and len(editor._layers)==len(original)
@@ -174,7 +183,8 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
             editor.redo();assert editor._layers==result
         else:
             assert editor._layers==original and editor._candidate is None and editor._cursor==cursor
-        assert not editor.aiChannelPreparing and len(requests)==1
+        assert not editor.aiChannelPreparing
+        assert len(requests)==(3 if outcome=='failure_review' else 2 if outcome in ('complete','reject_review','stale_review') else 1) or outcome=='cancel_review' and len(requests)<=2
     finally:editor.close()
 
 

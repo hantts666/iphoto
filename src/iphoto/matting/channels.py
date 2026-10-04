@@ -10,7 +10,9 @@ from PIL import Image
 from ..document import raster_mask, empty_mask, validate_mask
 from ..masks import encode_bitmap
 
-CHANNELS = ('red', 'green', 'blue', 'luminance')
+CHANNELS = ('red', 'green', 'blue', 'luminance', 'red_green', 'red_blue', 'green_blue')
+CHANNEL_NAMES = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度',
+                 'red_green':'红−绿','red_blue':'红−蓝','green_blue':'绿−蓝'}
 
 
 def validate_options(value):
@@ -43,6 +45,10 @@ def _fields(image, mask, radius):
         raise ValueError('缺少可靠的主体内部或周围背景，请先补选/擦除后再试')
     planes = [rgb[..., i] for i in range(3)]
     planes.append(np.rint(rgb[...,0]*.2126 + rgb[...,1]*.7152 + rgb[...,2]*.0722).astype(np.uint8))
+    # Photoshop-style Subtract, scale=1/offset=128. Cast before subtraction:
+    # uint8 wraparound would invent foreground/background contrast.
+    for first, second in ((0,1),(0,2),(1,2)):
+        planes.append(np.clip(rgb[...,first].astype(np.int16)-rgb[...,second]+128,0,255).astype(np.uint8))
     metrics = []
     for channel, plane in zip(CHANNELS, planes):
         f, b = plane[fg][::max(1, int(fg.sum())//10000)], plane[bg][::max(1, int(bg.sum())//10000)]

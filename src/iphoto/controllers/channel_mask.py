@@ -4,6 +4,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer
+from ..matting.channels import CHANNEL_NAMES
 
 
 class ChannelMaskController(QObject):
@@ -58,7 +59,7 @@ class ChannelMaskController(QObject):
             e.beginSelection('current')
         self.state = {'token':uuid4().hex, 'generation':e._generation, 'sha':e._sha,
                       'layer_id':e._selected, 'mask':deepcopy(e._candidate), 'revision':0}
-        self._preview, self._note = '', '正在比较红、绿、蓝和亮度通道…'
+        self._preview, self._note = '', '正在比较红、绿、蓝、亮度与通道计算…'
         self._options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,'ai':True,'interior':False,
                          'detail':True,'color':True}
         self._refresh(initial=True)
@@ -80,8 +81,7 @@ class ChannelMaskController(QObject):
         from PySide6.QtCore import QUrl
         self._options, self._preview = result['options'], QUrl.fromLocalFile(result['path']).toString()
         self._loading = False
-        names = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度'}
-        self._note = f"推荐 {names[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else '')
+        self._note = f"推荐 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else '')
         self.changed.emit()
 
     def failed(self, message, context):
