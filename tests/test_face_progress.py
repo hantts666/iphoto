@@ -21,12 +21,12 @@ from test_face_parts import labels, rect
 from test_import_export import ui  # noqa: F401
 
 
-@pytest.mark.parametrize('case', ['valid','source','cached','fallback','wrong_id','wrong_op','old_active_op',
+@pytest.mark.parametrize('case', ['valid','source','cached','fallback','continuous','wrong_id','wrong_op','old_active_op',
     'stale','old_active','cancelled','background','closing','bad_part','boolean','bad_total','bad_phase',
     'wrong_target','tile','non_dict'])
 def test_facial_status_never_releases_task_or_publishes_partial_layers(case):
     progress={'kind':'face','phase':'face_infer','part':1,'total':1}
-    if case in ('source','cached','fallback'):progress['phase']='face_'+case
+    if case in ('source','cached','fallback','continuous'):progress['phase']='face_'+case
     if case=='bad_part':progress['part']=0
     if case=='boolean':progress['part']=True
     if case=='bad_total':progress['total']=2
@@ -47,7 +47,7 @@ def test_facial_status_never_releases_task_or_publishes_partial_layers(case):
     worker_bridge._pixel_read(owner)
     assert owner._pixel_active is active and owner._warm_ready_sha=='unprepared'
     assert before==(owner._layers,owner._candidate,owner._generation)
-    assert (owner._status!='previous')==(case in ('valid','source','cached','fallback'))
+    assert (owner._status!='previous')==(case in ('valid','source','cached','fallback','continuous'))
 
 
 def test_mixed_batch_progress_identifies_the_current_face_without_partial_result(monkeypatch):

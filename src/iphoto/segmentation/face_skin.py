@@ -1,7 +1,7 @@
 """Face skin masks from an explicitly localized face, in the pixel worker.
 
 BiSeNet preprocessing and class IDs follow yakhyo/face-parsing. The bounded
-adapter, selection policy and inward alpha edges are specific to iPhoto.
+adapter, scope policy and semantic part transitions are specific to iPhoto.
 """
 
 import os
@@ -177,6 +177,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     patch = image.crop(box).convert("RGB")
     precision = False
     fallback = False
+    part_alpha = None
     if features is not None:
         features = validate_features(features)
     if engine is None and part in PARTS and features is not None:
@@ -184,10 +185,13 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         if face_precision.available():
             landmarks = np.asarray([*features['eyes'], points[0][:2], *features['mouth']]) * image.size - (left,top)
             try:
-                if progress is None:
-                    labels = face_precision.backend().predict_native(patch,landmarks)
+                parser=face_precision.backend(progress=progress) if progress is not None else face_precision.backend()
+                if callable(getattr(parser,'predict_part',None)):
+                    labels,part_alpha=parser.predict_part(patch,landmarks,part,progress=progress)
+                elif progress is None:
+                    labels = parser.predict_native(patch,landmarks)
                 else:
-                    labels = face_precision.backend(progress=progress).predict_native(patch,landmarks,progress=progress)
+                    labels = parser.predict_native(patch,landmarks,progress=progress)
                 precision = True
             except Exception:
                 fallback = True
@@ -207,6 +211,9 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     expected = (patch.height, patch.width) if native else (512, 512)
     if labels.shape != expected or labels.dtype != np.uint8 or labels.max() > 18:
         raise ValueError("面部皮肤分区无效，照片未改变")
+    continuous = precision and part_alpha is not None
+    if continuous and (part_alpha.shape!=expected or part_alpha.dtype!=np.uint8):
+        raise ValueError('连续五官边缘无效，照片未改变')
     if progress is not None:
         progress('face_protect')
     grid_height, grid_width = labels.shape
@@ -242,8 +249,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     if part == 'lips':
         # Confirm the complete face at its nose first, then isolate its lips.
         # The mouth class includes the interior, not a separate teeth class.
-        protected = (~np.isin(labels, PARTS[part]['classes'])).astype(np.uint8)
-    protected = cv2.dilate(protected, np.ones((3, 3), np.uint8)) > 0
+        protected = (~np.isin(labels, (1,12,13) if continuous else PARTS[part]['classes'])).astype(np.uint8)
+    protected = protected>0 if continuous and part=='lips' else cv2.dilate(protected, np.ones((3, 3), np.uint8)) > 0
     if target=='face_skin' and features is not None:
         features = validate_features(features)
         mapped = {name:[[(x*image.width-left)/patch.width*scale_x,(y*image.height-top)/patch.height*scale_y]
@@ -251,12 +258,16 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         face_width = cv2.boundingRect(selected.astype(np.uint8))[2]
         protected |= feature_guard_pixels(mapped,labels,face_width)
     hard = (selected & ~protected).astype(np.uint8)
+    allowed = hard.copy() if continuous else None
     if part in PARTS:
         hard &= np.isin(labels, PARTS[part]['classes']).astype(np.uint8)
         # Nearby faces can touch in the parser's complete-face component.
         # A supplied identity context limits parts to the localized person.
         context = raster_mask(context_hint, image.size).crop(box)
         hard &= (np.asarray(context.resize((grid_width,grid_height),Image.Resampling.NEAREST)) > 0).astype(np.uint8)
+        if continuous:
+            allowed &= np.isin(labels,(1,*PARTS[part]['classes'])).astype(np.uint8)
+            allowed &= (np.asarray(context)>0).astype(np.uint8)
     scope_alpha = None
     scope_feather = 0
     if scope == 'region':
@@ -265,6 +276,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         scope_alpha = raster_mask(hint, image.size).crop(box)
         grid_scope = np.asarray(scope_alpha.resize((grid_width,grid_height), Image.Resampling.NEAREST))
         hard &= (grid_scope > 0).astype(np.uint8)
+        if continuous:
+            allowed &= (grid_scope>0).astype(np.uint8)
         if not hard.any():
             label = PARTS[part]['label'] if part in PARTS else '面部皮肤'
             raise ValueError(f"指定部位内未识别到{label}，照片未改变；请调整描述")
@@ -277,19 +290,22 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         from PIL import ImageChops
         fade = Image.fromarray(np.rint(np.minimum(inside/scope_feather,1)*255).astype(np.uint8))
         scope_alpha = ImageChops.multiply(scope_alpha,fade)
-    # Production scores are classified on the original crop. Protection and
-    # inward feathering are now measured in source pixels, not scaled 512px
-    # cells that can eat a narrow nose/eye boundary on a large photograph.
-    # An inward transition preserves exact zeros on eyes, lips, hair, clothes
-    # and background. RGB-guided outward expansion could fill those holes.
-    distance = cv2.distanceTransform(hard, cv2.DIST_L2, 5)
-    alpha = Image.fromarray(np.rint(np.minimum(distance / 2, 1) * 255).astype(np.uint8))
-    alpha = alpha.resize(patch.size, Image.Resampling.BILINEAR)
-    support = Image.fromarray(hard * 255).resize(patch.size, Image.Resampling.NEAREST)
-    alpha.paste(0, mask=support.point(lambda v: 255 - v))
+    # Precision parts use continuous neural scores without the extra binary
+    # erosion. Anatomy, person and spatial limits still gate every pixel.
+    # The base parser retains its existing source-pixel inward transition.
+    if continuous:
+        alpha=Image.fromarray(np.where(allowed>0,part_alpha,0).astype(np.uint8))
+    else:
+        distance = cv2.distanceTransform(hard, cv2.DIST_L2, 5)
+        alpha = Image.fromarray(np.rint(np.minimum(distance / 2, 1) * 255).astype(np.uint8))
+        alpha = alpha.resize(patch.size, Image.Resampling.BILINEAR)
+        support = Image.fromarray(hard * 255).resize(patch.size, Image.Resampling.NEAREST)
+        alpha.paste(0, mask=support.point(lambda v: 255 - v))
     if scope_alpha is not None:
         from PIL import ImageChops
         alpha = ImageChops.multiply(alpha, scope_alpha)
+    if continuous and not alpha.getbbox():
+        raise ValueError('五官类别分数不足以生成可靠范围，照片未改变')
     full = Image.new("L", image.size)
     full.paste(alpha, (left, top))
     result = empty_mask()
@@ -307,7 +323,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "mask_size": list(image.size), "crop_size": list(patch.size),
         "boundary_grid": "source" if native else "model", "boundary_size": [grid_width, grid_height],
-        "coverage": round(float(hard.mean()) * patch.width * patch.height / (image.width * image.height) * 100, 2),
+        "coverage": round((np.count_nonzero(np.asarray(alpha)) if continuous else float(hard.mean())*patch.width*patch.height) / (image.width * image.height) * 100, 2),
+        "continuous_boundary": continuous,
         "anchor_recovered": recovered,
         "landmark_protection": target=='face_skin' and features is not None,
         "face_scope": scope,

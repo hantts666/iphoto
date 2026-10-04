@@ -8,6 +8,7 @@ from hashlib import sha256
 from importlib.util import find_spec
 from pathlib import Path
 import os
+import zlib
 
 import numpy as np
 
@@ -15,7 +16,7 @@ MODEL_DIR = Path(__file__).resolve().parents[3] / 'models' / 'face-parsing'
 NAME = 'farl-lapa-448.onnx'
 SIZE = 645022368
 DIGEST = '60a239ea923ec79d26d966015ef2b462e13d3963f8d551fc7c15bae6d7fff279'
-MAX_CACHE_PIXELS = 16_000_000
+MAX_CACHE_BYTES = 16_000_000
 CLASS_MAP = np.array([0, 1, 3, 2, 5, 4, 10, 12, 11, 13, 17], np.uint8)
 CLASS_MAP.setflags(write=False)
 _backend = None
@@ -124,6 +125,47 @@ def native_labels(scores, matrix, size):
     return labels
 
 
+def native_part_alpha(scores, matrix, labels, part):
+    """Continuous class transition; semantic likelihood is not matting alpha.
+
+    Resample logits before softmax, as for labels. Work only around the native
+    target and in bounded blocks; never allocate an eleven-channel source map.
+    """
+    if part not in ('nose', 'lips'):
+        raise ValueError('连续五官边缘的目标无效')
+    if (scores.shape != (1,11,512,512) or scores.dtype != np.float32 or not np.isfinite(scores).all()
+            or np.shape(matrix) != (3,3) or not np.isfinite(matrix).all()
+            or labels.ndim != 2 or labels.dtype != np.uint8 or labels.max(initial=0)>18):
+        raise ValueError('连续五官边缘的语义输入无效')
+    classes = (7,9) if part=='lips' else (6,)
+    target = np.isin(labels, CLASS_MAP[list(classes)])
+    result = np.zeros(labels.shape, np.uint8)
+    ys,xs = np.nonzero(target)
+    if not len(xs):
+        return result
+    height,width = labels.shape
+    left,top=max(0,int(xs.min())-64),max(0,int(ys.min())-64)
+    right,bottom=min(width,int(xs.max())+65),min(height,int(ys.max())+65)
+    pixels = np.ascontiguousarray(scores[0].transpose(1,2,0))
+    for y in range(top,bottom,64):
+        end_y=min(y+64,bottom)
+        for x in range(left,right,1024):
+            end_x=min(x+1024,right)
+            yy,xx=np.mgrid[y:end_y,x:end_x].astype(np.float32)
+            coords=warp(np.stack((xx+.5,yy+.5),-1)@matrix[:2,:2].T+matrix[:2,2])
+            coords=((coords/448)*512-.5)
+            block=sample_bilinear(pixels,coords)
+            weights=np.exp(block-block.max(2,keepdims=True))
+            likelihood=weights[:,:,classes].sum(2)/weights.sum(2)
+            # A bounded transition, not a claim of calibrated probability or
+            # physical transparency. Confident other classes remain zero.
+            alpha=np.rint(np.clip((likelihood-.25)/.5,0,1)*255).astype(np.uint8)
+            permitted=np.isin(labels[y:end_y,x:end_x],(1,12,13) if part=='lips' else (1,10))
+            alpha[~permitted]=0
+            result[y:end_y,x:end_x]=alpha
+    return result
+
+
 class FaceParser:
     name = 'FaRL LaPa'
 
@@ -139,7 +181,7 @@ class FaceParser:
         self.session = ort.InferenceSession(str(verified_path()),sess_options=options,providers=['CPUExecutionProvider'])
         self._cached = None
 
-    def predict_native(self, image, points, *, progress=None):
+    def _prediction(self, image, points, *, progress=None):
         matrix = alignment(points)
         # Nose/lips jobs share one face's semantic output. Hash pixels as well
         # as its transform so another photo or moved crop cannot reuse it.
@@ -148,7 +190,10 @@ class FaceParser:
         if self._cached is not None and self._cached[0] == key:
             if progress is not None:
                 progress('face_cached')
-            return self._cached[1]
+            labels=self._cached[1]
+            if isinstance(labels,tuple):
+                labels=np.frombuffer(zlib.decompress(labels[1]),np.uint8).reshape(labels[0])
+            return labels, self._cached[2], matrix
         if progress is not None:
             progress('face_infer')
         scores = self.session.run(None,{'image':aligned_image(image,matrix)})[0]
@@ -156,8 +201,24 @@ class FaceParser:
             progress('face_boundary')
         labels = native_labels(scores,matrix,image.size)
         labels.setflags(write=False)
-        self._cached = (key,labels) if labels.size <= MAX_CACHE_PIXELS else None
-        return labels
+        scores.setflags(write=False)
+        cached_labels=labels
+        if labels.nbytes+scores.nbytes>MAX_CACHE_BYTES and scores.nbytes<MAX_CACHE_BYTES:
+            # Native class maps are mostly constant regions. Lossless packing
+            # retains exact classes and logits within the same 16 MB budget.
+            cached_labels=(labels.shape,zlib.compress(labels.tobytes(),level=1))
+        stored_size=cached_labels.nbytes if isinstance(cached_labels,np.ndarray) else len(cached_labels[1])
+        self._cached = (key,cached_labels,scores) if stored_size+scores.nbytes <= MAX_CACHE_BYTES else None
+        return labels,scores,matrix
+
+    def predict_native(self, image, points, *, progress=None):
+        return self._prediction(image,points,progress=progress)[0]
+
+    def predict_part(self, image, points, part, *, progress=None):
+        labels,scores,matrix=self._prediction(image,points,progress=progress)
+        if progress is not None:
+            progress('face_continuous')
+        return labels,native_part_alpha(scores,matrix,labels,part)
 
 
 def backend(*, progress=None):

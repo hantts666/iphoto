@@ -95,6 +95,7 @@ def test_one_face_cache_reuses_semantics_but_new_pixels_transform_or_size_invali
     parser.predict_native(image,points+.25);assert len(calls)==3
     parser.predict_native(image.resize((13,12)),points+.25);assert len(calls)==4
     parser.predict_native(Image.new('RGB',(12,12),(100,90,80)),points);assert len(calls)==5
-    monkeypatch.setattr(precision,'MAX_CACHE_PIXELS',1)
+    assert parser._cached[1].nbytes+parser._cached[2].nbytes<=precision.MAX_CACHE_BYTES
+    monkeypatch.setattr(precision,'MAX_CACHE_BYTES',1)
     parser.predict_native(image,points)
     assert parser._cached is None
