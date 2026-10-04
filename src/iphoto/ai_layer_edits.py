@@ -2,7 +2,7 @@
 
 from math import isfinite
 
-from .engine import Recipe, RANGES
+from .engine import Recipe, RECIPE_FIELDS, RECIPE_PROPERTIES
 
 LAYER_EDITS_SCHEMA = {
     "type": "array", "maxItems": 4,
@@ -13,8 +13,8 @@ LAYER_EDITS_SCHEMA = {
             "face_id": {"type": ["string", "null"]},
             "recipe": {"anyOf": [{
                 "type": "object", "additionalProperties": False,
-                "properties": {k: {"type": "number", "minimum": lo, "maximum": hi} for k, (lo, hi) in RANGES.items()},
-                "required": list(RANGES),
+                "properties": RECIPE_PROPERTIES,
+                "required": list(RECIPE_FIELDS),
             }, {"type": "null"}]},
             "visible": {"type": ["boolean", "null"]},
             "opacity": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
@@ -71,13 +71,13 @@ def validate_layer_edits(value, offered):
             continue
         if recipe is None:
             recipe = layer["recipe"]
-        if not isinstance(recipe, dict) or set(recipe) != set(RANGES):
+        if not isinstance(recipe, dict) or set(recipe) != set(RECIPE_FIELDS):
             raise ValueError("已有图层的修改参数不完整")
         validated = Recipe.from_dict(recipe).to_dict()
         visible, opacity = validate_layer_controls(edit, layer)
         kept = []
         for key in layer.get("locked", []):
-            if key in RANGES:
+            if key in RECIPE_FIELDS:
                 if validated[key] != layer["recipe"][key]:
                     kept.append(key)
                 validated[key] = layer["recipe"][key]

@@ -3,7 +3,7 @@
 from copy import deepcopy
 import base64
 from io import BytesIO
-from ..engine import LABELS, PRESETS, RANGES, Recipe
+from ..engine import LABELS, PRESETS, RANGES, Recipe, RECIPE_FIELDS
 from ..document import new_layer, raster_mask, raster_mask_cached, validate_layers, MAX_LAYERS
 from ..ai_layer_edits import validate_layer_controls
 from ..ai_layer_groups import validate_group_plan
@@ -296,7 +296,7 @@ def applyLayerEdits(self, edits, expected):
             raise ValueError("图层组不能修改调色参数，已有图层未修改")
         if proposed is None:
             proposed = layer["recipe"]
-        if not isinstance(proposed, dict) or set(proposed) != set(RANGES):
+        if not isinstance(proposed, dict) or set(proposed) != set(RECIPE_FIELDS):
             raise ValueError("图层修改参数不完整，已有图层未修改")
         recipe = Recipe.from_dict(proposed).to_dict()
         visible, opacity = validate_layer_controls(edit, layer)

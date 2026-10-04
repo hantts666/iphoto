@@ -152,7 +152,7 @@ def openImage(self, url):
 def _payload(self):
     self._sync_layer()
     return {
-        "schema_version": "1.9",
+        "schema_version": "1.10",
         "engine_version": ENGINE_VERSION,
         "source": self._path,
         "source_sha256": self._sha,

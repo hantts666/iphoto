@@ -20,7 +20,12 @@ ColumnLayout {
         return true
     }
     function revealParameter(key) {
-        if (key.indexOf("hsl_") === 0) {
+        if (key.indexOf("curve_") === 0) {
+            var section = toolGroups.itemAt(5)
+            section.expanded = true
+            section.parameterRow(key).revealCurve(key)
+            parameterRevealRequested(section.parameterRow(key), section)
+        } else if (key.indexOf("hsl_") === 0) {
             mixIndex = mixColors.indexOf(key.split("_")[1])
             Qt.callLater(function() { revealParameterRow(key) })
         } else revealParameterRow(key)
@@ -119,22 +124,31 @@ ColumnLayout {
         {title:"色彩",keys:["warmth","tint","saturation","vibrance"],open:false},
         {title:"细节与人像",keys:["skin_smoothing","sharpness","softness"],open:false},
         {title:"RGB 通道",keys:["red_channel","green_channel","blue_channel"],open:false},
-        {title:"分色调色 · HSL",keys:[],open:false,mixer:true}]
+        {title:"分色调色 · HSL",keys:[],open:false,mixer:true},
+        {title:"通道曲线",keys:[],open:false,curves:true}]
         delegate: FoldSection { id: toolGroup; required property var modelData; required property int index; title: modelData.title; expanded: modelData.open; objectName: "adjustmentSection_"+index
             readonly property var parameterKeys: modelData.mixer
                 ? ["hue","saturation","lightness"].map(function(k) {return "hsl_"+adjustRoot.mixColors[adjustRoot.mixIndex]+"_"+k})
                 : modelData.keys
             function commitText() {
+                if (modelData.curves) return curveLoader.item.commitText()
                 for (var i = 0; i < toolRows.count; ++i)
                     if (!toolRows.itemAt(i).commitText()) return false
                 return true
             }
             function parameterRow(key) {
+                if (modelData.curves) return curveLoader.item
                 for (var i = 0; i < toolRows.count; ++i) {
                     var row = toolRows.itemAt(i)
                     if (row.modelData.key === key) return row
                 }
                 return null
+            }
+            Loader {
+                id: curveLoader; active: toolGroup.modelData.curves || false
+                visible: active
+                Layout.fillWidth: true
+                sourceComponent: Component { CurveEditor { workspace: adjustRoot.workspace; editor: adjustRoot.editor; compact: adjustRoot.compactHeader } }
             }
             SelectBox {
                 objectName:"colorMixerChoice"; visible:toolGroup.modelData.mixer || false

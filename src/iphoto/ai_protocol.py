@@ -9,7 +9,7 @@ import json
 from PIL import Image, ImageDraw, ImageOps
 
 import math
-from .engine import RANGES, Recipe
+from .engine import RANGES, Recipe, RECIPE_FIELDS, RECIPE_PROPERTIES, CURVE_FIELDS
 from .ai_grounding import crop_pixels
 from .ai_layer_edits import LAYER_EDITS_SCHEMA, validate_layer_edits
 from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
@@ -41,11 +41,8 @@ RECIPE_SCHEMA = {
         "recipe": {
             "type": "object",
             "additionalProperties": False,
-            "properties": {
-                k: {"type": "number", "minimum": lo, "maximum": hi}
-                for k, (lo, hi) in RANGES.items()
-            },
-            "required": list(RANGES),
+            "properties": RECIPE_PROPERTIES,
+            "required": list(RECIPE_FIELDS),
         },
         "summary": {"type": "string"},
     },
@@ -340,7 +337,7 @@ def parse_plan(data, current, locked):
             or not 1 <= len(plan["summary"].strip()) <= 4000
         ):
             raise ValueError("模型返回的调整说明无效")
-        if not isinstance(plan["recipe"], dict) or set(plan["recipe"]) != set(RANGES):
+        if not isinstance(plan["recipe"], dict) or set(plan["recipe"]) != set(RECIPE_FIELDS):
             raise ValueError("模型返回的修图参数不完整")
         clamped = {}
         for key, (lo, hi) in RANGES.items():
@@ -352,11 +349,12 @@ def parse_plan(data, current, locked):
             ):
                 raise ValueError("模型返回的修图参数类型无效")
             clamped[key] = round(min(hi, max(lo, float(value))), 2 if key == "exposure" else 0)
+        clamped.update({key: plan['recipe'][key] for key in CURVE_FIELDS})
         validated = Recipe.from_dict(clamped).to_dict()
         if plan["status"] == "unsupported":
             validated = dict(current)
         for key in locked:
-            if key in RANGES:
+            if key in RECIPE_FIELDS:
                 validated[key] = current[key]
         return {
             "status": plan["status"],

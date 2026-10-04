@@ -9,7 +9,7 @@ from PIL import Image
 
 from .ai_layer_edits import LAYER_EDITS_SCHEMA
 from .document import validate_mask, raster_mask
-from .engine import Recipe, RANGES
+from .engine import Recipe, RECIPE_FIELDS
 
 MASK_REFINEMENT_SCHEMA = {"anyOf": [{
     "type": "object", "additionalProperties": False,
@@ -87,7 +87,7 @@ def validate_request(value, scope, current, offered, workspace):
         raise ValueError('此五官范围无法可靠对应唯一人脸，无法完整重选；原范围保留')
     recipe = value['recipe']
     if recipe is not None:
-        if not isinstance(recipe, dict) or set(recipe) != set(RANGES):
+        if not isinstance(recipe, dict) or set(recipe) != set(RECIPE_FIELDS):
             raise ValueError('范围修正的调色参数不完整，已有参数保留')
         recipe = Recipe.from_dict(recipe).to_dict()
         for key in locked:

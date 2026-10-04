@@ -2,7 +2,7 @@
 
 import json
 from .document import empty_mask, validate_mask, coord999
-from .engine import Recipe, RANGES, LABELS
+from .engine import Recipe, RANGES, LABELS, RECIPE_FIELDS, RECIPE_PROPERTIES
 from .segmentation.grounding import box_hint, BOX_SCHEMA, ANCHOR_SCHEMA, COORDINATE_PROMPT
 from .segmentation.face_parts import PARTS, validate_part as face_part
 
@@ -187,11 +187,8 @@ REGION_SCHEMA = {
                     "recipe": {
                         "type": "object",
                         "additionalProperties": False,
-                        "properties": {
-                            k: {"type": "number", "minimum": lo, "maximum": hi}
-                            for k, (lo, hi) in RANGES.items()
-                        },
-                        "required": list(RANGES),
+                        "properties": RECIPE_PROPERTIES,
+                        "required": list(RECIPE_FIELDS),
                     },
                 },
                 "required": ["name", "reason", "mask_target", "face_scope", "face_part", "parts", "box", "point", "recipe"],
@@ -205,7 +202,8 @@ RECIPE_LIMITS_PROMPT = (
     "所有 recipe 数值必须在以下闭区间内："
     + "；".join(f"{key}（{LABELS[key]}）{lo}～{hi}" for key, (lo, hi) in RANGES.items())
     + "。曝光单位是 EV，例如提亮四分之一档写 exposure=0.25，绝不能写 25；"
-    "锐化 sharpness 的上限是 100。不要把百分比数值填进曝光字段。RGB 通道 red_channel/green_channel/blue_channel 独立调整线性通道增益，0 不变，-100 移除此通道，100 翻倍。分色 HSL 的 hsl_颜色_hue/saturation/lightness 独立调整该色段，颜色为 red/orange/yellow/green/aqua/blue/purple/magenta；hue 是相对旋转角度，saturation/lightness 正数向更饱和/更亮调整，负数减弱；0 不变。仅改变要求涉及的色段，其余沿用已有值；新层未用参数写 0。分色调色不能替代空间选区。"
+    "锐化 sharpness 的上限是 100。不要把百分比数值填进曝光字段。RGB 通道 red_channel/green_channel/blue_channel 独立调整线性通道增益，0 不变，-100 移除此通道，100 翻倍。分色 HSL 的 hsl_颜色_hue/saturation/lightness 独立调整该色段，颜色为 red/orange/yellow/green/aqua/blue/purple/magenta；hue 是相对旋转角度，saturation/lightness 正数向更饱和/更亮调整，负数减弱；0 不变。仅改变要求涉及的色段，其余沿用已有值；新层未用数值参数写 0。分色调色不能替代空间选区。"
+    "曲线curve_rgb/curve_red/curve_green/curve_blue是0～255编码sRGB中的控制点数组，每点[输入,输出]，空数组[]保持原值。非空必须有2～16点，输入从0到255严格递增且不重复，输入和输出均为整数。保持端点通常写[0,0]和[255,255]。可独立调整暗部/中间调/亮部，例如给暗部加蓝且192～255亮部不变可写curve_blue=[[0,0],[64,85],[128,128],[192,192],[255,255]]；平滑保形插值，先RGB总曲线后分别通道，位于HSL之后、细节之前。没有要求的曲线沿用当前值，新层未使用写[]。所有手动锁定的曲线仍保留，不要用全通道增益替代用户要求的分段颜色；强反转/海报化仅用户明确要求才使用。"
 )
 
 REGION_PROMPT = (
@@ -352,7 +350,7 @@ def parse_regions(data):
             ):
                 raise ValueError("分区理由无效")
             if not isinstance(region["recipe"], dict) or set(region["recipe"]) != set(
-                RANGES
+                RECIPE_FIELDS
             ):
                 raise ValueError("分区参数不完整")
             recipe = Recipe.from_dict(region["recipe"]).to_dict()

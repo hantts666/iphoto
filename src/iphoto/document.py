@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFilter, ImageChops
 
-from .engine import Recipe, RANGES, ENGINE_VERSION, render, render_masked, smoothing_step
+from .engine import Recipe, RECIPE_FIELDS, ENGINE_VERSION, render, render_masked, smoothing_step
 from .storage import atomic_output
 from .masks import validate_bitmap, decode_bitmap
 from .layer_tree import validate_hierarchy, forest
@@ -191,7 +191,7 @@ def validate_layers(layers):
         ):
             raise ValueError("图层组不直接保存调色参数，请在组内新建调整层")
         if not isinstance(locked, list) or any(
-            not isinstance(k, str) or k not in RANGES for k in locked
+            not isinstance(k, str) or k not in RECIPE_FIELDS for k in locked
         ):
             raise ValueError("图层锁定参数无效")
         inpaint = layer.get("inpaint")
@@ -606,7 +606,7 @@ def _validate_project(payload):
             "active_layer": layer["id"],
             "conversation": [],
         }
-    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9"):
+    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"):
         raise ValueError("不支持此项目版本")
     if (
         not isinstance(payload.get("source"), str)
@@ -643,7 +643,7 @@ def _validate_project(payload):
     from .scene import validate_catalog
 
     return {
-        "schema_version": "1.9",
+        "schema_version": "1.10",
         "engine_version": ENGINE_VERSION,
         "source": payload["source"],
         "source_sha256": payload["source_sha256"].lower(),

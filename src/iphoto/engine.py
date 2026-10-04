@@ -16,8 +16,9 @@ import numpy as np
 from PIL import Image, ImageCms, ImageFilter, ImageOps
 from .storage import atomic_output
 from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors, mix_fast as mix_colors_fast
+from .tone_curves import FIELDS as CURVE_FIELDS, LABELS as CURVE_LABELS, SCHEMA as CURVE_SCHEMA, validate as validate_curve, apply as apply_curves
 
-ENGINE_VERSION = "1.9.1-fused-colors"
+ENGINE_VERSION = "1.10.0-srgb-curves"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),
@@ -38,6 +39,9 @@ RANGES = {
     "blue_channel": (-100, 100),
     **HSL_FIELDS,
 }
+RECIPE_FIELDS = tuple(RANGES) + CURVE_FIELDS
+RECIPE_PROPERTIES = {**{k: {'type': 'number', 'minimum': lo, 'maximum': hi} for k, (lo, hi) in RANGES.items()},
+                     **{k: CURVE_SCHEMA for k in CURVE_FIELDS}}
 LABELS = {
     "exposure": "曝光",
     "contrast": "对比度",
@@ -56,9 +60,10 @@ LABELS = {
     "green_channel": "绿通道",
     "blue_channel": "蓝通道",
     **HSL_LABELS,
+    **CURVE_LABELS,
 }
 DETAIL_FIELDS = frozenset(("sharpness", "softness", "skin_smoothing"))
-CHANNEL_FIELDS = frozenset(("exposure", "warmth", "tint", "red_channel", "green_channel", "blue_channel"))
+CHANNEL_FIELDS = frozenset(("exposure", "warmth", "tint", "red_channel", "green_channel", "blue_channel", *CURVE_FIELDS))
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 RAW_EXTENSIONS = {
     ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng",
@@ -129,13 +134,24 @@ class Recipe:
     hsl_magenta_hue: float = 0.0
     hsl_magenta_saturation: float = 0.0
     hsl_magenta_lightness: float = 0.0
+    curve_rgb: tuple = ()
+    curve_red: tuple = ()
+    curve_green: tuple = ()
+    curve_blue: tuple = ()
+
+    def __post_init__(self):
+        for key in CURVE_FIELDS:
+            object.__setattr__(self, key, validate_curve(getattr(self, key)))
 
     @classmethod
     def from_dict(cls, data: dict) -> "Recipe":
-        if not isinstance(data, dict) or set(data) - set(RANGES):
+        if not isinstance(data, dict) or set(data) - set(RECIPE_FIELDS):
             raise ValueError("参数包含不支持的字段")
         clean = {}
         for key, value in data.items():
+            if key in CURVE_FIELDS:
+                clean[key] = validate_curve(value)
+                continue
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
@@ -149,7 +165,10 @@ class Recipe:
         return cls(**clean)
 
     def to_dict(self):
-        return asdict(self)
+        data = asdict(self)
+        for key in CURVE_FIELDS:
+            data[key] = [list(point) for point in data[key]]
+        return data
 
 
 @dataclass
@@ -274,8 +293,8 @@ def _transform_linear(rgb, recipe, *, accelerate_hsl=False):
         rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1 / 2.4) - 0.055
     )
     if any(getattr(recipe, key) for key in HSL_FIELDS):
-        return (mix_colors_fast if accelerate_hsl else mix_colors)(encoded, recipe)
-    return encoded
+        encoded = (mix_colors_fast if accelerate_hsl else mix_colors)(encoded, recipe)
+    return apply_curves(encoded, recipe)
 
 
 @lru_cache(maxsize=12)
@@ -323,13 +342,13 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
         color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
         separable = not any(value for key, value in values.items()
                             if key not in CHANNEL_FIELDS and key not in HSL_FIELDS and key not in DETAIL_FIELDS)
-        channel_table = (_channel_float_lut(replace(color_recipe, **dict.fromkeys(HSL_FIELDS, 0)))
+        channel_table = (_channel_float_lut(replace(color_recipe, **dict.fromkeys(HSL_FIELDS, 0), **dict.fromkeys(CURVE_FIELDS, ())))
                          if separable else None)
         pixels = np.asarray(rgb)
         corrected = np.empty_like(pixels)
         for top in range(0, image.height, strip_height):
             strip = pixels[top:top + strip_height]
-            exact = (mix_colors_fast(channel_table[strip, np.arange(3)], color_recipe)
+            exact = (apply_curves(mix_colors_fast(channel_table[strip, np.arange(3)], color_recipe), color_recipe)
                      if channel_table is not None else
                      _transform_linear(LINEAR_LUT[strip].copy(), color_recipe, accelerate_hsl=True))
             corrected[top:top + strip_height] = np.rint(exact * 255).clip(0, 255).astype(np.uint8)
@@ -338,6 +357,16 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
                                 if key not in CHANNEL_FIELDS and key not in DETAIL_FIELDS):
         color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
         result = rgb.point(_channel_lut(color_recipe))
+    elif color_active and any(values[key] for key in CURVE_FIELDS):
+        # Arbitrary curves may have adjacent knots. A coarse 3D LUT cannot
+        # preserve their shape; evaluate bounded exact strips for mixed tones.
+        color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
+        pixels = np.asarray(rgb)
+        corrected = np.empty_like(pixels)
+        for top in range(0, image.height, strip_height):
+            exact = _transform_linear(LINEAR_LUT[pixels[top:top+strip_height]].copy(), color_recipe)
+            corrected[top:top+strip_height] = np.rint(exact*255).clip(0,255).astype(np.uint8)
+        result = Image.fromarray(corrected)
     elif color_active:
         color_recipe = replace(recipe, sharpness=0, softness=0, skin_smoothing=0)
         filtered = rgb.filter(_color_lut(color_recipe))

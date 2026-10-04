@@ -30,7 +30,7 @@ def test_selective_colour_input_is_revealed_saved_and_undone_without_resetting_f
     e.saveProject(str(tmp_path/'colors.iphoto'))
     from iphoto.document import read_project
     saved=read_project(tmp_path/'colors.iphoto')
-    assert saved['schema_version']=='1.9' and saved['layers']==e._layers
+    assert saved['schema_version']=='1.10' and saved['layers']==e._layers
     e.undo();wait_for(lambda:settled(e));assert e._layers==before
     assert not ui.w.property('textFocus')
 

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject, Property, QProcess, QTimer, Signal, Slot
 
-from .engine import LABELS, RANGES, Recipe
+from .engine import LABELS, RANGES, Recipe, CURVE_FIELDS
 from .ai import AIController
 from .document import (
     new_layer,
@@ -899,7 +899,8 @@ class Editor(QObject):
                 "index": i,
                 "selected": i == self._region_index,
                 "changes": " / ".join(
-                    f"{LABELS[k]} {v:+g}" for k, v in l["recipe"].items() if v
+                    (f"{LABELS[k]} · {len(v)}点" if k in CURVE_FIELDS else f"{LABELS[k]} {v:+g}")
+                    for k, v in l["recipe"].items() if v
                 ),
                 "quality": self._quality_text(l["mask"]),
             }

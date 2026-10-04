@@ -14,7 +14,7 @@ import math
 import re
 from uuid import uuid4
 
-from ..engine import LABELS, RANGES, Recipe
+from ..engine import LABELS, RANGES, Recipe, RECIPE_FIELDS, CURVE_FIELDS
 from ..document import MIN_STROKE_RADIUS
 from . import adjustment_review, heal, matting, objects, pixel_selections, selections
 
@@ -127,7 +127,7 @@ class SelectionController(QObject):
             return
         current = editor.parameters
         previous = previous or {}
-        changed = [key for key in RANGES if current[key] != previous.get(key, 0)]
+        changed = [key for key in RECIPE_FIELDS if current[key] != previous.get(key, [] if key in CURVE_FIELDS else 0)]
         if not changed:
             return
         # Detail and colour controls live in closed sections. Prefer a changed
@@ -137,6 +137,45 @@ class SelectionController(QObject):
         key = next((key for key in priority if key in changed), changed[0])
         self.pickLayer(editor.activeLayerId)
         self.parameterFocusRequested.emit(editor.activeLayerId, key)
+
+    @Slot('QVariantList', result='QVariantList')
+    def curveSamples(self, points):
+        import numpy as np
+        from ..tone_curves import validate, evaluate
+
+        try:
+            return (evaluate(np.arange(256, dtype=np.float32)/255, validate(points))*255).tolist()
+        except ValueError:
+            return []
+
+    @Slot(str, str, int, str, 'QVariantList', result=bool)
+    def applyCurve(self, layer_id, photo, generation, key, points):
+        editor = self._editor
+        if (not editor._can_edit() or editor.activeIsGroup or key not in CURVE_FIELDS
+                or layer_id != editor.activeLayerId or photo != editor.originalUrl
+                or type(generation) is not int or generation != editor.documentGeneration):
+            return False
+        try:
+            recipe = Recipe.from_dict({**editor.parameters, key: points}).to_dict()
+        except ValueError:
+            return False
+        if recipe != editor.parameters:
+            editor._recipe = recipe
+            editor._locked.add(key)
+            editor._status = LABELS[key] + ' 已手动调整，后续描述保留此曲线'
+            editor._change(parameter=True)
+        return True
+
+    @Slot(str, str, int, str, 'QVariantList', bool, result=bool)
+    def cancelCurve(self, layer_id, photo, generation, key, points, was_locked):
+        editor = self._editor
+        if not self.applyCurve(layer_id, photo, generation, key, points):
+            return False
+        if not was_locked:
+            editor._locked.discard(key)
+            editor._sync_layer()
+        editor.finishGesture()
+        return True
 
     @Slot(str, str, int, str, str, result="QVariantMap")
     def applyParameterText(self, layer_id, photo, generation, key, text):
