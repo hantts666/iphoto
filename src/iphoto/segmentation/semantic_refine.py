@@ -130,7 +130,7 @@ def refine(image, hint, points, *, engine=None, progress=None):
     quality.update(timing, model=timing.get("model", "EfficientSAM-S")+" · 语义范围保护", resolution="source",
                    semantic_target=hint["semantic_target"], crop_box=list(box), crop_size=list(patch.size),
                    mask_size=list(image.size), elapsed_ms=round((perf_counter()-started)*1000, 1))
-    quality["warnings"].append("已保留原分区的五官保护；扩大范围可用“补选”")
+    quality["warnings"].append("原先未选区域保持；扩大范围可用“补选”")
     if fallback_warning:
         quality["warnings"].append(fallback_warning)
     return validate_mask(result), quality

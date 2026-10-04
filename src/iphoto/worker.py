@@ -32,6 +32,20 @@ from .plugins import run_selection
 PREVIEW_PNG_COMPRESSION = 3
 
 
+def _prune_assets(assets, keep):
+    """Retain active image batches as well as asynchronously displayed frames."""
+    limit = max(8, len(keep))
+    while len(assets) > limit:
+        old = assets.pop(0)
+        if old in keep:
+            assets.append(old)
+        else:
+            try:
+                old.unlink(missing_ok=True)
+            except PermissionError:
+                pass  # The session directory is also cleaned on exit.
+
+
 def main():
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
@@ -42,6 +56,7 @@ def main():
     previous_key = previous_result = None
     current_original = None
     current_overlay = previous_mask_key = None
+    current_crop_assets = set()
     composition_cache = LayerPreviewCache()
     handlers = {}
 
@@ -69,6 +84,7 @@ def main():
     def _open(request):
         nonlocal source, proxy, previous_key, previous_result
         nonlocal current_overlay, previous_mask_key, current_original
+        nonlocal current_crop_assets
         next_source = load_source(request["path"])
         if (
             request.get("expected_sha256")
@@ -104,6 +120,7 @@ def main():
                 result["face_detection_warning"] = "本地人脸检测未完成，可使用文字定位或框选人脸"
         # Commit only after decoding, project verification and preview writing succeed.
         source, proxy = next_source, next_proxy
+        current_crop_assets = set()
         composition_cache.clear()
         RASTER_CACHE.clear()
         clear_decode_cache()
@@ -204,22 +221,51 @@ def main():
 
     @register("mask_refinement_crop")
     def _mask_refinement_crop(request):
+        nonlocal current_crop_assets
         from .ai_mask_refinement import prepare_crop
 
         if request["source_sha"] != source.digest:
             raise ValueError("照片已变化，过期范围修正图未准备")
-        if request.get('review'):
+        if request.get('verify'):
+            picture, mask, overlay, box = prepare_crop(source.image, request['mask'], reference=request['reference_mask'])
+            regions = []
+        elif request.get('review'):
             from .ai_mask_review import prepare_review
-            picture, mask, overlay, box, regions = prepare_review(source.image, request['mask'])
+            picture, mask, overlay, box, regions = prepare_review(source.image, request['mask'], reference=request.get('reference_mask'))
         else:
             picture, mask, overlay, box = prepare_crop(source.image, request["mask"])
             regions = []
         paths = [cache / f"mask-refinement-{request['id']}-{kind}.png" for kind in ("photo", "mask", "overlay")]
+        native_size = picture.size
+        def display(item):
+            if not request.get('verify') or item.mode == 'L':
+                return item
+            from PIL import Image
+            scale = min(3, 1024/max(native_size))
+            return item.resize(tuple(max(1, round(value*scale)) for value in native_size), Image.Resampling.LANCZOS)
         for item, path in zip((picture, mask, overlay), paths):
-            item.save(path, **({"icc_profile": SRGB_PROFILE} if item.mode == 'RGB' else {}))
+            display(item).save(path, **({"icc_profile": SRGB_PROFILE} if item.mode == 'RGB' else {}))
             assets.append(path)
+        extra = {}
+        crop_assets = set(paths)
+        if (request.get('review') or request.get('verify')) and request.get('reference_mask') is not None:
+            from .ai_mask_review import comparison_images
+
+            for kind, item in zip(('reference', 'changes'), comparison_images(source.image, request['mask'], request['reference_mask'], box)):
+                path = cache / f"mask-refinement-{request['id']}-{kind}.png"
+                display(item).save(path, icc_profile=SRGB_PROFILE); assets.append(path)
+                crop_assets.add(path)
+                extra[kind+'_path'] = str(path)
+        if request.get('context_crop') is not None:
+            from .ai_mask_review import context_image
+
+            path = cache / f"mask-refinement-{request['id']}-context.png"
+            context_image(source.image, request['context_crop'], box).save(path, icc_profile=SRGB_PROFILE)
+            assets.append(path); extra['context_path'] = str(path)
+            crop_assets.add(path)
+        current_crop_assets = crop_assets
         return {"path": str(paths[0]), "mask_path": str(paths[1]), "overlay_path": str(paths[2]),
-                "crop_box": box, "crop_size": list(picture.size), "source_size": list(source.image.size), 'regions': regions}
+                "crop_box": box, "crop_size": list(native_size), "source_size": list(source.image.size), 'regions': regions, **extra}
 
     @register('mask_refinement_apply')
     def _mask_refinement_apply(request):
@@ -227,7 +273,7 @@ def main():
 
         if request['source_sha'] != source.digest:
             raise ValueError('照片已变化，过期复查排除未应用')
-        mask = remove_regions(source.image, request['mask'], request['exclude_regions'], request['regions'])
+        mask = remove_regions(source.image, request['mask'], request['exclude_regions'], request['regions'], reference=request.get('reference_mask'))
         return {'mask': mask}
 
     @register("selection")
@@ -309,17 +355,10 @@ def main():
             started = time.perf_counter()
             result = handler(request)
             # Retain a few generations for async QML image loading; never touch user files.
-            while len(assets) > 8:
-                old = assets.pop(0)
-                if old in (current_original, current_overlay) or (
-                    previous_result and str(old) == previous_result["preview"]
-                ):
-                    assets.append(old)
-                else:
-                    try:
-                        old.unlink(missing_ok=True)
-                    except PermissionError:
-                        pass  # QML may still be loading it; clean the session directory on exit.
+            keep = {current_original, current_overlay} - {None}
+            if previous_result:
+                keep.add(Path(previous_result['preview']))
+            _prune_assets(assets, keep | current_crop_assets)
             result["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
             response = {
                 "id": request["id"],

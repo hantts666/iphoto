@@ -85,7 +85,8 @@ def test_payload_orders_original_mask_overlay_and_removes_private_context():
     contents = payload['messages'][1]['content']
     assert [item['image_url']['url'] for item in contents if item['type'] == 'image_url'] == ['original', 'mask', 'overlay']
     context = json.loads(contents[0]['text'])
-    assert set(context) == {'request', 'mode', 'face_part', 'crop_size', 'coordinate_system'}
+    assert set(context) == {'request', 'mode', 'face_part', 'crop_size', 'coordinate_system', 'has_face_context'}
+    assert context['has_face_context'] is False
     assert context['coordinate_system'] == 'local_0_to_999'
     assert 'exclusions' in payload['response_format']['json_schema']['schema']['required']
     ordinary = build_payload(AISettings(), '调色', Recipe().to_dict(), [], 'original', 'auto', {'selection_image': 'mask'})
@@ -156,7 +157,7 @@ def setup(ui, mode):
     return mask, lid
 
 
-def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, review=None, points_reply=None):
+def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, review=None, points_reply=None, verification=None):
     e = ui.e; mask, lid = setup(ui, mode)
     pending_jobs = []
     request = e._request
@@ -170,6 +171,8 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, revie
         context = json.loads(payload['messages'][1]['content'][0]['text'])
         if context['mode'] == 'mask_points':
             return response(points_reply) if points_reply is not None else point_plan([[0, 0] if bad_points else [500, 400]])
+        if context['mode'] == 'mask_validate':
+            return response(verification or {'status': 'accept', 'summary': '本次减少保留真实目标'})
         if context['mode'] == 'mask_review': return response(review(context) if callable(review) else review or {'status':'keep', 'summary':'未发现可明确排除的残留', 'exclude_regions':[]})
         target = next((l for l in context['existing_layers'] if l['id'] == lid), None)
         recipe = {**(target['recipe'] if target else Recipe().to_dict()), 'hsl_red_lightness': 6, 'warmth': 40} if color else None

@@ -15,7 +15,7 @@ from .ai_layer_edits import LAYER_EDITS_SCHEMA, validate_layer_edits
 from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
-from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT
+from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
     SELECTION_SCHEMA,
@@ -123,6 +123,7 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
 
 AUTO_PROMPT += """
 action=refine_mask：用户要求排除已有鼻部/嘴唇蒙版的误选、修正其范围时使用；mask_refinement_available=true才可用。程序会放大当前原图和蒙版，再由你定位排除点，随后调用本地神经模型。不要让用户先手动画或重新建层。这里只能减少当前覆盖，不能扩大范围、恢复隐藏或未选入的像素、修整整脸皮肤或普通物体。
+用户称某处“选多了／是皮肤”不代表原图事实，必须自行看图确认。上下唇之间的暗线不是上唇外缘，不能因为上唇较浅或在暗线上方就删除上唇。准备后会对比修改前范围和本次减少，由AI复查是否误删真实目标；拒绝或不能确认时原范围和参数保持。
 有当前草稿时scope=current_selection、mask_refinement={layer_id:null,recipe:null或最终全部参数}，selection_mask_refinable必须为true；只修范围用recipe=null，保留草稿和颜色。有绑定图层则保存原层；无绑定且同时调色时才新建层。不能丢掉草稿去改另一层。
 没有草稿时scope=existing_layers，从existing_layers中mask_refinable=true的明确目标选择layer_id，mask_refinement={layer_id:其精确id,recipe:null或该目标层全部最终参数}。层名改变仍使用mask_part与id；可以修正未选中的已有层，不能用当前层配方覆盖目标层。未要求调色时recipe=null；要求同时调色时以该目标层已有配方为基础，仅修改用户要求的参数，保留锁定。嘴唇不能加磨皮。
 两种情况的顶层recipe保持current_recipe，regions=[]、layer_edits=[]、group=null、repairs=[]。summary只说明将检查和修正，不提前声称已修好。已有目标不匹配或不能可靠识别误选时用answer/unsupported说明未修改。每次回复都带mask_refinement字段；其他动作该字段必须为null。
@@ -212,11 +213,13 @@ def build_payload(
     if mode == "targets":
         context = {"request": text, "objects": (workspace or {}).get("objects", [])}
         selection_image = None
-    if mode in ("mask_points", "mask_review"):
+    if mode in ("mask_points", "mask_review", "mask_validate"):
         context = {"request": text, "mode": mode, "face_part": (workspace or {}).get("face_part"),
                    "crop_size": (workspace or {}).get("crop_size"), "coordinate_system": "local_0_to_999"}
         if mode == 'mask_review':
             context['regions'] = (workspace or {}).get('regions', [])
+            context['has_comparison'] = bool((workspace or {}).get('reference_image') and (workspace or {}).get('changes_image'))
+        context['has_face_context'] = bool((workspace or {}).get('face_context_image'))
     payload = {
         "model": settings.model,
         "messages": [
@@ -229,6 +232,7 @@ def build_payload(
                     "repair": REPAIR_SPOTS_PROMPT,
                     "mask_points": POINTS_PROMPT,
                     "mask_review": REVIEW_PROMPT,
+                    "mask_validate": VERIFICATION_PROMPT,
                     "scene": SCENE_PROMPT,
                     "targets": TARGETS_PROMPT,
                 }.get(mode, SYSTEM_PROMPT),
@@ -264,6 +268,16 @@ def build_payload(
     if mode in ("mask_points", "mask_review") and selection_overlay:
         payload["messages"][1]["content"].append(
             {"type": "image_url", "image_url": {"url": selection_overlay}})
+    if mode in ('mask_points', 'mask_review'):
+        keys = ('reference_image', 'changes_image', 'face_context_image') if mode == 'mask_review' else ('face_context_image',)
+        for key in keys:
+            if (workspace or {}).get(key):
+                payload['messages'][1]['content'].append({'type': 'image_url', 'image_url': {'url': workspace[key]}})
+    if mode == 'mask_validate':
+        payload['messages'][1]['content'] = payload['messages'][1]['content'][:2]
+        for key in ('reference_image', 'selection_overlay', 'changes_image', 'face_context_image'):
+            if (workspace or {}).get(key):
+                payload['messages'][1]['content'].append({'type': 'image_url', 'image_url': {'url': workspace[key]}})
     if settings.provider == "openai":
         payload.update(
             response_format={
@@ -278,6 +292,7 @@ def build_payload(
                         "repair": REPAIR_SPOTS_SCHEMA,
                         "mask_points": POINTS_SCHEMA,
                         "mask_review": REVIEW_SCHEMA,
+                        "mask_validate": VERIFICATION_SCHEMA,
                         "scene": SCENE_SCHEMA,
                         "targets": TARGETS_SCHEMA,
                     }.get(mode, RECIPE_SCHEMA),
