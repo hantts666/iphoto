@@ -70,6 +70,16 @@ def complete(self, result, *, points=None):
         if points is not None:
             self._pixel_points = deepcopy(points)
             self._pixel_hint = deepcopy(self._candidate)
+    if quality.get('channel_mask'):
+        names = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度'}
+        method = 'AI 透明边缘' if quality['tiles'] else '通道透明度'
+        self._selection_quality = f"{names[quality['channel']]}通道 · {method} · {quality['elapsed_ms']/1000:.1f}s"
+        if quality.get('warnings'):
+            self._selection_quality += ' · ' + '；'.join(quality['warnings'])
+        self._message('assistant', self._selection_quality + '\n通道灰度保留连续透明度，主体外较远范围保持；请放大检查发丝、孔洞和透明内部。',
+                      state='draft', origin={'mode':'selection','model':quality['backend']})
+        self._notify('通道抠图已完成，可看黑白透明度；不合适可以撤销')
+        return
     neural = quality.get("backend") == "ViTMatte-S · ONNX"
     self._selection_quality = (f"局部 AI 透明度 · 已修改 {quality['changed_pixels']:,} 个像素 · {quality['elapsed_ms']/1000:.1f}s" if local else (
         ("AI 原图边缘 · " if neural else "")

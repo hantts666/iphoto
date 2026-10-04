@@ -15,6 +15,7 @@ def layer_key(layer):
         "opacity": layer["opacity"],
         "mask": {key: value for key, value in layer["mask"].items() if key != "label"},
         **({"inpaint": layer["inpaint"]} if layer.get("inpaint") else {}),
+        **({"pixel_patch": layer["pixel_patch"]} if layer.get("pixel_patch") else {}),
         **({"heal": layer["heal"]} if layer.get("heal") else {}),
     }
 
@@ -28,7 +29,7 @@ def node_key(node):
             key for child in node["children"] if (key := node_key(child)) is not None
         ]
         return {**layer_key(layer), "children": children} if children else None
-    if layer.get("inpaint") or layer.get("heal") or any(layer["recipe"].values()):
+    if layer.get("pixel_patch") or layer.get("inpaint") or layer.get("heal") or any(layer["recipe"].values()):
         return layer_key(layer)
     return None
 

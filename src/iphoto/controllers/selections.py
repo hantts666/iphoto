@@ -111,7 +111,7 @@ def finishSelectionGesture(self):
 
 
 def setMaskView(self, value):
-    if value not in ("overlay", "grayscale", "adjustment"):
+    if value not in ("overlay", "grayscale", "adjustment", "white", "black"):
         return
     self._mask_view = value
     self._mask_url = ""

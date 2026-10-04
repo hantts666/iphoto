@@ -323,6 +323,69 @@ def main():
         )
         return {"recipe": recipe.to_dict(), "summary": summary}
 
+    @register("channel_preview")
+    def _channel_preview(request):
+        nonlocal current_crop_assets
+        from .matting.channels import suggest, preview as channel_preview
+        if request.get('expected_sha256') != source.digest:
+            raise ValueError('照片已变化，通道预览未应用')
+        options = dict(request['options'])
+        radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))
+        if request.get('initial'):
+            options, _ = suggest(proxy, request['mask'], radius)
+            options['radius'] = request['options']['radius']
+        alpha, channel, score = channel_preview(proxy, request['mask'], options, radius)
+        path = cache / f"channel-preview-{request['id']}.png"
+        alpha.save(path, compress_level=3)
+        current_crop_assets = {path}
+        assets.append(path)
+        return {'path':str(path), 'channel':channel, 'score':score, 'options':options}
+
+    @register("generative_crop")
+    def _generative_crop(request):
+        nonlocal current_crop_assets
+        from .photo_strategy import soften_effect_mask
+        from .document import raster_mask
+        if request.get('expected_sha256') != source.digest:
+            raise ValueError('照片已变化，选区图像编辑未应用')
+        proposed = validate_layers(request['proposed'])
+        if len(proposed) != 1:
+            raise ValueError('选区图像编辑需要一个目标')
+        mask = proposed[0]['mask']
+        if request.get('soften'):
+            mask = soften_effect_mask(mask, source.image.size)
+            proposed[0]['mask'] = mask
+        bounds = raster_mask(mask, source.image.size).getbbox()
+        if not bounds:
+            raise ValueError('选区为空，图像编辑未执行')
+        x0,y0,x1,y1 = bounds
+        margin = max(32, round(max(x1-x0,y1-y0)*.2))
+        box = [max(0,x0-margin),max(0,y0-margin),min(source.image.width,x1+margin),min(source.image.height,y1+margin)]
+        current = render_layers(source.image, validate_layers(request['before']))
+        crop = current.crop(tuple(box))
+        scale = min(1536/max(crop.size), max(1., (512*512/(crop.width*crop.height))**.5))
+        output_size = [max(1,round(side*scale/8)*8) for side in crop.size]
+        if min(output_size) < 192 or max(output_size)/min(output_size)>8:
+            raise ValueError('选区过窄，无法稳定生成精修；请扩大上下文范围')
+        path = cache / f"generated-input-{request['id']}.png"
+        preview(crop,1280).save(path,compress_level=3)
+        current_crop_assets = {path}
+        assets.append(path)
+        return {'path':str(path),'box':box,'canvas_size':list(source.image.size),
+                'output_size':output_size,'proposed':proposed}
+
+    @register("photo_candidate")
+    def _photo_candidate(request):
+        nonlocal current_crop_assets
+        from .photo_strategy import render_candidate
+        if request.get('expected_sha256') != source.digest:
+            raise ValueError('照片已变化，成片未应用')
+        result = render_candidate(source.image, request['before'], request['proposed'],
+                                  request.get('faces', []), cache, request['id'], request.get('soften', False))
+        current_crop_assets = {Path(item['path']) for item in result['images']}
+        assets.extend(current_crop_assets)
+        return result
+
     @register("export")
     def _export(request):
         validate_export_target(source, request["path"])

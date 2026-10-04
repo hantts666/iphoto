@@ -578,7 +578,7 @@ class SelectionController(QObject):
 
     @Slot(str)
     def setMaskView(self, value):
-        if value not in ("overlay", "grayscale", "adjustment"):
+        if value not in ("overlay", "grayscale", "adjustment", "white", "black"):
             return
         self._editor.setMaskView(value)
         self._show_mask = value != "adjustment"
@@ -605,7 +605,8 @@ class SelectionController(QObject):
         ):
             return "pixel"
         if (self._editor.ai.busy or self._editor.aiRepairPreparing or self._editor.aiObjectPreparing
-                or getattr(self._editor, 'aiMaskPreparing', False)):
+                or getattr(self._editor, 'aiMaskPreparing', False) or getattr(self._editor, 'aiPhotoPreparing', False)
+                or getattr(self._editor, 'aiChannelPreparing', False)):
             return "ai"
         if self._editor.photoPreparing:
             return "warm"
@@ -613,6 +614,8 @@ class SelectionController(QObject):
 
     @Property(str, notify=changed)
     def taskText(self):
+        if self._editor._image_edit.busy:
+            return self._editor._image_edit.progress
         if self._editor.ai.busy:
             return self._editor.ai.requestProgress
         if self.taskKind == "warm":
@@ -637,6 +640,12 @@ class SelectionController(QObject):
     def cancelTask(self):
         kind = self.taskKind
         editor = self._editor
+        if (getattr(editor, '_pending_request', None) or {}).get('channel_auto'):
+            from .channel_auto import cancel as cancel_channel
+            return cancel_channel(editor)
+        if (getattr(editor, '_pending_request', None) or {}).get('photo_strategy'):
+            from .photo_strategy import cancel
+            return cancel(editor)
         if (getattr(editor, '_pending_request', None) or {}).get('mask_refinement'):
             from .mask_refinement import cancel
 

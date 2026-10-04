@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .ai_settings import AISettings, PROVIDERS, SettingsStore
 from .engine import Recipe
+from .photo_strategy import parse_review as parse_photo_review
 from .ai_protocol import build_payload, image_data_url, parse_auto, parse_plan
 from .ai_mask_refinement import PointLocationError, parse_points
 from .ai_mask_review import parse_review, parse_verification
@@ -97,7 +98,7 @@ class AIController(QObject):
             phase = "正在精定位：" + self._context["workspace"]["_grounding_label"]
         else:
             task = {"scene": "分析画面", "selection": "定位范围", "targets": "选择对象",
-                    "regions": "规划分区", "advice": "修图建议", "auto": "智能修图",
+                    "photo_review": "3/4 成片效果检查", "regions": "规划分区", "advice": "修图建议", "auto": "智能修图",
                     "mask_points": "定位五官误选", "mask_review": "复查修正范围",
                     "mask_validate": "核对是否误删真实五官",
                     'mask_restore_validate': '核对新增五官覆盖',
@@ -420,6 +421,8 @@ class AIController(QObject):
                         context["workspace"].get("current_display_enabled", True),
                         context["workspace"],
                     )
+                elif context["mode"] == "photo_review":
+                    result = parse_photo_review(response, context["workspace"])
                 elif context["mode"] == "selection":
                     result = parse_selection(response)
                 elif context["mode"] == "repair":
@@ -483,7 +486,7 @@ class AIController(QObject):
     def _retry_invalid_result(self, context, reason):
         if (
             context["testing"]
-            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate", "mask_restore_validate", "mask_reselect_validate"}
+            or context["mode"] not in {"photo_review", "auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate", "mask_restore_validate", "mask_reselect_validate"}
             or context["validation_retry"]
             or context["abort"]
         ):

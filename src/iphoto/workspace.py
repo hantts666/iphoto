@@ -264,8 +264,9 @@ class Editor(QObject):
             + ([self._matte_pending] if self._matte_pending else [])
             + ([self._export_request] if self._export_request else [])
         )
-        return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or self.aiMaskPreparing or any(
-            request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply"}
+        return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or self.aiMaskPreparing or self.aiPhotoPreparing or self.aiChannelPreparing or any(
+            (request["op"] in ("photo_candidate", "generative_crop") and not request.get("cancelled"))
+            or request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply"}
             or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations
         )
@@ -430,7 +431,7 @@ class Editor(QObject):
 
     @Property(bool, notify=changed)
     def busy(self):
-        return self._ai.busy or self.imageWorkBusy
+        return self._ai.busy or self._image_edit.busy or self.imageWorkBusy
 
     def _stop_warm(self):
         return worker_bridge._stop_warm(self)
@@ -528,6 +529,14 @@ class Editor(QObject):
         self._candidate = None
         self._selection_target_id = ""
         self._pending_request = None
+        from .image_edit import ImageEditController
+        from .controllers.photo_strategy import generated
+        from .controllers.channel_mask import ChannelMaskController
+        self._channel_mask = ChannelMaskController(self)
+        self._image_edit = ImageEditController(self._ai, self)
+        self._image_edit.changed.connect(self.changed.emit)
+        self._image_edit.failure.connect(lambda message: self._notify(message, True))
+        self._image_edit.completed.connect(lambda pixels, token, generation: generated(self, pixels, token, generation))
         self._draft_history, self._draft_cursor = [], 0
         self._selection_quality = ""
         self._mask_view = "overlay"
@@ -1027,6 +1036,18 @@ class Editor(QObject):
     def aiMaskPreparing(self):
         return bool((self._pending_request or {}).get("mask_refinement", {}).get("preparing"))
 
+    @Property(QObject, constant=True)
+    def channelMask(self):
+        return self._channel_mask
+
+    @Property(bool, notify=changed)
+    def aiPhotoPreparing(self):
+        return bool((self._pending_request or {}).get('photo_strategy'))
+
+    @Property(bool, notify=changed)
+    def aiChannelPreparing(self):
+        return bool((self._pending_request or {}).get('channel_auto'))
+
     @Slot()
     def cancelObjectPreparation(self):
         from .controllers.object_grounding import cancel_preparation
@@ -1080,6 +1101,13 @@ class Editor(QObject):
         if (error and message == '已取消 AI 请求，参数未改变'
                 and (getattr(self,'_pending_request',None) or {}).get('mask_refinement',{}).get('cancel_requested')):
             from .controllers.mask_refinement import cancelled
+            return cancelled(self)
+        if (error and message == '已取消 AI 请求，参数未改变'
+                and (self._pending_request or {}).get('photo_strategy', {}).get('cancel_requested')):
+            from .controllers.photo_strategy import cancelled
+            return cancelled(self)
+        if error and message == '已取消选区图像编辑，照片未改变' and (self._pending_request or {}).get('photo_strategy'):
+            from .controllers.photo_strategy import cancelled
             return cancelled(self)
         if error and getattr(self, "_pending_request", None):
             self._scene_followup = ""
@@ -1344,6 +1372,10 @@ class Editor(QObject):
     @Slot(str)
     def exportImage(self, url):
         return session.exportImage(self, url)
+
+    @Slot(str,str,result=bool)
+    def exportRange(self,url,output):
+        return session.exportRange(self,url,output)
 
     def close(self):
         return session.close(self)

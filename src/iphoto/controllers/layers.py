@@ -196,7 +196,7 @@ def _consume_selection(self, state):
     self._draft_history, self._draft_cursor = [], 0
 
 
-def addLocalLayers(self, proposed, *, consume_selection=False, selection_state="discarded"):
+def addLocalLayers(self, proposed, *, consume_selection=False, selection_state="discarded", allow_pixel_patch=False):
     """Apply complete automatic results once, without a temporary UI draft."""
     if (not self.hasImage or self.busy or self.hasRegionDraft
             or self.hasSelectionDraft and not consume_selection):
@@ -210,7 +210,8 @@ def addLocalLayers(self, proposed, *, consume_selection=False, selection_state="
     for layer in prepared:
         if (layer["kind"] != "adjustment" or layer["parent_id"]
                 or layer["id"] in existing or not layer["visible"]
-                or layer["opacity"] <= 0 or "heal" in layer or "inpaint" in layer):
+                or layer["opacity"] <= 0 or "heal" in layer or "inpaint" in layer
+                or "pixel_patch" in layer and not allow_pixel_patch):
             raise ValueError("局部调整必须是独立可见的调整层")
         if not raster_mask_cached(layer["mask"], (512, 512)).getbbox():
             raise ValueError("局部范围为空，已有图层与范围保留")

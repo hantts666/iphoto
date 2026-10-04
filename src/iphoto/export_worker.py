@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from .document import render_layers, validate_layers
+from .document import render_layers, validate_layers, validate_mask, raster_mask
 from .engine import Recipe, export_image, load_source
 
 
@@ -30,15 +30,35 @@ def main():
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，导出已停止")
         progress(2)
-        rendered = render_layers(source.image, layers)
+        output = request.get('output','photo')
+        if output not in ('photo','cutout','mask'):
+            raise ValueError('未知选区导出格式')
+        if output != 'photo' and Path(request['stage_path']).suffix.lower() != '.png':
+            raise ValueError('透明选区和黑白蒙版请导出为 PNG')
+        alpha = raster_mask(validate_mask(request['mask']),source.image.size) if output != 'photo' else None
+        if output == 'mask':
+            rendered = alpha
+        else:
+            rendered = render_layers(source.image, layers)
+            if output == 'cutout':
+                from PIL import ImageChops
+                rgba = rendered.convert('RGBA')
+                rgba.putalpha(ImageChops.multiply(rgba.getchannel('A'),alpha))
+                rendered = rgba
         progress(3)
-        staged = export_image(
-            source,
-            Recipe(),
-            request["stage_path"],
-            rendered,
-            jpeg_quality=request["jpeg_quality"],
-        )
+        if output == 'mask':
+            from .storage import atomic_output
+            with atomic_output(request['stage_path']) as file:
+                rendered.save(file,format='PNG')
+            staged = request['stage_path']
+        else:
+            staged = export_image(
+                source,
+                Recipe(),
+                request["stage_path"],
+                rendered,
+                jpeg_quality=request["jpeg_quality"],
+            )
         response = {
             "id": request["id"], "ok": True,
             "result": {"stage_path": str(staged), "width": source.image.width,

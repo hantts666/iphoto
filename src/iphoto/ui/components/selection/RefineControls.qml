@@ -28,6 +28,12 @@ ColumnLayout {
     }
     ColumnLayout { visible: root.showAdvanced; Layout.fillWidth: true; spacing: 6
         Action {
+            objectName: root.prefix+"channelMaskButton"; text: "通道抠图"; Layout.fillWidth: true
+            visible: !root.regionMode; enabled: root.active && !root.editor.busy
+            hint: "比较红绿蓝通道，调黑白场和灰度，结合 AI 保留发丝与透明边缘"
+            onClicked: root.editor.channelMask.open()
+        }
+        Action {
             objectName: root.prefix+"refineMethodMenuButton"; text: "选方法"; subtle: true
             hint: "手动选择细化方法"
             enabled: root.active && !root.editor.busy

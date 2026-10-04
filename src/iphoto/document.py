@@ -15,6 +15,7 @@ from .engine import Recipe, RECIPE_FIELDS, ENGINE_VERSION, render, render_masked
 from .storage import atomic_output
 from .masks import validate_bitmap, decode_bitmap
 from .layer_tree import validate_hierarchy, forest
+from .pixel_patch import validate_patch, render_patch
 
 MAX_LAYERS = 32
 MAX_PROJECT_BYTES = 128 * 1024 * 1024
@@ -209,6 +210,9 @@ def validate_layers(layers):
                 "method": inpaint["method"],
                 "radius": float(inpaint["radius"]),
             }
+        patch = validate_patch(layer['pixel_patch']) if 'pixel_patch' in layer else None
+        if patch is not None and (layer.get('kind') == 'group' or layer.get('heal') or inpaint):
+            raise ValueError('生成像素不能与图层组或内容填充混用')
         heal = layer.get("heal")
         if heal is not None:
             if (
@@ -252,6 +256,7 @@ def validate_layers(layers):
                 "collapsed": layer.get("collapsed", False),
                 **({"inpaint": inpaint} if inpaint is not None else {}),
                 **({"heal": heal} if heal is not None else {}),
+                **({"pixel_patch": patch} if patch is not None else {}),
             }
         )
     return validate_hierarchy(result)
@@ -434,6 +439,9 @@ def render_nodes(image, nodes, *, canvas_size=None, canvas_box=None):
         group = layer.get("kind") == "group"
         inpaint = layer.get("inpaint")
         heal = layer.get("heal")
+        if layer.get("pixel_patch"):
+            result = render_patch(result, layer, full_size, canvas_box)
+            continue
         if not group and not inpaint and not heal and not any(layer["recipe"].values()):
             continue
         if heal:
@@ -501,7 +509,12 @@ def render_detail_tile(image, layers, box, halo=128):
 def overlay_mask(mask, size, mode="overlay"):
     if mode == "grayscale":
         return raster_mask(mask, size).convert("RGB")
-    alpha = raster_mask(mask, size).point([round(v * 0.38) for v in range(256)])
+    alpha = raster_mask(mask, size)
+    if mode in ('white','black'):
+        overlay = Image.new('RGBA',size,'white' if mode=='white' else 'black')
+        overlay.putalpha(alpha.point([255-v for v in range(256)]))
+        return overlay
+    alpha = alpha.point([round(v * 0.38) for v in range(256)])
     overlay = Image.new("RGBA", size, (52, 215, 166, 0))
     overlay.putalpha(alpha)
     return overlay
@@ -515,6 +528,10 @@ def overlay_mask_tile(mask, size, box, mode="overlay"):
     alpha = raster_mask_cached(mask, size).crop(box)
     if mode == "grayscale":
         return alpha.convert("RGB")
+    if mode in ('white','black'):
+        overlay = Image.new('RGBA',alpha.size,'white' if mode=='white' else 'black')
+        overlay.putalpha(alpha.point([255-v for v in range(256)]))
+        return overlay
     overlay = Image.new("RGBA", alpha.size, (52, 215, 166, 0))
     overlay.putalpha(alpha.point([round(v * 0.38) for v in range(256)]))
     return overlay
@@ -606,7 +623,7 @@ def _validate_project(payload):
             "active_layer": layer["id"],
             "conversation": [],
         }
-    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"):
+    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11"):
         raise ValueError("不支持此项目版本")
     if (
         not isinstance(payload.get("source"), str)
@@ -643,7 +660,7 @@ def _validate_project(payload):
     from .scene import validate_catalog
 
     return {
-        "schema_version": "1.10",
+        "schema_version": "1.11" if any(l.get("pixel_patch") for l in layers) else "1.10",
         "engine_version": ENGINE_VERSION,
         "source": payload["source"],
         "source_sha256": payload["source_sha256"].lower(),

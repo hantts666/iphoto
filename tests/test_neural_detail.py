@@ -50,9 +50,23 @@ def test_fixed_tiles_preserve_source_pixels_constraints_and_seams(size):
     assert np.array_equal(engine.inputs[0][0,:3,:min(576,height),:min(576,width)],
                           (np.array(image,dtype=np.float32)[:576,:576]/127.5-1).transpose(2,0,1))
     if width>640:
-        # Adjacent tiles contain the same original 128-pixel shared context.
-        assert np.array_equal(engine.inputs[0][0,:,:min(576,height),448:576],
-                              engine.inputs[1][0,:,:min(576,height),:128])
+        # Context and the 128px overlap are the original pixels, not scaled.
+        assert np.array_equal(engine.inputs[0][0,:,:min(576,height),320:576],
+                              engine.inputs[1][0,:,:min(576,height),:256])
+
+
+def test_neural_predictions_blend_at_block_boundaries_without_changing_anchors():
+    class DisagreeingEngine:
+        calls=0
+        def predict(self,pixels):
+            self.calls+=1
+            return np.full((640,640),.15 if self.calls%2 else .85,np.float32)
+    image=Image.new('RGB',(850,100),'gray')
+    guide=np.full((100,850),128,np.uint8);guide[0]=0;guide[-1]=255
+    result,tiles=neural.solve(image,guide,engine=DisagreeingEngine())
+    assert tiles==3 and np.all(result[0]==0) and np.all(result[-1]==255)
+    assert np.abs(np.diff(result[50].astype(int))).max()<=3
+    assert 38<=result[50].min()<result[50].max()<=217
 
 
 def test_definite_trimap_needs_no_model():

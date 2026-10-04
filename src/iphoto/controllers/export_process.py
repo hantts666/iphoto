@@ -67,12 +67,12 @@ def retry_cleanup(self):
         self._export_cleanup_timer.start()
 
 
-def queue(self, target, jpeg_quality):
+def queue(self, target, jpeg_quality, *, mask=None, output='photo', layers_snapshot=None):
     if self._export_request or self._export_aborting or self._export_process.state() != QProcess.NotRunning:
         self._notify("上一轮导出正在结束，请稍后重试", True)
         return False
     try:
-        snapshot = deepcopy(self._layers)
+        snapshot = deepcopy(self._layers if layers_snapshot is None else layers_snapshot)
     except MemoryError:
         self._notify("图层数据过大，无法准备导出", True)
         return False
@@ -92,6 +92,7 @@ def queue(self, target, jpeg_quality):
         "source_sha": self._sha,
         "layers": snapshot,
         "jpeg_quality": jpeg_quality,
+        **({'mask':deepcopy(mask),'output':output} if mask is not None else {}),
     }
     self._export_buffer = b""
     self._export_line_offset = 0

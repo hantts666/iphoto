@@ -152,7 +152,7 @@ def openImage(self, url):
 def _payload(self):
     self._sync_layer()
     return {
-        "schema_version": "1.10",
+        "schema_version": "1.11" if any(l.get("pixel_patch") for l in self._layers) else "1.10",
         "engine_version": ENGINE_VERSION,
         "source": self._path,
         "source_sha256": self._sha,
@@ -500,6 +500,8 @@ def prepareClose(self):
 
 def exportImage(self, url, jpeg_quality=100):
     if not self._can_edit():
+        if self.hasSelectionDraft:
+            self._notify('当前范围尚未保存，请选择透明选区/黑白蒙版导出，或先保存范围',True)
         return False
     try:
         target = validate_export_destination(self._path, path_from_url(url))
@@ -509,6 +511,32 @@ def exportImage(self, url, jpeg_quality=100):
     self._sync_layer()
     self._status = "正在按原分辨率合成所有图层并导出…"
     return export_process.queue(self, target, jpeg_quality)
+
+
+def exportRange(self, url, output):
+    if not self.hasImage or self.busy or self.hasRegionDraft or self.activeIsGroup:
+        return False
+    try:
+        if output not in ('cutout','mask'):
+            raise ValueError('未知选区导出格式')
+        target = validate_export_destination(self._path,path_from_url(url))
+        if target.suffix.lower() != '.png':
+            raise ValueError('透明选区和黑白蒙版请导出为 PNG')
+        mask = deepcopy(self._candidate or self._layer()['mask'])
+        from ..document import raster_mask_cached
+        alpha = raster_mask_cached(mask,(256,256))
+        if not alpha.getbbox() or alpha.getextrema() == (255,255):
+            raise ValueError('请先选择需要保留的目标，再导出选区')
+        self._sync_layer()
+        snapshot = deepcopy(self._layers)
+        if self._candidate is not None and self._selection_target_id:
+            if self._selection_target_id != self._selected:
+                raise ValueError('原图层已变化，范围未导出')
+            next(layer for layer in snapshot if layer['id']==self._selection_target_id)['mask']=mask
+        return export_process.queue(self,target,100,mask=mask,output=output,layers_snapshot=snapshot)
+    except (ValueError,OSError) as exc:
+        self._notify(str(exc),True)
+        return False
 
 
 def suggestExportPath(self, format_index=0):
@@ -554,6 +582,7 @@ def suggestProjectPath(self):
 
 def close(self):
     self._closing = True
+    self._image_edit.close()
     self._ai.close()
     from . import conversation
 

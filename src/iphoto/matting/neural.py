@@ -14,6 +14,7 @@ from ..segmentation.runtime import prepare_runtime
 from .models import verified_path
 
 TILE = 512
+STRIDE = 384
 HALO = 64
 INPUT = TILE + 2 * HALO
 MAX_TILES = 128
@@ -91,14 +92,21 @@ def solve(image, trimap, *, engine=None, progress=None):
     unknown = trimap == 128
     if np.count_nonzero(unknown) > MAX_UNKNOWN:
         raise ValueError("待判断的细节过多，请缩小范围或补充提示点")
-    cores = [(x, y) for y in range(0, image.height, TILE)
-             for x in range(0, image.width, TILE)
+    cores = [(x, y) for y in range(0, image.height, STRIDE)
+             for x in range(0, image.width, STRIDE)
              if unknown[y:y+TILE, x:x+TILE].any()]
     if len(cores) > MAX_TILES:
         raise ValueError("细节范围过大，请分区域修正")
     output = np.where(trimap == 255, 255, 0).astype(np.uint8)
     if not cores:
         return output, 0
+    # Accumulate only unknown pixels (at most 4M), rather than allocating
+    # multiple full-resolution float canvases for a 24MP photograph.
+    indices = np.flatnonzero(unknown)
+    total = np.zeros(indices.size,np.float32)
+    mass = np.zeros(indices.size,np.float32)
+    overlap = TILE-STRIDE
+    ramp = .5-.5*np.cos(np.pi*(np.arange(overlap,dtype=np.float32)+.5)/overlap)
     engine = engine or backend()
     started = perf_counter()
     for index, (x, y) in enumerate(cores,1):
@@ -114,9 +122,23 @@ def solve(image, trimap, *, engine=None, progress=None):
         pixels[0, 3, :height, :width] = trimap[top:bottom, left:right] / 255
         alpha = engine.predict(pixels)[y-top:y1-top, x-left:x1-left]
         active = unknown[y:y1, x:x1]
-        output[y:y1, x:x1][active] = np.rint(alpha[active]*255).astype(np.uint8)
+        wx,wy = np.ones(x1-x,np.float32),np.ones(y1-y,np.float32)
+        if x>0:
+            wx[:min(overlap,len(wx))] *= ramp[:min(overlap,len(wx))]
+        if x1<image.width:
+            wx[-overlap:] *= ramp[::-1]
+        if y>0:
+            wy[:min(overlap,len(wy))] *= ramp[:min(overlap,len(wy))]
+        if y1<image.height:
+            wy[-overlap:] *= ramp[::-1]
+        weights = wy[:,None]*wx[None,:]
+        rows,columns = np.nonzero(active)
+        positions = np.searchsorted(indices,(rows+y)*image.width+columns+x)
+        total[positions] += alpha[active]*weights[active]
+        mass[positions] += weights[active]
         if progress is not None:
             progress(index,len(cores))
+    output.ravel()[indices] = np.rint(total/np.maximum(mass,1e-8)*255).astype(np.uint8)
     return output, len(cores)
 
 

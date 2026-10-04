@@ -96,7 +96,9 @@ def test_chat_new_range_keeps_exact_hole_and_uses_independent_recipe(canvas):  #
         context = json.loads(content[0]["text"])
         assert context["current_scope"] == "selection" and context["selection_output"] == "new_layer"
         assert context["current_recipe"] == Recipe().to_dict() and context["locked"] == []
-        assert len(content) == 4
+        assert len(content) == 6
+        assert "当前合成效果" in content[4]["text"]
+        assert content[5]["type"] == "image_url"
         with Image.open(BytesIO(base64.b64decode(content[3]["image_url"]["url"].split(",", 1)[1]))) as sent_mask:
             assert sent_mask.tobytes() == raster_mask(mask, sent_mask.size).tobytes()
         assert editor._layers[:-1] == before and editor._layer()["mask"] == mask

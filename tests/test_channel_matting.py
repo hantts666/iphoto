@@ -1,0 +1,210 @@
+"""Continuous channel alpha, protected support and transactional conversation edits."""
+from copy import deepcopy
+import json
+
+import numpy as np
+from PIL import Image
+import pytest
+
+from iphoto.ai_protocol import parse_auto
+from iphoto.document import empty_mask, raster_mask
+from iphoto.engine import Recipe
+from iphoto.masks import encode_bitmap
+from iphoto.matting.channels import estimate, suggest, validate_options
+from iphoto.workspace import Editor
+from iphoto.controllers import channel_auto
+from test_ai import configure, mock_api, wait_for
+from test_editor import settled
+
+
+def scene():
+    truth = np.zeros((160,240), np.float32)
+    truth[30:130,55:185] = .6
+    truth[50:110,80:95] = 1
+    truth[48:114:4,95:173] = .85
+    truth[77:83,130:137] = 0
+    pixels = np.rint(35+truth*175).astype(np.uint8)
+    rgb = np.stack([pixels,pixels,pixels],axis=2)
+    alpha = (truth>0).astype(np.uint8)*255
+    mask = {**empty_mask(),'label':'透明织物','bitmap':encode_bitmap(Image.fromarray(alpha),sampling='alpha',preserve_resolution=True)}
+    options = {'channel':'red','black':35,'white':210,'gamma':1.,'invert':False,'radius':8,'ai':True,'interior':True}
+    return Image.fromarray(rgb),truth,mask,options
+
+
+def test_channel_and_neural_preserve_real_gray_holes_and_distant_support():
+    image,truth,mask,options = scene()
+    original = deepcopy(mask)
+    calls = []
+    def ai(crop, guide, progress=None):
+        calls.append((crop.size,guide.copy()))
+        # ROI is bbox+24px: (31,6,209,154). Truth supplies an independent
+        # oracle to isolate channel mixing from neural prediction accuracy.
+        expected=np.rint(truth[6:154,31:209]*255).astype(np.uint8)
+        expected[guide==0]=0;expected[guide==255]=255
+        return expected,1
+    result,quality = estimate(image,mask,options,neural=ai)
+    alpha=np.asarray(raster_mask(result,image.size))/255
+    assert np.abs(alpha-truth).max()<.004
+    assert (alpha[:20]==0).all() and (alpha[77:83,130:137]==0).all()
+    assert quality['partial_pixels']>9000 and quality['tiles']==1 and calls
+    assert mask==original and result['bitmap']['sampling']=='alpha'
+    assert result['bitmap']['width']==image.width
+    manual,_=estimate(image,mask,{**options,'ai':False})
+    assert np.abs(np.asarray(raster_mask(manual,image.size))/255-truth).max()<.004
+
+
+def test_normal_edge_mode_keeps_opaque_core_and_semantic_exclusions():
+    image,_,mask,options=scene()
+    protected={**mask,'semantic_target':'face_skin'}
+    result,_=estimate(image,protected,{**options,'interior':False,'ai':False})
+    old=np.asarray(raster_mask(mask,image.size));new=np.asarray(raster_mask(result,image.size))
+    assert np.all(new[old==0]==0) and new[60,110]==255
+    assert result['semantic_target']=='face_skin'
+
+
+@pytest.mark.parametrize('change',[{'black':210},{'gamma':float('nan')},{'radius':False},{'interior':'yes'},{'white':300}])
+def test_invalid_channel_controls_are_rejected(change):
+    with pytest.raises(ValueError):validate_options({**scene()[3],**change})
+
+
+def test_missing_anchors_and_full_selection_do_not_invoke_model():
+    image,_,mask,options=scene()
+    def forbidden(*args,**kwargs):pytest.fail('No reliable anchors')
+    with pytest.raises(ValueError,match='参照'):
+        estimate(image,mask,{**options,'white':255},neural=forbidden)
+    with pytest.raises(ValueError,match='背景'):
+        suggest(image,empty_mask(True),8)
+    proposed,_=suggest(image,mask,8)
+    assert validate_options(proposed)==proposed
+
+
+def plan(scope='current_layer'):
+    return {'action':'channel_mask','scope':scope,'summary':'结合通道与 AI 修透明边缘',
+            'recipe':Recipe().to_dict(),'regions':[],'layer_edits':[], 'group':None,
+            'repairs':[],'mask_refinement':None,'strategy':None,'edit_prompt':None}
+
+
+def completion(value):
+    return {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(value,ensure_ascii=False)}}]}
+
+
+def test_conversation_scope_and_capability_cannot_bypass_selection():
+    value=plan('current_selection')
+    assert parse_auto(completion(value),Recipe().to_dict(),[],current_scope='selection',
+                      workspace={'channel_mask_available':True})['action']=='channel_mask'
+    with pytest.raises(ValueError):
+        parse_auto(completion(plan()),Recipe().to_dict(),[],current_scope='selection',workspace={'channel_mask_available':True})
+    with pytest.raises(ValueError,match='能力不可用'):
+        parse_auto(completion(value),Recipe().to_dict(),[],current_scope='selection',workspace={'channel_mask_available':False})
+
+
+@pytest.mark.parametrize('outcome',['complete','cancel','stale','failure'])
+def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
+    image,_,mask,_=scene();path=tmp_path/'cloth.png';image.save(path)
+    editor=Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
+        editor._layer()['mask']=deepcopy(mask);editor._load_layer();editor._commit()
+        original=deepcopy(editor._layers);cursor=editor._cursor
+        with mock_api(completion(plan())) as (endpoint,requests):
+            configure(editor.ai,endpoint)
+            assert editor.sendMessage('用通道和AI修这层薄纱透明内部','auto')
+            wait_for(lambda:editor.aiChannelPreparing)
+            if outcome=='cancel':editor.selection.cancelTask()
+            elif outcome=='stale':editor._generation+=1
+            elif outcome=='failure':path.unlink()
+            wait_for(lambda:not editor.busy and settled(editor),seconds=45)
+        if outcome=='complete':
+            assert editor._layers!=original and len(editor._layers)==len(original)
+            assert editor._layer()['recipe']==original[-1]['recipe'] and editor._cursor==cursor+1
+            assert editor._candidate is None
+            result=deepcopy(editor._layers);editor.undo();assert editor._layers==original
+            editor.redo();assert editor._layers==result
+        else:
+            assert editor._layers==original and editor._candidate is None and editor._cursor==cursor
+        assert not editor.aiChannelPreparing and len(requests)==1
+    finally:editor.close()
+
+
+def test_stale_channel_callback_does_not_cancel_new_transaction(qt_app,ai_store,tmp_path):
+    image,_,mask,_=scene();path=tmp_path/'cloth.png';image.save(path)
+    editor=Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
+        assert channel_auto._current(editor,'old') is None
+        editor.drawDraft('rect','replace',[[.2,.2],[.8,.8]],.025)
+        wait_for(lambda:settled(editor));before=deepcopy(editor._candidate)
+        channel_auto.complete(editor,{'mask':mask},'old')
+        assert editor._candidate==before
+    finally:editor.close()
+
+
+def test_late_preview_during_debounce_cannot_overwrite_new_control(qt_app,ai_store,tmp_path):
+    image,_,mask,_=scene();path=tmp_path/'cloth.png';image.save(path)
+    editor=Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
+        editor._set_candidate(mask);wait_for(lambda:settled(editor));channel=editor.channelMask
+        channel.open();wait_for(lambda:not channel.loading and channel.previewUrl)
+        context={'token':channel.state['token'],'revision':channel.state['revision']}
+        old=dict(channel.options);channel.setOption('white',210)
+        channel.ready({'options':old,'path':str(path),'channel':'red','score':5},context,editor._generation)
+        assert channel.options['white']==210 and channel.loading
+        wait_for(lambda:not channel.loading)
+        assert channel.options['white']==210
+    finally:editor.close()
+
+
+@pytest.mark.parametrize('rgba',[False,True])
+def test_native_cutout_and_gray_export_leave_draft_and_layers_exact(qt_app,ai_store,tmp_path,rgba):
+    image,_,mask,_=scene()
+    if rgba:
+        image=image.convert('RGBA');image.putalpha(180)
+    path=tmp_path/'source.png';image.save(path)
+    editor=Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
+        editor._set_candidate(mask);wait_for(lambda:settled(editor))
+        before=deepcopy((editor._candidate,editor._layers,editor._cursor,editor._draft_history,editor._generation))
+        alpha=np.asarray(raster_mask(mask,image.size))
+        for output in ('cutout','mask'):
+            target=tmp_path/f'{output}.png'
+            assert editor.exportRange(str(target),output)
+            wait_for(lambda:target.exists() and not editor.busy,seconds=20)
+            with Image.open(target) as result:
+                assert result.size==image.size
+                if output=='mask':
+                    assert result.mode=='L' and np.array_equal(result,alpha)
+                else:
+                    assert result.mode=='RGBA'
+                    expected=((alpha.astype(np.uint16)*180)//255).astype(np.uint8) if rgba else alpha
+                    assert np.array_equal(result.getchannel('A'),expected)
+                    assert np.array_equal(np.array(result)[:,:,:3],np.array(image.convert('RGB')))
+                    assert result.info.get('icc_profile')
+            assert before==(editor._candidate,editor._layers,editor._cursor,editor._draft_history,editor._generation)
+        assert not editor.exportRange(str(path),'mask')
+        assert image.tobytes()==Image.open(path).tobytes()
+    finally:editor.close()
+
+
+def test_cutout_uses_pending_bound_layer_mask_in_its_temporary_composite(qt_app,ai_store,tmp_path):
+    from iphoto.document import render_layers
+    image=Image.new('RGB',(240,160),(85,110,140));path=tmp_path/'source.png';image.save(path)
+    editor=Editor(ai_store=ai_store)
+    try:
+        editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
+        mask=empty_mask();alpha=Image.new('L',image.size);alpha.paste(255,(30,20,100,140))
+        mask['bitmap']=encode_bitmap(alpha,sampling='alpha',preserve_resolution=True)
+        editor._layer()['mask']=mask;editor._load_layer();editor.setParameter('exposure',.8);editor.finishGesture()
+        wait_for(lambda:settled(editor));original=deepcopy(editor._layers)
+        editor.beginSelection('current');wait_for(lambda:settled(editor))
+        alpha.paste(255,(100,20,150,140));mask={**mask,'bitmap':encode_bitmap(alpha,sampling='alpha',preserve_resolution=True)}
+        editor._set_candidate(mask);wait_for(lambda:settled(editor))
+        expected=deepcopy(original);expected[-1]['mask']=mask
+        target=tmp_path/'expanded.png';assert editor.exportRange(str(target),'cutout')
+        wait_for(lambda:target.exists() and not editor.busy)
+        with Image.open(target) as result:
+            assert np.array_equal(np.array(result)[:,:,:3],render_layers(image,expected))
+            assert result.getchannel('A').tobytes()==alpha.tobytes()
+        assert editor._layers==original and editor._candidate==mask
+    finally:editor.close()

@@ -190,9 +190,9 @@ ColumnLayout {
                     objectName: "maskViewBox"
                     Layout.preferredWidth: 120
                     enabled: !editor.busy
-                    model: ["绿色覆盖", "黑白透明度", "调色效果"]
-                    currentIndex: editor.maskView === "adjustment" ? 2 : editor.maskView === "grayscale" ? 1 : 0
-                    onActivated: selection.setMaskView(currentIndex === 2 ? "adjustment" : currentIndex === 1 ? "grayscale" : "overlay")
+                    model: ["绿色覆盖", "黑白透明度", "调色效果", "白底抠图", "黑底抠图"]
+                    currentIndex: ["overlay","grayscale","adjustment","white","black"].indexOf(editor.maskView)
+                    onActivated: selection.setMaskView(["overlay","grayscale","adjustment","white","black"][currentIndex])
                 }
             }
             RefineControls { workspace: guide.workspace; editor: guide.editor }

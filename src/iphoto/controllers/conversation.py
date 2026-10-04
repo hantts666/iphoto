@@ -12,6 +12,7 @@ from PIL import Image
 from PySide6.QtCore import QProcess, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from ..engine import Recipe, LABELS
+from ..ai_protocol import image_data_url
 from ..ai_grounding import region_crop, map_grounding
 from ..ai_repair import repair_context, map_repair_spots
 from ..inpainting import available as repair_available
@@ -36,6 +37,11 @@ def _document_signature(self):
         }
         for layer in self._layers
     ]
+    for content, layer in zip(layers,self._layers):
+        for key in ('heal','inpaint','pixel_patch'):
+            if key in layer:
+                content[key] = ({k:deepcopy(v) for k,v in layer[key].items() if k != 'png'}
+                                if key=='pixel_patch' else deepcopy(layer[key]))
     for layer in layers:
         layer["mask"].pop("label", None)
     encoded = json.dumps(
@@ -406,6 +412,9 @@ def sendMessage(self, text, mode):
             "selection": selection,
             "recent_conversation": recent,
             "selection_image": mask_data,
+            "current_image": (image_data_url(QUrl(self._preview).toLocalFile())
+                              if mode == "auto" and self._preview and self._preview_generation == self._generation
+                              and any(l.get("pixel_patch") or l.get("heal") or l.get("inpaint") or any(l["recipe"].values()) for l in self._layers) else None),
             "mask_image_note": "第二张图是当前选区/蒙版：白色允许修改，黑色保护。",
             "existing_layers": [
                 {
@@ -429,6 +438,8 @@ def sendMessage(self, text, mode):
                 for l in self._layers
             ],
             "max_new_layers": min(4, MAX_LAYERS - len(self._layers)),
+            "image_edit_available": self.ai.settings.provider in ("qianwen_token_plan", "qianwen", "qwen"),
+            "channel_mask_available": any(c['id']=='details' and c['available'] for c in self.imageCapabilities),
             "active_is_group": self.activeIsGroup,
             "repair_available": repair_available(),
             "face_skin_available": face_skin_available(),
@@ -539,6 +550,24 @@ def _cloud_plan(self, result, generation):
         return self._notify("照片或图层已变化，过期结果未应用", True)
     if (pending.get("target_localization") or result.get("mode") == "targets") and pending.get("binding") != self._document_signature():
         return self._notify("照片或图层已变化，过期选区未应用", True)
+    if result.get("mode") == "photo_review" and pending.get('photo_strategy'):
+        from .photo_strategy import reviewed
+        return reviewed(self, result)
+    if result.get('mode') == 'auto' and result.get('action') == 'channel_mask':
+        from .channel_auto import begin as begin_channel
+        result = begin_channel(self, result)
+        if result is None:
+            return
+    if result.get('mode') == 'auto' and result.get('action') == 'generate':
+        from .photo_strategy import begin_generate
+        result = begin_generate(self, result)
+        if result is None:
+            return
+    if result.get('mode') == 'auto' and result.get('action') == 'develop':
+        from .photo_strategy import begin
+        result = begin(self, result)
+        if result is None:
+            return
     if pending.get("object_grounding"):
         from .object_grounding import planned
 
@@ -887,7 +916,8 @@ def _cloud_plan(self, result, generation):
         self._selection.focusChangedParameters(previous_recipe)
     if (self._pending_request or {}).get("object_grounding"):
         return
-    self._pending_request = None
+    if not (pending.get("photo_strategy") or pending.get('channel_auto')) or auto_failed or result["status"] == "unsupported":
+        self._pending_request = None
     if mode == "scene" and self._scene_followup and result["status"] != "unsupported":
         text, self._scene_followup = self._scene_followup, ""
         QTimer.singleShot(0, lambda: self.selectByDescription(text))
@@ -918,6 +948,7 @@ def _cloud_plan(self, result, generation):
         status = ("正在自动分离面部皮肤、保护眉眼和嘴唇；完成后自动建立图层…" if facial
                   else "正在自动分离上下嘴唇、保护嘴内与周围皮肤；完成后自动建立图层…" if lips
                   else "正在按原图细节分别生成身体部位范围；完成后自动建立图层…" if body
+                  else "1/3 正在定位目标，随后提取通道与 AI 透明度…可取消" if pending.get('channel_auto')
                   else "AI 已规划局部图层，正在本地生成蒙版；完成后自动建立图层…" if auto_layering
                   else "AI 已定位目标，正在本地生成像素选区…")
     elif auto_layering and len(self._layers) > layer_count_before:

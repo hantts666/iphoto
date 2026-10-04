@@ -26,8 +26,8 @@ SEED_PERCENTILE = 5
 
 def _tile_count(guide):
     return sum(bool((guide[y:y+neural.TILE, x:x+neural.TILE] == 128).any())
-               for y in range(0, guide.shape[0], neural.TILE)
-               for x in range(0, guide.shape[1], neural.TILE))
+               for y in range(0, guide.shape[0], neural.STRIDE)
+               for x in range(0, guide.shape[1], neural.STRIDE))
 
 
 def _local_logits(logits, box, size):

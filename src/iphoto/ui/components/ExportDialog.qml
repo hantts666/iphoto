@@ -27,7 +27,7 @@ Dialog {
         var lower = path.toLowerCase()
         if (!/\.(jpg|jpeg|png)$/.test(lower)) return path + root.suffix()
         if (root.formatIndex === 0 && /\.png$/.test(lower)) return path.replace(/\.png$/i, ".jpg")
-        if (root.formatIndex === 1 && /\.(jpg|jpeg)$/.test(lower)) return path.replace(/\.(jpg|jpeg)$/i, ".png")
+        if (root.formatIndex !== 0 && /\.(jpg|jpeg)$/.test(lower)) return path.replace(/\.(jpg|jpeg)$/i, ".png")
         return path
     }
     onFormatIndexChanged: {
@@ -40,7 +40,9 @@ Dialog {
         root.filePath = path
         root.errorText = ""
         root.pending = true
-        if (!root.editor.exportWithQuality(path, root.formatIndex === 0 ? root.quality : 100)) {
+        var started = root.formatIndex < 2 ? root.editor.exportWithQuality(path, root.formatIndex === 0 ? root.quality : 100)
+                      : root.editor.exportRange(path, root.formatIndex === 2 ? "cutout" : "mask")
+        if (!started) {
             root.pending = false
             root.errorText = root.editor.status
             pathField.forceActiveFocus()
@@ -50,7 +52,8 @@ Dialog {
     onOpened: {
         root.pending = false
         root.errorText = ""
-        root.filePath = root.editor ? root.editor.suggestExportPath(root.formatIndex) : ""
+        if(root.editor && root.editor.hasSelectionDraft) root.formatIndex=2
+        root.filePath = root.editor ? root.editor.suggestExportPath(root.formatIndex===0 ? 0 : 1) : ""
         pathField.forceActiveFocus()
         pathField.selectAll()
     }
@@ -87,7 +90,7 @@ Dialog {
             SelectBox {
                 objectName: "exportFormatBox"
                 Layout.fillWidth: true
-                model: ["JPEG（体积小 · 可调质量）", "PNG（无损 · 体积大）"]
+                model: ["JPEG（体积小 · 可调质量）", "PNG（完整照片）", "透明选区 PNG", "黑白蒙版 PNG"]
                 currentIndex: root.formatIndex
                 enabled: !root.pending
                 onActivated: root.formatIndex = currentIndex
@@ -101,7 +104,9 @@ Dialog {
         Caption {
             text: root.formatIndex === 0
                 ? "JPEG 92 适合分享；100 接近无损但体积更大。导出不会覆盖原图。"
-                : "PNG 无损并保留透明通道；文件较大。导出不会覆盖原图。"
+                : root.formatIndex === 1 ? "PNG 无损并保留透明通道；文件较大。导出不会覆盖原图。"
+                : root.formatIndex === 2 ? "按当前选区或当前层范围导出透明背景；保留灰度透明度与原图尺寸。边缘原有背景颜色可能需要继续修正。"
+                : "按当前选区或当前层范围导出原图尺寸灰度蒙版：白色保留、黑色移除、灰色半透明。"
             wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 10
         }
         Caption { objectName: "exportErrorText"; visible: root.errorText !== ""; text: root.errorText; color: "#edb4a6"; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -134,7 +139,7 @@ Dialog {
         currentFolder: FilePaths.folderUrl(root.filePath)
         defaultSuffix: root.suffix() === ".jpg" ? "jpg" : "png"
         nameFilters: ["JPEG (*.jpg)", "PNG (*.png)"]
-        selectedNameFilter.index: root.formatIndex
+        selectedNameFilter.index: root.formatIndex===0 ? 0 : 1
         onAccepted: root.filePath = root.fixSuffix(FilePaths.localPath(selectedFile.toString()))
     }
 }

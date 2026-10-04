@@ -12,7 +12,7 @@ from ..paths import ROOT
 def queue(self, request):
     self._matte_pending = {
         **request, "source_path": self._path, "source_sha": self._sha,
-        **({"layer_id": self._selected, "target_id": self._selection_target_id} if "stroke" in request else {}),
+        **({"layer_id": self._selected, "target_id": self._selection_target_id} if "stroke" in request or "channel_token" in request else {}),
     }
     pump(self)
     self.changed.emit()
@@ -67,16 +67,21 @@ def read(self):
                 and response.get("generation") == active["generation"]
                 and response.get("op") == "matte"
                 and not self._closing and not self._matte_aborting
-                and ("stroke" not in active or (active["layer_id"] == self._selected
+                and ("stroke" not in active and "channel_token" not in active or (active["layer_id"] == self._selected
                      and active["target_id"] == self._selection_target_id and active["mask"] == self._candidate
                      and not self.hasRegionDraft))
             )
             if "progress" in response:
-                if current and active.get("method") == "neural":
+                if current and active.get("method") in ("neural", "channel"):
                     _progress(self, active, response["progress"])
                 continue
             self._matte_active = None
             if current and response.get("ok"):
+                if 'auto_token' in active:
+                    from .channel_auto import complete as complete_channel
+                    complete_channel(self, response['result'], active['auto_token'])
+                    self.changed.emit()
+                    continue
                 from .matting import complete
 
                 complete(self, response["result"], points=active.get("points", []) if active.get("method") == "neural" else None)

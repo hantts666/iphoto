@@ -511,6 +511,12 @@ def complete(self, result, context):
         + ("\n" + "\n".join(r["name"] + "：" + r["reason"] for r in context["regions"])
            if purpose == "regions" else "")
     )
+    if auto_apply and context.get('origin', {}).get('channel_auto'):
+        from .channel_auto import prepare as prepare_channel
+        return prepare_channel(self, generated[0]['mask'], context['origin']['channel_auto']['token'])
+    if auto_apply and context.get('origin', {}).get('photo_strategy'):
+        from .photo_strategy import prepare
+        return prepare(self, generated, context['origin'])
     if auto_apply:
         from .layers import addLocalLayers
 

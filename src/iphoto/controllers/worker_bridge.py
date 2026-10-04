@@ -284,7 +284,9 @@ def _pixel_read(self):
                         self._notify(self._status + "：" + response["error"], background=True)
             elif not response["ok"]:
                 error = response["error"]
-                if context.get('purpose') == 'ai_mask_refinement':
+                if context.get('origin', {}).get('photo_strategy') or context.get('origin', {}).get('channel_auto'):
+                    self._notify(error, True)
+                elif context.get('purpose') == 'ai_mask_refinement':
                     from .mask_refinement import failed
 
                     failed(self, error, context)
@@ -316,6 +318,8 @@ def _pixel_read(self):
                        for job in active.get("jobs", [])) or context.get("purpose") == "warm":
                     self._warm_ready_sha = self._sha
                 complete(self, response["result"], active["context"])
+            elif context.get('origin', {}).get('photo_strategy') or context.get('origin', {}).get('channel_auto'):
+                self._notify('局部精修范围已过期，成片未应用', True)
             elif context.get('purpose') == 'ai_mask_refinement':
                 from .mask_refinement import failed
 
@@ -458,7 +462,7 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
-            if op in ("repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply") and active.get("cancelled"):
+            if op in ("generative_crop", "photo_candidate", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply") and active.get("cancelled"):
                 self.changed.emit()
                 self._pump()
                 continue
@@ -466,6 +470,14 @@ def _read(self):
                 from .mask_refinement import failed
 
                 failed(self, response['error'], active.get('context', {}))
+                self.changed.emit()
+                self._pump()
+                continue
+            if op == 'channel_preview' and not response['ok']:
+                if active['context'].get('channel_auto'):
+                    self._notify(response['error'],True)
+                else:
+                    self._channel_mask.failed(response['error'], active['context'])
                 self.changed.emit()
                 self._pump()
                 continue
@@ -622,6 +634,19 @@ def _read(self):
                 elif context.get("purpose") != "warm":
                     self._status = "本次像素选区已取消或过期，原选区保留"
                     self._notify("本次像素选区已取消或过期，未改变当前选区")
+            elif op == 'channel_preview':
+                if not active.get('cancelled'):
+                    if active['context'].get('channel_auto'):
+                        from .channel_auto import ready as channel_ready
+                        channel_ready(self,response['result'],active['context'],response['generation'])
+                    else:
+                        self._channel_mask.ready(response['result'], active['context'], response['generation'])
+            elif op == "generative_crop":
+                from .photo_strategy import generative_ready
+                generative_ready(self, response['result'], active['context'], response['generation'])
+            elif op == "photo_candidate":
+                from .photo_strategy import ready
+                ready(self, response['result'], active['context'], response['generation'])
             elif op == "repair_crop":
                 from .conversation import _repair_crop_ready
 

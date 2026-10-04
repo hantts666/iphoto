@@ -1,6 +1,6 @@
 # iPhoto 源码仓库说明
 
-本项目是 Python 3.12 + PySide6 / Qt Quick 的原生桌面照片编辑器。照片合成与本地分割运行在独立工作进程，云端 AI 返回经过校验的参数、对象位置或内部点。运行入口为 `run.py`，应用版本 1.10.6，项目格式为 1.10。
+本项目是 Python 3.12 + PySide6 / Qt Quick 的原生桌面照片编辑器。照片合成与本地分割运行在独立工作进程，云端 AI 返回经过校验的参数、对象位置或内部点，也可通过专门图像接口生成选区像素并检查候选。运行入口为 `run.py`，应用版本 1.11.0；一般项目格式为 1.10，含生成像素资源时为1.11。
 
 ## 从哪里开始
 
@@ -395,3 +395,20 @@ CurveEditor在原调整面板增添可折叠“通道曲线”，选择RGB/红/�
 matting/local.py以原有效alpha生成局部三分图，涂抹区标未知128，灰度上下文保持未知，明确0／255作两类参考；无参考、无保护范围、超过16M ROI／4M未知提前拒绝。既有neural.solve保持原尺寸分块及128块／180秒门槛。结果只修改笔触，内侧距离场smoothstep接合旧alpha，最大32px，明确提示点覆盖接合；语义皮肤零像素和原部位scope继续保护。变化才展平有效alpha成原尺寸bitmap并保留非反选语义来源，无变化不增历史。每笔草稿撤销，保存绑定层一步文档撤销，项目仍1.10，无新增模型或依赖。
 
 DraftOutputBar快速补选／擦除／透明细化，SelectionGuide与RegionPane共用RefineControls，方法／提示点／羽化／位移折叠到高级。移除没有蒙版字段及算子的色彩保护滑杆；前景颜色去污染另立能力。真实发丝接缝失败与修复、RGBA灯泡夹具失败与原程序最终验收见local-transparency-2026-10-04.md；未宣称薄纱已解决或完成通道抠图。
+
+
+## 1.11：成片候选、生成像素与通道抠图
+
+`photo_strategy.py` 和 `controllers/photo_strategy.py` 使整体基调与局部精修先成为候选；worker生成整图／原像素人脸对照，再进入独立photo_review协议。只可一次参数修正，通过才原子加入所有新层；拒绝、取消、失败和过期保持。皮肤效果mask沿支持区向内渐变，保护眉眼／嘴唇的零支持与face_binding。AI当前效果上下文只在已有调整时增加实际preview，保留原图／范围图的既有顺序。精确草稿generate不重新识别。
+
+`image_edit.py` 独立Qt网络控制器调用Qwen Image图像编辑；来源凭据同用户配置，单张、原比例、有界下载、HTTPS签名地址不带凭据，状态含等待秒数。像素以`pixel_patch.py`的RGB PNG／SHA／canvas_size／box内嵌，原图零覆盖与原alpha保留；preview／detail／export同render_patch。含patch才写项目1.11，旧项目及一般项目保持兼容1.10。实际API返回能成功，但真人候选两次因空间位移被拒绝；模拟提交测试验证成功分支，不能声称真实生成精修已稳定。
+
+`matting/channels.py` 从局部前景／背景比较RGB／亮度、鲁棒分位黑白场、反相／gamma形成透明度提示。只近目标可扩，语义零支持保留。默认保持不透明核心，可显式处理内部透明／孔洞；强区分通道辅助，弱区主要ViTMatte。原图ROI32M、未知4M、128块／180秒限制；缺锚点拒绝。`channel_mask.py`有160ms预览合并和立即revision失效，迟到预览不能覆盖新输入。`channel_auto.py`复用同算法／worker，当前草稿／匹配局部层或单一object定位，绑定层一次保存且不改参数，未绑定范围可继续编辑。取消、source／generation／签名／完整层快照／draft检查共用。
+
+ViTMatte原图核心512px／halo64px，新增stride384px及128px余弦重叠；确定0／255不变，仅为至多4M未知分配稀疏累加，避免多份24MP float内存。segmentation/confidence的预算与实际步进同步。
+
+白底／黑底检查用互补alpha叠层，preview和native detail共用overlay_mask／overlay_mask_tile，不改变照片。ExportDialog新增透明选区与灰度蒙版PNG；有草稿时默认透明选区，仍可浏览原图尺寸输出。session.exportRange选择精确草稿／当前层，绑定未提交范围以临时层快照渲染；export_process沿既有owned staging／取消／源校验／原子发布，worker输出RGBA（原alpha乘选区alpha）或L蒙版，无图层／草稿／历史改写。灰度蒙版不附RGB ICC，RGBA保留sRGB ICC。
+
+最终265项相关测试通过174.18秒；生产及修改测试Ruff F／compile／diff通过；完整1080×700和1440×930弹窗控件验证。原程序真实AI细枝与大图头发／原尺寸透明PNG验证见photo-strategy-2026-10-05.md、channel-matting-2026-10-05.md。发丝灰边、真实薄纱、颜色去污染与稳定一键美化继续处理；不以局部流程完成宣称整体目标已完成。
+
+提交前补充：通道弹窗Esc关闭会取消其自身正在计算的任务，避免关闭后后台继续修改范围；两尺寸真实QML取消及通道／matte门槛26通过29.18s。生成／通道／便携资源最终复核30通过15.14s。均与265项集合重叠，不相加。

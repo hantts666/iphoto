@@ -20,6 +20,7 @@ ApplicationWindow {
     property color line: "#40454d"
     property color panel: "#2d3137"
     property bool editingEnabled: editor.hasImage && !editor.busy && !editor.hasSelectionDraft && !editor.hasRegionDraft
+    property bool exportEnabled: editor.hasImage && !editor.busy && !editor.hasRegionDraft
     property bool compare: false
     property real split: .5
     readonly property bool showMask: selection.showMask
@@ -36,7 +37,7 @@ ApplicationWindow {
     property bool discardOnClose: false
     property bool editingText: activeFocusItem !== null && typeof activeFocusItem.undo === "function" && !activeFocusItem.readOnly
     property bool textFocus: activeFocusItem !== null && typeof activeFocusItem.selectAll === "function"
-    property bool modalActive: aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
+    property bool modalActive: channelMaskDialog.opened || aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
     property bool menuActive: fileMenu.opened || editMenu.opened || selectionMenu.opened || viewMenu.opened || extensionsMenu.opened
     property bool navigationShortcutsEnabled: editor.hasImage && !textFocus && !modalActive && !menuActive
     readonly property bool objectPreviewEnabled: editor.hasImage && !editor.busy && selection.pickedLayerId === ""
@@ -104,6 +105,7 @@ ApplicationWindow {
 
 
     AISettingsDialog { id: aiSettings; objectName: "aiSettingsDialog"; parent: Overlay.overlay; ai: editor.ai; palette.text: "#26372e"; palette.windowText: "#26372e"; palette.buttonText: "#26372e"; palette.base: "white"; palette.button: "#f0f2e9" }
+    ChannelMaskDialog { id: channelMaskDialog; parent: Overlay.overlay; editor: editorContext }
     Dialog {
         id: recoveryFailure; objectName: "recoveryFailureDialog"; parent: Overlay.overlay; anchors.centerIn: parent; modal: true
         title: "恢复副本未能保存"; width: Math.min(470,window.width-40); closePolicy: Popup.CloseOnEscape
@@ -157,7 +159,7 @@ ApplicationWindow {
             MenuItem { objectName: "saveProjectMenuAction"; text: "保存项目    Ctrl+S"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: saveProject() }
             MenuItem { objectName: "saveAsProjectMenuAction"; text: "项目另存为…"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: { if (commitPendingText()) projectSaveDialog.start() } }
             MenuSeparator {}
-            MenuItem { objectName: "exportMenuAction"; text: "导出照片…    Ctrl+E"; enabled: editingEnabled; onTriggered: exportPhoto() }
+            MenuItem { objectName: "exportMenuAction"; text: "导出照片…    Ctrl+E"; enabled: exportEnabled; onTriggered: exportPhoto() }
             MenuItem { text: "恢复最近会话"; enabled: editor.canRecover && !editor.busy && !editor.savingProject; onTriggered: editor.recoverLatest() }
         }
         Menu { id: editMenu; title: "编辑"
@@ -192,7 +194,7 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+O"; enabled: !modalActive && !editor.busy && !editor.savingProject; onActivated: importDialog.open() }
     Shortcut { sequence: "Ctrl+S"; enabled: !modalActive && editor.hasImage && !editor.busy && !editor.savingProject; onActivated: saveProject() }
     Shortcut { sequence: "Ctrl+Shift+S"; enabled: !modalActive && editor.hasImage && !editor.busy && !editor.savingProject; onActivated: { if (commitPendingText()) projectSaveDialog.start() } }
-    Shortcut { sequence: "Ctrl+E"; enabled: !modalActive && editingEnabled; onActivated: exportPhoto() }
+    Shortcut { sequence: "Ctrl+E"; enabled: !modalActive && exportEnabled; onActivated: exportPhoto() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !textFocus && !modalActive; onActivated: editor.undo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !textFocus && !modalActive; onActivated: editor.redo() }
     Shortcut { sequence: "Ctrl+A"; enabled: !textFocus && !modalActive; onActivated: editor.draftAction("all") }
@@ -232,7 +234,7 @@ ApplicationWindow {
                 Action { objectName: "recoverSessionButton"; text: "恢复未保存"; hint: "找回上次未保存的图层与选区"; visible: editor.canRecover; enabled: !editor.busy && !editor.savingProject; onClicked: editor.recoverLatest() }
                 Action { text: "打开照片"; enabled: !editor.busy && !editor.savingProject; onClicked: importDialog.open() }
                 Action { objectName: "saveProjectButton"; text: editor.savingProject ? "保存中…" : editor.dirty ? "保存项目 •" : "保存项目"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onClicked: saveProject() }
-                Action { objectName: "exportButton"; text: "导出照片 ↗"; primary: true; enabled: editingEnabled; onClicked: exportPhoto() }
+                Action { objectName: "exportButton"; text: "导出照片 ↗"; primary: true; enabled: exportEnabled; onClicked: exportPhoto() }
             }
         }
         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 43; color: "#30353c"

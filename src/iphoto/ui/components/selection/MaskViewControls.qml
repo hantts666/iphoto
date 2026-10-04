@@ -14,9 +14,9 @@ RowLayout {
         objectName: root.prefix+"maskViewBox"
         Layout.fillWidth: true
         enabled: !root.editor.busy
-        model: ["绿色覆盖","黑白透明度","调色效果"]
-        currentIndex: root.editor.maskView==="adjustment" ? 2 : root.editor.maskView==="grayscale" ? 1 : 0
+        model: ["绿色覆盖","黑白透明度","调色效果","白底抠图","黑底抠图"]
+        currentIndex: ["overlay","grayscale","adjustment","white","black"].indexOf(root.editor.maskView)
         implicitHeight: 30
-        onActivated: root.editor.selection.setMaskView(currentIndex===2 ? "adjustment" : currentIndex===1 ? "grayscale" : "overlay")
+        onActivated: root.editor.selection.setMaskView(["overlay","grayscale","adjustment","white","black"][currentIndex])
     }
 }
