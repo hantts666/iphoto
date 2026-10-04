@@ -127,6 +127,8 @@ def refine(image, hint, points, *, engine=None, progress=None):
         result["face_binding"] = hint["face_binding"]
     if "face_part" in hint:
         result["face_part"] = hint["face_part"]
+    if 'face_part_scope' in hint:
+        result['face_part_scope'] = hint['face_part_scope']
     quality.update(timing, model=timing.get("model", "EfficientSAM-S")+" · 语义范围保护", resolution="source",
                    semantic_target=hint["semantic_target"], crop_box=list(box), crop_size=list(patch.size),
                    mask_size=list(image.size), elapsed_ms=round((perf_counter()-started)*1000, 1))

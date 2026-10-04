@@ -151,7 +151,7 @@ def refine(image, mask, radius=8, *, points=None, progress=None):
     if "edge_protection" in mask:
         result["edge_protection"] = mask["edge_protection"]
     if not mask['inverted']:
-        for key in ('semantic_target','face_binding','face_part'):
+        for key in ('semantic_target','face_binding','face_part','face_part_scope'):
             if key in mask:
                 result[key] = deepcopy(mask[key])
     model = backend()

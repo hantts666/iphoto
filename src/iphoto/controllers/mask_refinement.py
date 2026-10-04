@@ -3,7 +3,7 @@ from copy import deepcopy
 import json
 from uuid import uuid4
 
-from ..ai_mask_refinement import eligible, mask_data_url, map_points, validate_result
+from ..ai_mask_refinement import eligible, mask_data_url, map_points, validate_result, validate_restoration
 from ..ai_mask_review import parse_review, parse_verification
 from ..ai_protocol import image_data_url
 from ..document import new_layer, raster_mask_cached, validate_layers
@@ -40,6 +40,20 @@ def boundary_context(self, mask):
     return deepcopy({'crop':face['skin_crop'],'features':face['face_features'],'anchor':face['anchor']})
 
 
+def restore_context(self, mask):
+    from .face_inventory import grounding_context
+    from ..segmentation import face_precision
+
+    if not eligible(mask) or 'face_part_scope' not in mask or not face_precision.available():
+        return None
+    bounds = raster_mask_cached(mask,(384,384)).getbbox()
+    face = grounding_context(self,[(bounds[0]+bounds[2])/768,(bounds[1]+bounds[3])/768]) if bounds else None
+    if not face or not face.get('face_features'):
+        return None
+    return deepcopy({'crop':face['skin_crop'],'features':face['face_features'],
+                     'anchor':face['anchor'],'mask':face['mask']})
+
+
 def begin(self, result):
     pending = self._pending_request
     try:
@@ -73,14 +87,17 @@ def begin(self, result):
         state['context_crop'] = region_crop(face['mask'], (384, 384)) if face else None
         pending['mask_refinement'] = state
         _current(self, pending)
-        if plan.get('method')=='boundary':
-            part_context=boundary_context(self,mask)
+        if plan.get('method') in ('boundary','restore'):
+            restoring = plan['method']=='restore'
+            part_context=restore_context(self,mask) if restoring else boundary_context(self,mask)
             if not part_context:
-                raise ValueError('缺少可靠的五官边缘修正条件，原范围和参数保留')
-            state['summary']='根据面部分区分别保留目标五官，结合原图核对边缘'
+                raise ValueError(('缺少原始选择范围或可靠的人脸补选条件' if restoring else
+                                  '缺少可靠的五官边缘修正条件')+'，原范围和参数保留')
+            state['summary']=('在原始选择范围内重新识别可见五官，只增加覆盖，原有范围保留' if restoring else
+                              '根据面部分区分别保留目标五官，结合原图核对边缘')
             state['stage'],state['preparing']='neural',False
             if pixel_selections.start(self,[{'id':'target','hint':state['mask'],'points':[],
-                    'part_boundary':part_context}],{'purpose':'ai_mask_refinement','mask_token':state['token'],
+                    ('part_restore' if restoring else 'part_boundary'):part_context}],{'purpose':'ai_mask_refinement','mask_token':state['token'],
                     'mask_stage':state['stage'],'origin':_origin(pending)}) is False:
                 raise ValueError('五官边缘修正未能启动，原范围和参数保留')
             self.changed.emit()
@@ -116,7 +133,9 @@ def crop_ready(self, result, context, generation):
         review = state['stage'] == 'review_preparing'
         verify = state['stage'] == 'verify_preparing'
         state['stage'] = 'verify' if verify else 'review' if review else 'points'
-        self._status = ('AI 正在对比修改前后，核对是否误删真实五官…' if verify else
+        restoring = state.get('method')=='restore'
+        self._status = (('AI 正在对比修改前后，核对新增覆盖是否属于目标五官…' if restoring else
+                        'AI 正在对比修改前后，核对是否误删真实五官…') if verify else
                        (('AI 正在复查当前范围，检查可明确排除的误选…' if state.get('points_fallback')
                          else 'AI 正在复查修正结果，检查残留误选…') if review
                         else 'AI 正在放大对照五官与蒙版，定位误选部分…'))
@@ -127,15 +146,16 @@ def crop_ready(self, result, context, generation):
             workspace['regions'] = result['regions']
         if review or verify:
             if not result.get('reference_path') or not result.get('changes_path'):
-                raise ValueError('复查缺少修改前范围与减少覆盖对照，原范围和参数保留')
+                raise ValueError('复查缺少修改前范围与覆盖变化对照，原范围和参数保留')
             workspace['reference_image'] = image_data_url(result['reference_path'])
             workspace['changes_image'] = image_data_url(result['changes_path'])
         if result.get('context_path'):
             workspace['face_context_image'] = image_data_url(result['context_path'])
-        text = ('根据原图核对本次减少是否误删原范围里的真实'+state['mask']['face_part']
+        text = (('根据原图核对本次新增覆盖是否属于可见目标' if restoring else
+                 '根据原图核对本次减少是否误删原范围里的真实')+state['mask']['face_part']
                 if verify else pending['text'])
         if self.ai.plan(text, Recipe().to_dict(), [], result['path'], self._generation,
-                        'mask_validate' if verify else 'mask_review' if review else 'mask_points', workspace) is False:
+                        ('mask_restore_validate' if restoring else 'mask_validate') if verify else 'mask_review' if review else 'mask_points', workspace) is False:
             if self._pending_request is not pending:
                 return  # The transport already reported and cleared this request.
             raise ValueError('AI对照未能启动，已有范围和参数保留')
@@ -211,13 +231,18 @@ def complete(self, result, context):
             raise ValueError('精细范围结果不完整，已有范围保留')
         item = result['items'][0]
         mask = validate_result(item['mask'], state['mask'], (self._width, self._height))
+        if state.get('method')=='restore':
+            mask = validate_restoration(mask,state['mask'],(self._width,self._height))
         if not raster_mask_cached(mask, (512, 512)).getbbox():
             raise ValueError('精细修正结果为空，已有范围保留')
         if mask == state['mask'] and state['recipe'] is None:
-            if state.get('method')=='boundary':
+            if state.get('method') in ('boundary','restore'):
                 return preserve_original(self,'unchanged')
             raise ValueError('本次修正没有改变范围，已有范围保留')
         state['result'], state['quality'] = mask, deepcopy(item.get('quality', {}))
+        if state.get('method')=='restore':
+            state['review_summary']='只增加原始选择范围内的覆盖，新增边缘仍需放大检查'
+            return start_verification(self)
         state['stage'], state['preparing'] = 'review_preparing', True
         self._status = '正在从原图准备修正结果对照，随后由AI复查残留误选…可随时取消'
         self.changed.emit()
@@ -288,9 +313,12 @@ def preserve_original(self, status):
     pending = self._pending_request
     state = _current(self, pending)
     part = '嘴唇' if state['mask']['face_part'] == 'lips' else '鼻部'
-    output = ('本次边缘核对未产生范围修改，原范围与参数保持' if status=='unchanged' else
+    restoring = state.get('method')=='restore'
+    output = (('本次补选未产生范围修改，原范围与参数保持' if restoring else
+               '本次边缘核对未产生范围修改，原范围与参数保持') if status=='unchanged' else
+              ('AI复查未确认新增覆盖属于可见'+part+'，原范围与参数保持' if restoring else
               (f'AI复查发现可能误删真实{part}' if status == 'reject'
-               else f'AI复查未确认本次修正保留了真实{part}')+'，原范围与参数保持')
+               else f'AI复查未确认本次修正保留了真实{part}')+'，原范围与参数保持'))
     self._pending_request = None
     self._message('assistant', output+'。请放大检查范围边缘。', state='answered', origin=_origin(pending))
     self._notify(output)
@@ -302,9 +330,12 @@ def start_verification(self):
         if state['result'] == state['mask']:
             return publish(self)
         state['stage'], state['preparing'] = 'verify_preparing', True
-        self._status = '正在准备修改前后对照，核对是否误删真实五官…可随时取消'
+        restoring = state.get('method')=='restore'
+        self._status = ('正在准备补选前后对照，核对新增五官覆盖…可随时取消' if restoring else
+                        '正在准备修改前后对照，核对是否误删真实五官…可随时取消')
         self.changed.emit()
         if self._request('mask_refinement_crop', mask=state['result'], source_sha=self._sha, verify=True,
+                         restore_verify=restoring,
                          reference_mask=state['mask'], context_crop=state['context_crop'],
                          context={'mask_token': state['token'], 'mask_stage': state['stage']}) is False:
             raise ValueError('修改前后核对未能准备，原范围与参数保留')
@@ -315,12 +346,14 @@ def start_verification(self):
 def verified(self, result):
     try:
         state = _current(self, self._pending_request)
-        if result.get('mode') != 'mask_validate':
+        if result.get('mode') != ('mask_restore_validate' if state.get('method')=='restore' else 'mask_validate'):
             raise ValueError('修改前后核对返回类型不一致，原范围与参数保留')
         plan = parse_verification({'choices': [{'finish_reason': 'stop', 'message': {
             'content': json.dumps({key: result[key] for key in ('status', 'summary')})}}]})
         if plan['status'] != 'accept':
             return preserve_original(self, plan['status'])
+        if state.get('method')=='restore':
+            state['review_summary']=plan['summary'].rstrip('。；;')+'；只核对本次新增，不代表范围完整或精准'
         state['verified'] = True
         publish(self)
     except (ValueError, KeyError) as exc:
@@ -405,6 +438,7 @@ def cancel(self):
     if not state:
         return
     if self.ai.busy:
+        state['cancel_requested'] = True
         self.ai.cancel()
         return
     token = state['token']
@@ -414,6 +448,12 @@ def cancel(self):
         self._active['cancelled'] = True
     if self._pixel_active and self._pixel_active.get('context', {}).get('mask_token') == token:
         self._stop_pixel()
+    cancelled(self)
+
+
+def cancelled(self):
+    """A deliberate cancellation is an answered task, not a failed edit."""
+    pending = self._pending_request or {}
     self._pending_request = None
     message = '已取消精细范围修正，已有范围和参数保留'
     self._message('assistant', message, state='answered', origin=_origin(pending))

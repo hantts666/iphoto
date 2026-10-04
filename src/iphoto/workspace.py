@@ -1076,6 +1076,10 @@ class Editor(QObject):
             return
         if not background:
             self._status_epoch += 1
+        if (error and message == '已取消 AI 请求，参数未改变'
+                and (getattr(self,'_pending_request',None) or {}).get('mask_refinement',{}).get('cancel_requested')):
+            from .controllers.mask_refinement import cancelled
+            return cancelled(self)
         if error and getattr(self, "_pending_request", None):
             self._scene_followup = ""
             self._message("error", message, state="failed")

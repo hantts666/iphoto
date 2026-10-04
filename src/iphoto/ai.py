@@ -100,6 +100,7 @@ class AIController(QObject):
                     "regions": "规划分区", "advice": "修图建议", "auto": "智能修图",
                     "mask_points": "定位五官误选", "mask_review": "复查修正范围",
                     "mask_validate": "核对是否误删真实五官",
+                    'mask_restore_validate': '核对新增五官覆盖',
                     "repair": "检查局部瑕疵"}.get(self._context["mode"], "AI 修图")
             phase = task + ("：正在接收 AI 回复" if self._context["body"] else "：请求已发送，等待 AI 回应")
         return f"{phase} · 已等待 {elapsed} 秒 · 可取消"
@@ -344,6 +345,7 @@ class AIController(QObject):
                 "mask_points": "AI 正在对照原图与蒙版，定位误选范围…",
                 "mask_review": "AI 正在复查修正结果，检查残留误选…",
                 "mask_validate": "AI 正在对比修改前后，核对是否误删真实五官…",
+                'mask_restore_validate': 'AI 正在对比补选前后，核对新增覆盖是否属于目标五官…',
             }.get(mode, "AI 正在看图并生成修图参数…")
         )
 
@@ -424,7 +426,7 @@ class AIController(QObject):
                     result = parse_points(response, context["workspace"])
                 elif context["mode"] == "mask_review":
                     result = parse_review(response, context["workspace"])
-                elif context["mode"] == "mask_validate":
+                elif context["mode"] in ("mask_validate", "mask_restore_validate"):
                     result = parse_verification(response)
                 elif context["mode"] == "scene":
                     result = parse_scene(response)
@@ -479,7 +481,7 @@ class AIController(QObject):
     def _retry_invalid_result(self, context, reason):
         if (
             context["testing"]
-            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate"}
+            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate", "mask_restore_validate"}
             or context["validation_retry"]
             or context["abort"]
         ):

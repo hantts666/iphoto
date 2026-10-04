@@ -138,8 +138,13 @@ def test_crop_is_native_bounded_and_strips_metadata():
     with pytest.raises(ValueError, match='过大'): prepare_crop(Image.new('RGB', (2500, 2200)), large)
 
 
-def setup(ui, mode):
+def setup(ui, mode, *, restore=False):
     e = ui.e; mask = typed_mask(); lid = None
+    if restore:
+        mask['face_part_scope'] = empty_mask(full=True)
+        pixels = raster_mask(mask,(2400,1600))
+        ImageDraw.Draw(pixels).ellipse((970,610,1030,670),fill=0)
+        mask['bitmap'] = encode_bitmap(pixels,preserve_resolution=True)
     if mode != 'new':
         layer = new_layer('已改名的唇色'); layer['mask'] = mask
         layer['recipe'] = Recipe(exposure=.12, warmth=4, hsl_red_saturation=7).to_dict()
@@ -158,10 +163,14 @@ def setup(ui, mode):
 
 
 def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, review=None, points_reply=None, verification=None, method="exclude"):
-    e = ui.e; mask, lid = setup(ui, mode)
+    e = ui.e; mask, lid = setup(ui, mode,restore=method=='restore')
     if method=='boundary':
         monkeypatch.setattr(mask_refinement,'boundary_context',lambda owner,mask:{'crop':[0,0,1,1],
             'features':{'eyes':[[.3,.2],[.6,.2]],'mouth':[[.3,.6],[.6,.6]]},'anchor':[.5,.4]})
+    if method=='restore':
+        monkeypatch.setattr(mask_refinement,'restore_context',lambda owner,mask:{'crop':[0,0,1,1],
+            'features':{'eyes':[[.3,.2],[.6,.2]],'mouth':[[.3,.6],[.6,.6]]},
+            'anchor':[.5,.4],'mask':empty_mask(full=True)})
     pending_jobs = []
     request = e._request
     def intercept(op, **data):
@@ -174,7 +183,7 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, revie
         context = json.loads(payload['messages'][1]['content'][0]['text'])
         if context['mode'] == 'mask_points':
             return response(points_reply) if points_reply is not None else point_plan([[0, 0] if bad_points else [500, 400]])
-        if context['mode'] == 'mask_validate':
+        if context['mode'] in ('mask_validate','mask_restore_validate'):
             return response(verification or {'status': 'accept', 'summary': '本次减少保留真实目标'})
         if context['mode'] == 'mask_review': return response(review(context) if callable(review) else review or {'status':'keep', 'summary':'未发现可明确排除的残留', 'exclude_regions':[]})
         target = next((l for l in context['existing_layers'] if l['id'] == lid), None)

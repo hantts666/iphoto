@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from ..ai_grounding import crop_pixels, region_crop
-from ..document import empty_mask, validate_mask, raster_mask
+from ..document import empty_mask, validate_mask, raster_mask, spatial_mask
 from ..masks import encode_bitmap
 from .face_models import verified_path
 from .face_detection import validate_features
@@ -158,7 +158,7 @@ def backend(*, progress=None):
     return _backend
 
 
-def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None, scope="full", context_hint=None, part="all", progress=None):
+def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None, scope="full", context_hint=None, part="all", progress=None, require_precision=False):
     started = perf_counter()
     hint = validate_mask(hint)
     if scope not in ('full', 'region'):
@@ -195,8 +195,10 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
                 precision = True
             except Exception:
                 fallback = True
-                if progress is not None:
+                if progress is not None and not require_precision:
                     progress('face_fallback')
+    if require_precision and (not precision or part_alpha is None):
+        raise ValueError('精细五官模型未能提供连续范围，原范围保留')
     provided_engine = engine is not None
     if engine is None and not precision:
         engine = backend(progress=progress) if progress is not None else backend()
@@ -316,6 +318,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
                   semantic_target=target)
     if part in PARTS:
         result["face_part"] = part
+        result['face_part_scope'] = spatial_mask(hint)
     quality = {
         "model": ("FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
         "protected_features": ["嘴内", "面部皮肤", "鼻子", "眼睛", "眉毛", "头发", "帽子", "衣物"] if part == 'lips' else ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],

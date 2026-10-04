@@ -21,7 +21,7 @@ from test_face_parts import labels, rect
 from test_import_export import ui  # noqa: F401
 
 
-@pytest.mark.parametrize('case', ['valid','source','cached','fallback','continuous','wrong_id','wrong_op','old_active_op',
+@pytest.mark.parametrize('case', ['valid','source','cached','fallback','continuous','restore','wrong_id','wrong_op','old_active_op',
     'stale','old_active','cancelled','background','closing','bad_part','boolean','bad_total','bad_phase',
     'wrong_target','tile','non_dict'])
 def test_facial_status_never_releases_task_or_publishes_partial_layers(case):
@@ -37,6 +37,7 @@ def test_facial_status_never_releases_task_or_publishes_partial_layers(case):
             'generation':9 if case=='old_active' else 10,
             'jobs':[{'mask_target':'object' if case=='wrong_target' else 'face','face_part':'lips'}],
             'cancelled':case=='cancelled','priority':'low' if case=='background' else 'normal'}
+    if case=='restore':active['jobs']=[{'mask_target':'object','part_restore':{},'hint':{'face_part':'lips'}}]
     message={'id':8 if case=='wrong_id' else 7,'op':'open' if case=='wrong_op' else 'segment',
              'generation':9 if case=='stale' else 10,'progress':progress}
     owner=SimpleNamespace(_pixel_buffer=b'',_pixel_active=active,_generation=10,_closing=case=='closing',
@@ -47,7 +48,7 @@ def test_facial_status_never_releases_task_or_publishes_partial_layers(case):
     worker_bridge._pixel_read(owner)
     assert owner._pixel_active is active and owner._warm_ready_sha=='unprepared'
     assert before==(owner._layers,owner._candidate,owner._generation)
-    assert (owner._status!='previous')==(case in ('valid','source','cached','fallback','continuous'))
+    assert (owner._status!='previous')==(case in ('valid','source','cached','fallback','continuous','restore'))
 
 
 def test_mixed_batch_progress_identifies_the_current_face_without_partial_result(monkeypatch):

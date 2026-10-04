@@ -21,6 +21,7 @@ MAX_PROJECT_BYTES = 128 * 1024 * 1024
 # Stored radii are relative to the source short side. Keep enough precision
 # for fine source-pixel strokes; the UI supplies a physical pixel minimum.
 MIN_STROKE_RADIUS = .00001
+SPATIAL_MASK_FIELDS = frozenset(('base', 'ops', 'inverted', 'feather', 'label', 'edge_shift', 'bitmap'))
 
 
 def empty_mask(full=False):
@@ -85,6 +86,11 @@ def validate_mask(mask, *, cache_bitmap=False):
     if "face_part" in mask and (not isinstance(part, str) or part not in ("nose", "lips")
             or mask.get("semantic_target") != {"nose": "face_skin", "lips": "face"}.get(part)):
         raise ValueError("选区面部部位信息无效")
+    part_scope = mask.get('face_part_scope')
+    if 'face_part_scope' in mask:
+        if part is None or not isinstance(part_scope, dict) or not set(part_scope) <= SPATIAL_MASK_FIELDS:
+            raise ValueError('五官原始选择范围无效')
+        part_scope = validate_mask(part_scope, cache_bitmap=cache_bitmap)
     binding = mask.get('face_binding')
     if binding is not None:
         if (not isinstance(binding,dict) or set(binding)!={'face_id','source_sha256'}
@@ -142,6 +148,7 @@ def validate_mask(mask, *, cache_bitmap=False):
         "label": mask["label"],
         **({"semantic_target":mask["semantic_target"]} if "semantic_target" in mask else {}),
         **({"face_part": part} if part is not None else {}),
+        **({'face_part_scope': part_scope} if part_scope is not None else {}),
         **({'face_binding':binding} if binding is not None else {}),
         **({"bitmap": validate_bitmap(mask["bitmap"], cache_decoded=cache_bitmap)} if "bitmap" in mask else {}),
         "feather": float(mask["feather"]),
@@ -156,6 +163,11 @@ def validate_mask(mask, *, cache_bitmap=False):
             for op in ops
         ],
     }
+
+
+def spatial_mask(mask):
+    """Keep only the original spatial intent, with no nested semantic metadata."""
+    return validate_mask({key: value for key, value in mask.items() if key in SPATIAL_MASK_FIELDS})
 
 
 def validate_layers(layers):

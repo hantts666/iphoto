@@ -15,7 +15,7 @@ from .ai_layer_edits import LAYER_EDITS_SCHEMA, validate_layer_edits
 from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
-from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT
+from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT, RESTORATION_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
     SELECTION_SCHEMA,
@@ -122,8 +122,8 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
 
 
 AUTO_PROMPT += """
-action=refine_mask：用户要求排除已有鼻部/嘴唇蒙版的误选、修正其范围时使用；mask_refinement_available=true才可用。程序会放大当前原图和蒙版，再由你定位排除点，随后调用本地神经模型。不要让用户先手动画或重新建层。这里只能减少当前覆盖，不能扩大范围、恢复隐藏或未选入的像素、修整整脸皮肤或普通物体。
-mask_refinement.method必须为exclude或boundary。明确排除某块错选皮肤用exclude，会放大对照后定位排除点。用户要求让边缘贴合、检查锯齿且未明确指出整块误选时，若目标mask_boundary_refinable或selection_mask_boundary_refinable为true，优先boundary；程序结合面部分区分别保留上下唇/鼻部并用原图神经模型核对边缘，无需你猜排除点。两种方式均仅减少原覆盖，之后复查并单独核对是否误删；通过才提交，无法可靠修改则保持。不要声称补上了未选范围或边缘已经精准。
+action=refine_mask：用户要求排除已有鼻部/嘴唇蒙版的误选、修正边缘或补回漏选时使用；mask_refinement_available=true才可用。程序用原图和本地五官神经模型修正，再由独立图像任务检查，核对通过才一次提交。不要让用户先手动画或重新建层。不支持隐藏部位、整脸皮肤或普通物体的此类补选。
+mask_refinement.method必须为exclude、boundary或restore。明确排除某块误选皮肤用exclude（mask_exclusion_available=true），会放大对照后定位排除点。边缘贴合、锯齿且未明确指出整块误选时，目标mask_boundary_refinable或selection_mask_boundary_refinable为true可用boundary。exclude和boundary仅减少原覆盖，再核对是否误删。明确补回未选入的可见五官用restore；目标mask_restorable或selection_mask_restorable为true才可用，程序保留原覆盖，仅在最初限定范围内增加可见五官，再核对新增是否属于目标，不猜坐标。不能把补选请求改成减少范围。旧范围若未记录原始限制，说明无法直接补选；不要自行扩成整脸或新建层。三种方式无法可靠修改则保持，不能声称精确、完整恢复或识别隐藏部位。
 用户称某处“选多了／是皮肤”不代表原图事实，必须自行看图确认。上下唇之间的暗线不是上唇外缘，不能因为上唇较浅或在暗线上方就删除上唇。准备后会对比修改前范围和本次减少，由AI复查是否误删真实目标；拒绝或不能确认时原范围和参数保持。
 有当前草稿时scope=current_selection、mask_refinement={layer_id:null,recipe:null或最终全部参数,method:上述方式}，selection_mask_refinable必须为true；只修范围用recipe=null，保留草稿和颜色。有绑定图层则保存原层；无绑定且同时调色时才新建层。不能丢掉草稿去改另一层。
 没有草稿时scope=existing_layers，从existing_layers中mask_refinable=true的明确目标选择layer_id，mask_refinement={layer_id:其精确id,recipe:null或该目标层全部最终参数,method:上述方式}。层名改变仍使用mask_part与id；可以修正未选中的已有层，不能用当前层配方覆盖目标层。未要求调色时recipe=null；要求同时调色时以该目标层已有配方为基础，仅修改用户要求的参数，保留锁定。嘴唇不能加磨皮。
@@ -214,7 +214,7 @@ def build_payload(
     if mode == "targets":
         context = {"request": text, "objects": (workspace or {}).get("objects", [])}
         selection_image = None
-    if mode in ("mask_points", "mask_review", "mask_validate"):
+    if mode in ("mask_points", "mask_review", "mask_validate", "mask_restore_validate"):
         context = {"request": text, "mode": mode, "face_part": (workspace or {}).get("face_part"),
                    "crop_size": (workspace or {}).get("crop_size"), "coordinate_system": "local_0_to_999"}
         if mode == 'mask_review':
@@ -234,6 +234,7 @@ def build_payload(
                     "mask_points": POINTS_PROMPT,
                     "mask_review": REVIEW_PROMPT,
                     "mask_validate": VERIFICATION_PROMPT,
+                    'mask_restore_validate': RESTORATION_PROMPT,
                     "scene": SCENE_PROMPT,
                     "targets": TARGETS_PROMPT,
                 }.get(mode, SYSTEM_PROMPT),
@@ -274,7 +275,7 @@ def build_payload(
         for key in keys:
             if (workspace or {}).get(key):
                 payload['messages'][1]['content'].append({'type': 'image_url', 'image_url': {'url': workspace[key]}})
-    if mode == 'mask_validate':
+    if mode in ('mask_validate','mask_restore_validate'):
         payload['messages'][1]['content'] = payload['messages'][1]['content'][:2]
         for key in ('reference_image', 'selection_overlay', 'changes_image', 'face_context_image'):
             if (workspace or {}).get(key):
@@ -294,6 +295,7 @@ def build_payload(
                         "mask_points": POINTS_SCHEMA,
                         "mask_review": REVIEW_SCHEMA,
                         "mask_validate": VERIFICATION_SCHEMA,
+                        'mask_restore_validate': VERIFICATION_SCHEMA,
                         "scene": SCENE_SCHEMA,
                         "targets": TARGETS_SCHEMA,
                     }.get(mode, RECIPE_SCHEMA),

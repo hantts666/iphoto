@@ -105,7 +105,7 @@ def refine(image, mask):
         result['bitmap'] = encode_bitmap(alpha,sampling='alpha',preserve_resolution=True)
     result["feather"] = mask["feather"]
     if semantic:
-        for key in ('semantic_target','face_binding','face_part'):
+        for key in ('semantic_target','face_binding','face_part','face_part_scope'):
             if key in mask:
                 result[key] = deepcopy(mask[key])
     return result, {

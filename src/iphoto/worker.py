@@ -227,7 +227,8 @@ def main():
         if request["source_sha"] != source.digest:
             raise ValueError("照片已变化，过期范围修正图未准备")
         if request.get('verify'):
-            picture, mask, overlay, box = prepare_crop(source.image, request['mask'], reference=request['reference_mask'])
+            picture, mask, overlay, box = prepare_crop(source.image, request['mask'], reference=request['reference_mask'],
+                opacity=.5 if request.get('restore_verify') is True else .4)
             regions = []
         elif request.get('review'):
             from .ai_mask_review import prepare_review
@@ -251,7 +252,7 @@ def main():
         if (request.get('review') or request.get('verify')) and request.get('reference_mask') is not None:
             from .ai_mask_review import comparison_images
 
-            for kind, item in zip(('reference', 'changes'), comparison_images(source.image, request['mask'], request['reference_mask'], box)):
+            for kind, item in zip(('reference', 'changes'), comparison_images(source.image, request['mask'], request['reference_mask'], box, restore=request.get('restore_verify') is True)):
                 path = cache / f"mask-refinement-{request['id']}-{kind}.png"
                 display(item).save(path, icc_profile=SRGB_PROFILE); assets.append(path)
                 crop_assets.add(path)

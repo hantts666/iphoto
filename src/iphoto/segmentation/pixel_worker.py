@@ -50,7 +50,7 @@ def main():
             if (any(job.get("mask_target") in ("face", "face_skin", "body_skin") for job in jobs)
                     or jobs and request.get("priority") != "low"):
                 first_face = next((index for index,job in enumerate(jobs,1)
-                                   if job.get("mask_target") in ("face","face_skin")),None)
+                                   if job.get("mask_target") in ("face","face_skin") or 'part_restore' in job),None)
                 if first_face is not None:
                     detail_progress("face_source",first_face,len(jobs))
                 source = load_native(request)

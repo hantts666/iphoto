@@ -54,6 +54,7 @@ def test_initial_lip_selection_keeps_soft_edges_mouth_holes_person_and_spatial_l
         features=features,target='face',scope='region',context_hint=rect(0,0,.5,1),part='lips')
     alpha=np.asarray(raster_mask(mask,image.size));extent=np.asarray(raster_mask(hint,image.size))
     assert quality['continuous_boundary'] and mask['face_part']=='lips'
+    assert mask['face_part_scope']==hint
     assert not np.any(alpha[classes==11]) and not np.any(alpha[classes==4]) and not np.any(alpha[:,120:])
     assert alpha[61,50]>0 and classes[61,50]==1  # the old binary erosion lost this edge
     assert not np.any(alpha[extent==0]) and image.tobytes()==source

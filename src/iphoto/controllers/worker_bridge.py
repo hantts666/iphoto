@@ -226,7 +226,8 @@ def _pixel_read(self):
                         and type(progress.get("part")) is int and type(progress.get("total")) is int
                         and 1 <= progress["part"] <= progress["total"] <= 16
                         and progress["total"] == len(active.get("jobs", []))
-                        and active["jobs"][progress["part"] - 1].get("mask_target") in ("face","face_skin")
+                        and (active["jobs"][progress["part"] - 1].get("mask_target") in ("face","face_skin")
+                             or 'part_restore' in active['jobs'][progress['part']-1])
                         and response.get("op") == "segment" and active.get("op") == "segment"
                         and response.get("generation") == self._generation
                         and active.get("generation") == self._generation
@@ -239,7 +240,7 @@ def _pixel_read(self):
                              "face_infer":"识别可见五官", "face_cached":"复用当前人脸分区",
                              "face_boundary":"定位原图五官边界",
                              "face_continuous":"准备连续五官边缘",
-                             "face_protect":"保护嘴内和周围皮肤" if job.get('face_part') == 'lips' else "保护其他五官和非面部区域",
+                             "face_protect":"保护嘴内和周围皮肤" if job.get('face_part',job.get('hint',{}).get('face_part')) == 'lips' else "保护其他五官和非面部区域",
                              "face_encode":"生成调整范围",
                              "face_fallback":"精细模型未完成，改用基础面部分区"}[progress["phase"]]
                     self._status = f"正在{phase} {progress['part']}/{progress['total']}…可随时取消"
