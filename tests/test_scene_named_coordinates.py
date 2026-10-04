@@ -47,8 +47,8 @@ def test_named_geometry_matches_legacy_geometry_and_does_not_mutate_reply():
     assert parse_scene(named)['objects'][0]['anchor']==pytest.approx([450/999,550/999])
 
 
-@pytest.mark.parametrize('bad',['negative','overflow','bool','nan','string','missing_box','extra_box',
-                               'missing_point','extra_point','hybrid','reversed','outside','empty'])
+@pytest.mark.parametrize('bad',['negative','overflow','bool','nan','string','missing_box',
+                               'missing_point','hybrid','reversed','outside','empty'])
 def test_invalid_named_geometry_is_rejected_without_partial_catalog(bad):
     value=body()
     item=deepcopy(value['objects'][0])
@@ -60,13 +60,22 @@ def test_invalid_named_geometry_is_rejected_without_partial_catalog(bad):
     elif bad=='nan':point['y']=float('nan')
     elif bad=='string':box['top']='150'
     elif bad=='missing_box':box.pop('top')
-    elif bad=='extra_box':box['width']=700
     elif bad=='missing_point':point.pop('y')
-    elif bad=='extra_point':point['confidence']=.9
     elif bad=='hybrid':item['point']=[450,550]
     elif bad=='reversed':box.update(left=800,right=100)
     elif bad=='outside':point['x']=900
     else:item['box']={}
+    with pytest.raises(ValueError,match='定位坐标'):
+        parse_scene(completion(value))
+
+
+def test_extra_coordinate_metadata_cannot_override_values_or_enter_the_catalog():
+    original=body();value=deepcopy(original)
+    value['objects'][0]['point'].update(use_y=999,confidence=.9,reason='unused')
+    value['objects'][0]['box'].update(width=-100,region='unused')
+    reply=completion(value);before=deepcopy(reply)
+    assert parse_scene(reply)==parse_scene(completion(original)) and reply==before
+    value['objects'][0]['point'].pop('y')
     with pytest.raises(ValueError,match='定位坐标'):
         parse_scene(completion(value))
 
@@ -93,6 +102,15 @@ def test_first_scene_accepts_named_reply_once_without_editing_document(canvas,pi
         assert len(requests)==1 and snapshot(editor)==before
         assert editor._scene.catalog['objects'][0]['anchor']==pytest.approx([450/999,550/999])
         assert editor.conversation[-1]['state']=='catalog'
+
+
+def test_first_scene_with_extra_point_metadata_does_not_trigger_a_validation_retry(canvas,pixel_protocol_stub):  # noqa: F811
+    ui,editor=canvas,canvas.e;before=snapshot(editor)
+    value=body();value['objects'][0]['point']['use_y']=550
+    with mock_api(completion(value)) as (url,requests):
+        configure(editor.ai,url);ui.click('analyzeSceneButton');done(editor)
+        assert len(requests)==1 and snapshot(editor)==before
+        assert editor._scene.catalog['objects'][0]['anchor']==pytest.approx([450/999,550/999])
 
 
 def test_invalid_named_first_reply_is_corrected_once_with_visible_progress(canvas,pixel_protocol_stub):  # noqa: F811

@@ -87,6 +87,22 @@ def _same_face(first, second):
     return (iou > .4 or containment >= .8) and distance <= .5
 
 
+def _clearer_landmarks(primary, candidate, size):
+    """A rotated, collapsed estimate may use a clearer matching neural pass."""
+    if not primary.get('detection_rotation') or candidate['detection_score'] < primary['detection_score'] + .05:
+        return False
+    bounds = np.asarray(primary['mask']['ops'][0]['points']) * size
+    width = np.ptp(bounds[:, 0])
+    spans = []
+    for face in (primary, candidate):
+        spans.append([np.linalg.norm(np.diff(np.asarray(face['face_features'][name]) * size, axis=0))
+                      for name in ('eyes', 'mouth')])
+    old, new = np.asarray(spans)
+    # Do not replace a legitimate narrow profile based only on confidence.
+    return bool(np.all(old < width * .18) and np.all(new >= old * 2)
+                and new[0] >= width * .12 and new[1] >= width * .08)
+
+
 def detect(image, *, engine=None, retry_rotated=True, warnings=None):
     """A bounded 1280px neural pass, normalized back to the photograph."""
     global _backend
@@ -162,6 +178,12 @@ def detect(image, *, engine=None, retry_rotated=True, warnings=None):
             if retinaface.available():
                 candidates = detect(proxy,engine=retinaface.backend(),retry_rotated=False)
                 extra = []
+                replacements = []
+                for known in hints:
+                    matches = [candidate for candidate in candidates if _same_face(candidate, known)]
+                    if (len(matches) == 1 and sum(_same_face(matches[0], other) for other in hints) == 1
+                            and _clearer_landmarks(known, matches[0], np.array(proxy.size))):
+                        replacements.append((known, matches[0]))
                 for hint in sorted(candidates,key=lambda h:h['detection_score'],reverse=True):
                     if any(_same_face(hint,known) for known in hints+extra):
                         continue
@@ -172,6 +194,12 @@ def detect(image, *, engine=None, retry_rotated=True, warnings=None):
                 # Keep primary geometry, order and IDs. Supplementary faces
                 # receive new IDs even when they appear to its left or above.
                 hints.extend(sorted(extra,key=lambda h:(h['anchor'][0],h['anchor'][1])))
+                for known, candidate in replacements:
+                    # Preserve the primary face boundary, crop, order and ID.
+                    # The nose and feature points are one coherent estimate.
+                    known['anchor'] = candidate['anchor']
+                    known['face_features'] = candidate['face_features']
+                    known['landmark_model'] = 'RetinaFace MobileNet0.25'
         except Exception:
             # An optional model cannot discard another model's valid faces.
             if warnings is not None:

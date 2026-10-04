@@ -167,9 +167,25 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     box = crop_pixels(crop or region_crop(hint, (384, 384)), image.size)
     left, top, right, bottom = box
     patch = image.crop(box).convert("RGB")
-    engine = engine or backend()
-    native = callable(getattr(engine, "predict_native", None))
-    labels = np.asarray(engine.predict_native(patch) if native else engine.predict(patch))
+    precision = False
+    fallback = False
+    if features is not None:
+        features = validate_features(features)
+    if engine is None and part in PARTS and features is not None:
+        from . import face_precision
+        if face_precision.available():
+            landmarks = np.asarray([*features['eyes'], points[0][:2], *features['mouth']]) * image.size - (left,top)
+            try:
+                labels = face_precision.backend().predict_native(patch,landmarks)
+                precision = True
+            except Exception:
+                fallback = True
+    engine = engine or (None if precision else backend())
+    if precision:
+        native = True
+    else:
+        native = callable(getattr(engine, "predict_native", None))
+        labels = np.asarray(engine.predict_native(patch) if native else engine.predict(patch))
     expected = (patch.height, patch.width) if native else (512, 512)
     if labels.shape != expected or labels.dtype != np.uint8 or labels.max() > 18:
         raise ValueError("面部皮肤分区无效，照片未改变")
@@ -261,7 +277,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
                   label=(hint["label"] + (" · " + PARTS[part]['label'] if part in PARTS else " · 面部局部" if scope == 'region' else " · 人脸" if target == "face" else " · 面部皮肤"))[:200],
                   semantic_target=target)
     quality = {
-        "model": "BiSeNet · 嘴唇" if part == 'lips' else "BiSeNet · 人脸" if target == "face" else "BiSeNet · 面部皮肤", "semantic_target": target,
+        "model": ("FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
         "protected_features": ["嘴内", "面部皮肤", "鼻子", "眼睛", "眉毛", "头发", "帽子", "衣物"] if part == 'lips' else ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
         "warnings": [("嘴唇" if part == 'lips' else "人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
@@ -274,4 +290,6 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         "face_part": part,
         "scope_feather_px": scope_feather,
     }
+    if fallback:
+        quality['warnings'].insert(0,'精细五官模型未完成，已使用基础面部分区；请放大检查边缘')
     return result, quality

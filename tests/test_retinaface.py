@@ -183,3 +183,72 @@ def test_supplement_is_capped_without_discarding_primary_identity(monkeypatch):
     assert len(result)==16 and result[0]==expected
     assert [f['id'] for f in result]==[f'local-face-{i}' for i in range(1,17)]
     assert all(f['anchor']!=[.05,.05] for f in result[1:])
+
+
+def landmark_pair():
+    image = Image.new('RGB',(1000,700))
+    primary = face_detection.detect(image,engine=engine(face_row(),[]))[0]
+    primary.update(detection_rotation=-30,detection_score=.82,
+                   face_features={'eyes':[[.19,.23],[.20,.23]],'mouth':[[.19,.36],[.20,.36]]})
+    candidate = face_detection.detect(image,engine=engine(face_row(),[]))[0]
+    candidate['detection_score'] = .93
+    return primary,candidate,image.size
+
+
+@pytest.mark.parametrize('case',('valid','ordinary','low_score','healthy_pair','collapsed_candidate','ambiguous_profile'))
+def test_landmark_replacement_requires_collapsed_rotated_and_clearer_neural_geometry(case):
+    first,second,size = landmark_pair()
+    if case=='ordinary':first.pop('detection_rotation')
+    elif case=='low_score':second['detection_score']=.85
+    elif case=='healthy_pair':first['face_features']['eyes']=second['face_features']['eyes']
+    elif case=='collapsed_candidate':second['face_features']['mouth']=first['face_features']['mouth']
+    elif case=='ambiguous_profile':second['face_features']['eyes']=[[.19,.23],[.212,.23]]
+    assert face_detection._clearer_landmarks(first,second,np.array(size)) == (case=='valid')
+
+
+def test_rotated_matching_landmarks_are_replaced_without_new_identity_or_boundary(monkeypatch):
+    from copy import deepcopy
+    image=Image.new('RGB',(1000,1000));collapsed=face_row()
+    collapsed[0,[0,4,6,8,10,12]] += 400
+    collapsed[0,[1,5,7,9,11,13]] += 400
+    collapsed[0,[4,6,10,12]]=[597,601,597,601];collapsed[0,-1]=.82
+    calls=[]
+    def primary():
+        calls.clear()
+        return SimpleNamespace(setInputSize=lambda size:calls.append(size),
+            detect=lambda pixels:(True,None if len(calls)==1 else collapsed))
+    monkeypatch.setattr(face_detection,'_backend',primary())
+    monkeypatch.setattr(retinaface,'available',lambda:False)
+    before=deepcopy(face_detection.detect(image)[0])
+    bounds=np.asarray(before['mask']['ops'][0]['points']);left,top=bounds.min(0);right,bottom=bounds.max(0)
+    width=right-left;height=bottom-top;anchor=np.array(before['anchor'])+[.003,.003]
+    points=np.array([[left+width*.25,top+height*.3],[left+width*.75,top+height*.3],anchor,
+                     [left+width*.3,top+height*.75],[left+width*.7,top+height*.75]])*1000
+    candidate=np.array([[left*1000,top*1000,width*1000,height*1000,*points.ravel(),.99]],np.float32)
+    monkeypatch.setattr(face_detection,'_backend',primary())
+    monkeypatch.setattr(retinaface,'available',lambda:True)
+    monkeypatch.setattr(retinaface,'backend',lambda:engine(candidate,[]))
+    after=face_detection.detect(image)
+    assert len(after)==1 and after[0]['landmark_model']=='RetinaFace MobileNet0.25'
+    expected=face_detection.detect(image,engine=engine(candidate,[]))[0]
+    assert after[0]['anchor']==expected['anchor'] and after[0]['face_features']==expected['face_features']
+    for key in before.keys()-{'anchor','face_features'}:assert after[0][key]==before[key]
+
+
+def test_ambiguous_supplement_landmarks_keep_primary_estimate(monkeypatch):
+    image=Image.new('RGB',(1000,1000));rows=face_row();rows[0,:14:2]+=400;rows[0,1:14:2]+=400
+    rows[0,[4,6,10,12]]=[597,601,597,601];rows[0,-1]=.82
+    def primary():
+        calls=[]
+        return SimpleNamespace(setInputSize=lambda size:calls.append(size),
+            detect=lambda pixels:(True,None if len(calls)==1 else rows))
+    monkeypatch.setattr(face_detection,'_backend',primary());monkeypatch.setattr(retinaface,'available',lambda:False)
+    before=face_detection.detect(image)
+    points=np.asarray(before[0]['mask']['ops'][0]['points']);left,top=points.min(0);right,bottom=points.max(0)
+    anchor=np.array(before[0]['anchor'])*1000
+    duplicate=np.array([[left*1000,top*1000,(right-left)*1000,(bottom-top)*1000,
+        left*1000+50,top*1000+50,right*1000-50,top*1000+50,*anchor,
+        left*1000+60,bottom*1000-50,right*1000-60,bottom*1000-50,.99]],np.float32)
+    monkeypatch.setattr(face_detection,'_backend',primary());monkeypatch.setattr(retinaface,'available',lambda:True)
+    monkeypatch.setattr(retinaface,'backend',lambda:engine(np.concatenate([duplicate,duplicate]),[]))
+    assert face_detection.detect(image)==before

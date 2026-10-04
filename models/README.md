@@ -39,6 +39,31 @@ AI 分区使用 `mask_target=face_skin` 指定单个人脸，独立像素进程�
 
 皮肤范围还参考人脸检测器的眼睛与嘴角定位，为分区模型误判的五官增加局部保护。只使用落在合理面部类别上的可见定位点；落在帽子、鼻子或背景的眼部猜测不扩展为保护孔洞。完整人脸模式不使用这些孔洞。局部保护采用保守椭圆，可能连带少量邻近皮肤，不能等同于五官级真值。
 
+## 精细五官 · FaRL LaPa（1.9.10，可选）
+
+鼻部和嘴唇入口在精细模型已配置且有五点定位时自动使用FaRL LaPa；没有配置时沿用BiSeNet。完整人脸和皮肤磨皮继续使用19类BiSeNet，避免11类LaPa缺少颈部、帽子、衣物独立类别造成保护退步。模型异常时提示已使用基础分区；无法确认面部或指定部位时不扩大选区。
+
+权重为[FacER作者模型发布](https://github.com/FacePerceiver/facer/releases/tag/models-v1)的 `face_parsing.farl.lapa.main_ema_136500_jit191.pt`：646,604,126字节、SHA256 `f5a874906795ef89fadd7cf3b5b218ed8550fa9dbb383b7c0f95726c3a352914`。五点对齐、448输入、warp_factor=0.8和类别映射依据[固定作者源码](https://github.com/FacePerceiver/facer/blob/ddd35c76ff840174b8a5403ad1c1255e37b8782b/facer/face_parsing/farl.py)，保留[FaRL许可](../docs/licenses/FaRL-MIT.txt)与[FacER许可](../docs/licenses/facer-MIT.txt)。不是发丝透明度模型。
+
+隔离转换器读取已校验的官方Torch 1.9 JIT参数，按原推理算子导出固定1×3×448×448 ONNX。采用torch==2.6.0+cpu、onnx==1.17.0，重复导出同一摘要，645,022,368字节、SHA256 `60a239ea923ec79d26d966015ef2b462e13d3963f8d551fc7c15bae6d7fff279`。转换前对照官方JIT分数；最终应用只使用NumPy和现有ONNX Runtime，CPU最多四线程。输入采用原图EXIF/ICC读取流程，512输出分数先逆变换到原像素再分类，64×1024分块；没有先放大类别图。单人脸语义缓存最多16MB，核对实际像素、尺寸和五点变换，鼻部/嘴唇连续操作复用，换图或定位改变即失效。
+
+已有已验证ONNX可直接安装：
+
+```powershell
+.venv/Scripts/python.exe scripts/setup_face_precision.py --onnx artifacts/farl-lapa-448.onnx
+```
+
+从官方源转换时使用单独的Python环境，不给应用安装Torch：
+
+```powershell
+python -m venv artifacts/face-converter
+artifacts/face-converter/Scripts/python.exe -m pip install torch==2.6.0+cpu --index-url https://download.pytorch.org/whl/cpu
+artifacts/face-converter/Scripts/python.exe -m pip install onnx==1.17.0
+.venv/Scripts/python.exe scripts/setup_face_precision.py --python artifacts/face-converter/Scripts/python.exe
+```
+
+`--source`可复用已下载的官方JIT文件；大小和摘要不符时不加载、不安装。权重位于 `models/face-parsing/farl-lapa-448.onnx`，不入Git，不在UI下载。当前机器已安装，重新打开应用后使用。较大的模型增加第一次等待及内存占用；遮挡侧脸上唇仍可能带入周围皮肤，小脸也可能漏掉细唇，须放大检查，不能称为任意照片精确五官选择。
+
 ## 人脸检测 · YuNet 与 RetinaFace
 
 显式运行 `.venv\Scripts\python.exe scripts/setup_face_detection.py`，安装并校验以下两个模型。已有YuNet环境可以再次运行，安装侧脸补充；应用本身不下载权重。
@@ -48,6 +73,8 @@ AI 分区使用 `mask_target=face_skin` 指定单个人脸，独立像素进程�
 侧脸补充使用[作者 RetinaFace MobileNet0.25 ONNX](https://github.com/yakhyo/retinaface-pytorch/releases/tag/v0.0.1)，文件 `models/face-detection/retinaface_mv1_0.25.onnx`，1,736,694字节，固定SHA256 `b7a7acab55e104dce6f32cdfff929bd83946da5cd869b9e2e9bdffafd1b7e4a5`。预处理、先验与解码依据[作者代码修订](https://github.com/yakhyo/retinaface-pytorch/tree/4cd6e3471e5bac794637290a530566f463db4762)，保留[MIT许可](../docs/licenses/RetinaFace-MIT.txt)。CPU ONNX Runtime，最多四个推理线程，首次使用才加载，不增加Torch依赖；安装和首次加载均校验摘要。
 
 打开照片在图像进程上做最长边1280px的本地检测，阈值0.8，最多16个人脸；YuNet没有可靠结果时尝试±30°旋转输入，将定位映射回原图。随后用已配置的RetinaFace补充检查遗漏，包括原检测已找到部分脸的情况。交叠范围还需相近鼻点才合并为同一脸，原成功定位及编号保留，新脸追加编号；已达到16脸时跳过补充。没有配置补充时沿用原流程，补充模型异常保留原结果并提示。检测框只是身份与裁切上下文，最终面部范围由 BiSeNet 计算，整个人脸和皮肤分别输出原尺寸蒙版。没有检测结果时不会生成占位矩形冒充精准选区，侧脸可继续用云端文字定位，背向不可见的脸不应被生成。补充仍不保证所有极小、拥挤或遮挡人脸都能识别。
+
+1.9.10对旋转检测中眼睛/嘴角均挤在一起的五点估计补充校正：仅当RetinaFace与当前脸唯一匹配、置信分数高至少0.05，且两对定位点跨度明显更合理时使用它的鼻点与五官点；原框、裁切、编号、顺序不变。普通定位、歧义匹配和仍然集中在一起的候选保持原估计。此为神经检测结果的保守融合规则，分数并不等同于真值准确率。
 
 ## 身体裸露部位 · EfficientSAM 原图局部
 

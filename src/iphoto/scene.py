@@ -62,9 +62,12 @@ def _scene_box_hint(box, point):
     # Explicit fields reduce ambiguous coordinate-array replies. Normalize only
     # the validated representation; legacy arrays keep their existing contract.
     if isinstance(box, dict) or isinstance(point, dict):
-        if (not isinstance(box, dict) or set(box) != {"left", "top", "right", "bottom"}
-                or not isinstance(point, dict) or set(point) != {"x", "y"}):
+        if (not isinstance(box, dict) or not {"left", "top", "right", "bottom"} <= box.keys()
+                or not isinstance(point, dict) or not {"x", "y"} <= point.keys()):
             raise ValueError("目标框需要left/top/right/bottom，内部点需要x/y")
+        # Some compatible providers add metadata despite the strict schema.
+        # Read only these unambiguous named coordinates. Extra values never
+        # supply a missing coordinate, override it or enter the saved catalog.
         box = [number(box[key], 0, 999) for key in ("left", "top", "right", "bottom")]
         point = [number(point[key], 0, 999) for key in ("x", "y")]
     return box_hint(box, point)
