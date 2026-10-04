@@ -345,7 +345,7 @@ class AIController(QObject):
                 "regions": "AI 正在规划分区图层…",
                 "auto": "AI 正在判断调整范围并规划图层…",
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
-                "matte_review":"4/4 AI 正在核对黑白底与原像素边缘，检查灰云、串色与遗漏…可取消",
+                "matte_review":"4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消",
                 "mask_points": "AI 正在对照原图与蒙版，定位误选范围…",
                 "mask_review": "AI 正在复查修正结果，检查残留误选…",
                 "mask_validate": "AI 正在对比修改前后，核对是否误删真实五官…",
@@ -426,7 +426,7 @@ class AIController(QObject):
                 elif context["mode"] == "photo_review":
                     result = parse_photo_review(response, context["workspace"])
                 elif context["mode"] == "matte_review":
-                    result = parse_matte_review(response)
+                    result = parse_matte_review(response, context['workspace'])
                 elif context["mode"] == "selection":
                     result = parse_selection(response)
                 elif context["mode"] == "repair":

@@ -19,7 +19,7 @@ def completion(plan):
 
 
 @pytest.mark.parametrize('status',['accept','reject','uncertain'])
-def test_review_is_an_observation_only_contract(status):
+def test_terminal_review_cannot_return_editing_instructions(status):
     plan={'status':status,'summary':'白底发丝可见灰块'}
     assert parse_review(completion(plan))==plan
     with pytest.raises(ValueError):parse_review(completion({**plan,'recipe':Recipe().to_dict()}))
@@ -65,12 +65,21 @@ def test_review_native_crops_match_actual_export_composition(tmp_path):
     source=Image.new('RGB',(1200,900),(85,102,68));original=source.tobytes()
     mask={**empty_mask(),'bitmap':encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)}
     result=render_review(source,[new_layer('原图',True)],mask,tmp_path,1)
-    assert 3<=len(result['images'])<=9
+    assert 3<=len(result['images'])<=18 and 2<=len(result['review_images'])<=6
     expected=Image.alpha_composite(Image.new('RGBA',source.size,'white'),compose_cutout(source,Image.fromarray(a))).convert('RGB')
     box=result['boxes'][0]
     native=next(v for v in result['images'] if v['label']=='边缘1原像素候选白底')
     image=Image.open(native['path'])
     assert image.size==(box[2]-box[0],box[3]-box[1]) and image.tobytes()==expected.crop(box).tobytes()
+    checker=Image.open(next(v['path'] for v in result['images'] if '边缘1原像素候选紫色棋盘格' in v['label']))
+    assert checker.size==image.size
+    transparent=np.asarray(Image.fromarray(a).crop(box))==0
+    yy,xx=np.indices((checker.height,checker.width));pattern=(xx//20+yy//20)%2
+    colors=np.array([[119,82,166],[170,130,200]],np.uint8)
+    assert np.array_equal(np.asarray(checker)[transparent],colors[pattern][transparent])
+    panel=Image.open(next(v['path'] for v in result['images'] if '边缘1原像素四格质量对照' in v['label']))
+    assert panel.size==(image.width*2,(image.height+24)*2)
+    assert panel.crop((0,image.height+48,image.width,panel.height)).tobytes()==image.tobytes()
     assert source.tobytes()==original
     assert edge_boxes(Image.new('L',(16,18)))==[]
 
@@ -81,4 +90,15 @@ def test_review_payload_sends_labeled_evidence_once_and_strict_schema():
     body=build_payload(settings,'头发抠图',Recipe().to_dict(),[],'unused','matte_review',{'review_images':pictures})
     content=body['messages'][1]['content']
     assert [v['image_url']['url'] for v in content if v['type']=='image_url']==[v['url'] for v in pictures]
-    assert set(body['response_format']['json_schema']['schema']['properties'])=={'status','summary'}
+    assert set(body['response_format']['json_schema']['schema']['properties'])=={'status','summary','corrections'}
+
+
+def test_tested_qwen_review_has_bounded_reasoning_without_incompatible_json_mode():
+    settings=AISettings.validated('qwen','https://example.com/v1','qwen3.8-max')
+    body=build_payload(settings,'头发抠图',Recipe().to_dict(),[],'unused','matte_review',{})
+    assert body['enable_thinking'] is True and body['thinking_budget']==512
+    assert body['max_tokens']==4096 and 'response_format' not in body and 'reasoning_effort' not in body
+    ordinary=build_payload(settings,'回答',Recipe().to_dict(),[],'unused','advice',{})
+    assert ordinary['enable_thinking'] is False and 'thinking_budget' not in ordinary and 'response_format' in ordinary
+    older=AISettings.validated('qwen','https://example.com/v1','qwen-vl-max')
+    assert build_payload(older,'修图',Recipe().to_dict(),[],'unused','matte_review',{})['enable_thinking'] is False

@@ -341,6 +341,14 @@ def build_payload(
         )
         if settings.provider in {"qwen", "qianwen", "qianwen_token_plan"}:
             payload["enable_thinking"] = False
+            if mode=='matte_review' and settings.model.startswith('qwen3.8-max'):
+                # Validated on the actual endpoint: a small reasoning budget
+                # improves aligned visual comparisons without the unbounded
+                # medium-effort timeout. Qwen JSON mode and thinking do not
+                # combine; retain the strict local parser and one retry.
+                payload['enable_thinking']=True
+                payload['thinking_budget']=512
+                payload.pop('response_format',None)
     return payload
 
 

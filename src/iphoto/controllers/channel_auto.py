@@ -27,6 +27,7 @@ def begin(e, result):
         if pending['binding'] != e._document_signature():
             raise ValueError('照片已变化，通道抠图未启动')
         state = {'token':uuid4().hex, 'generation':e._generation, 'candidate':deepcopy(e._candidate),
+                 'revision':0,
                  'target_id':e._selection_target_id, 'bound':result['scope']=='current_layer' or bool(e._selection_target_id),
                  'summary':result['summary'], 'interior':any(word in pending['text'] for word in ('薄纱','纱布','玻璃','透明内部','细枝','树枝','针叶','镂空','孔洞'))}
         pending['channel_auto'] = state
@@ -75,13 +76,19 @@ def complete(e, result, token):
             return
         pending, state = current
         mask = validate_mask(result['mask'])
+        if state['revision']:
+            previous=state['result']['quality']
+            result={**result,'quality':{**previous,'correction':deepcopy(result['quality']),
+                                      'warnings':previous['warnings']+result['quality']['warnings'],
+                                      'elapsed_ms':round(previous['elapsed_ms']+result['quality']['elapsed_ms'],1)}}
         state['result'] = deepcopy(result)
         staged = deepcopy(e._layers)
         if state['bound']:
             target = state['target_id'] or e._selected
             next(layer for layer in staged if layer['id']==target)['mask'] = mask
-        e._status = '4/4 正在准备实际黑白底与原像素边缘，核对抠图质量…可取消'
+        e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
         e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
+                   **({'review_boxes':state['review_boxes']} if state['revision'] else {}),
                    context={'token':token})
     except (ValueError, KeyError, StopIteration) as exc:
         e._notify(str(exc), True)
@@ -94,11 +101,19 @@ def review_ready(e, result, context, generation):
             return
         pending, state = current
         state['reviewing'] = True
-        images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['images']]
-        e._status = '4/4 AI 正在对比原图、黑白底与原像素边缘，检查灰云、串色与遗漏…可取消'
+        state['review_boxes'] = deepcopy(result['boxes'])
+        from ..segmentation.precise_sam import available
+        state['correction_available'] = available() and bool(result['boxes']) and not state['revision']
+        images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['review_images']]
+        e._status = '4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消'
         e.changed.emit()
         e.ai.plan(pending['text'], Recipe().to_dict(), [], result['images'][0]['path'], generation,
                   'matte_review', {'target':state['mask']['label'],
+                                   'revision':state['revision'],'edge_count':len(result['boxes']),
+                                   'keep_candidates':result['keep_candidates'],
+                                   'exclude_candidates':result['exclude_candidates'],
+                                   'correction_available':state['correction_available'],
+                                   'previous_check':state.get('previous_check',''),
                                    'quality':state['result']['quality'],'review_images':images})
     except (ValueError, KeyError, OSError) as exc:
         e._notify(str(exc), True)
@@ -113,6 +128,18 @@ def reviewed(e, review):
         if current is None:
             return
         pending,state = current
+        state['reviewing'] = False
+        if review['status']=='revise':
+            from ..matte_review import validate_corrections
+            if state['revision'] or not state.get('correction_available'):
+                raise ValueError('本轮不能再次纠错，原范围保留')
+            corrections=validate_corrections(review['corrections'],len(state['review_boxes']))
+            state['revision']=1
+            state['previous_check']=review['summary']
+            e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'
+            e._request('matte',method='correction',mask=state['result']['mask'],
+                       corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'])
+            return
         if review['status'] != 'accept':
             e._pending_request = None
             e._message('assistant','候选抠图未通过实际效果检查，原范围保留。\n'+review['summary'],
@@ -130,6 +157,8 @@ def reviewed(e, review):
             detail += ' · 原像素细纹理'
         if quality.get('color_recovery'):
             detail += ' · 透明输出去背景串色'
+        if quality.get('correction'):
+            detail += ' · AI 已按实际效果纠错并复查'
         if quality['warnings']:
             detail += ' · ' + '；'.join(quality['warnings'])
         e._selection_quality = detail

@@ -72,7 +72,7 @@ def read(self):
                      and not self.hasRegionDraft))
             )
             if "progress" in response:
-                if current and active.get("method") in ("neural", "channel"):
+                if current and active.get("method") in ("neural", "channel", "correction"):
                     _progress(self, active, response["progress"])
                 continue
             self._matte_active = None
@@ -105,6 +105,10 @@ def _progress(self, active, progress):
         self._status = "正在读取原图并准备局部透明细化…可随时取消" if "stroke" in active else "正在读取原图并准备 AI 边缘模型…可随时取消"
     elif progress == {'phase':'polish'} and active.get('method') == 'channel':
         self._status = '正在按原像素颜色细化发丝与透明细纹…可随时取消'
+    elif progress == {'phase':'semantic'} and active.get('method') == 'correction':
+        active.pop('detail_tile',None)
+        active.pop('detail_tiles',None)
+        self._status = 'AI 正在按效果检查的保留 / 排除点修正局部误选…可随时取消'
     elif progress.get("phase") == "details":
         tile, tiles = progress.get("tile"), progress.get("tiles")
         if (type(tile) is not int or type(tiles) is not int or not 1 <= tile <= tiles <= 128

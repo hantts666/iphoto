@@ -6,6 +6,7 @@ from test_ai import wait_for
 from test_canvas_ui import canvas  # noqa: F401
 from test_channel_matting import scene
 from test_editor import settled
+from test_scene_object_actions_ui import reveal
 
 
 def test_channel_dialog_controls_publish_only_after_apply(canvas,tmp_path):  # noqa: F811
@@ -14,7 +15,10 @@ def test_channel_dialog_controls_publish_only_after_apply(canvas,tmp_path):  # n
     ui.e.openImage(str(path));wait_for(lambda:ui.e.hasImage and settled(ui.e))
     ui.e._set_candidate(mask);wait_for(lambda:settled(ui.e))
     original=deepcopy(ui.e._layers);before=deepcopy(ui.e._candidate)
-    ui.e.channelMask.open()
+    ui.click('jumpToRefineButton')
+    assert ui.find('refineAdvancedButton').property('text')=='高级…'
+    assert ui.find('channelMaskButton').isVisible()
+    reveal(ui,'channelMaskButton');ui.click('channelMaskButton')
     wait_for(lambda:ui.e.channelMask.opened and not ui.e.channelMask.loading and ui.e.channelMask.previewUrl)
     wait_for(lambda:ui.find('channelMaskDialog').property('opened'))
     assert ui.e._layers==original and ui.e._candidate==before
