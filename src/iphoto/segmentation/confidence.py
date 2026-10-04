@@ -16,7 +16,9 @@ from ..masks import encode_bitmap
 from ..matting import neural
 from ..matting.trimap import make_trimap
 
-MAX_ROI = 2_000_000
+MAX_ROI = 4_000_000
+SPARSE_ROI = 2_000_000
+CORE_MARGIN = 6
 MAX_REGIONS = 4
 MAX_SECONDS = 180
 SEED_PERCENTILE = 5
@@ -40,11 +42,35 @@ def _local_logits(logits, box, size):
                      cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
 
-def _plans(hard, logits, points):
+def _could_supply_seeds(logits, box, size, selected):
+    """Reject fields whose interpolation bounds cannot pass the seed gates.
+
+    Bilinear samples are convex combinations of nearby proxy values. Include
+    one extra sample for coordinate quantization and a float rounding margin.
+    This conservative rejection never supplies semantic foreground labels.
+    """
+    left, top, right, bottom = box
+    height, width = logits.shape
+    x0 = max(0, int(np.floor((left+.5)*width/size[0]-.5))-1)
+    y0 = max(0, int(np.floor((top+.5)*height/size[1]-.5))-1)
+    x1 = min(width, int(np.ceil((right-.5)*width/size[0]-.5))+2)
+    y1 = min(height, int(np.ceil((bottom-.5)*height/size[1]-.5))+2)
+    field = logits[y0:y1, x0:x1]
+    low, high = float(field.min()), float(field.max())
+    if not selected:
+        low, high = -high, -low
+    tolerance = max(1., abs(low), abs(high))*1e-4
+    return high+tolerance >= 3 and high-low+2*tolerance >= .5
+
+
+def _plans(hard, logits, points, *, started=None):
+    started = perf_counter() if started is None else started
     height, width = hard.shape
     candidates = []
     # Labels for one class are released before examining the other class.
     for selected in (False, True):
+        if perf_counter()-started > MAX_SECONDS:
+            raise ValueError("细节规划超时，原选区保留；请缩小范围")
         count, labels, stats, _ = cv2.connectedComponentsWithStats(
             (hard == selected).astype(np.uint8), connectivity=8)
         order = sorted(range(1, count), key=lambda i: int(stats[i, 4]), reverse=True)
@@ -56,6 +82,10 @@ def _plans(hard, logits, points):
             left, top, right, bottom = box
             if (right-left)*(bottom-top) > MAX_ROI:
                 continue
+            if perf_counter()-started > MAX_SECONDS:
+                raise ValueError("细节规划超时，原选区保留；请缩小范围")
+            if not _could_supply_seeds(logits, box, (width, height), selected):
+                continue
             component = labels[top:bottom, left:right] == lid
             confidence = _local_logits(logits, box, (width, height))
             margin = confidence if selected else -confidence
@@ -64,12 +94,24 @@ def _plans(hard, logits, points):
             # A flat or weak model field offers no basis for choosing seeds.
             if threshold < 3 or threshold-float(np.median(values)) < .5:
                 continue
+            core = None
+            if (right-left)*(bottom-top) > SPARSE_ROI:
+                # Global top-5% seeds can cluster in one corner. Other matte
+                # tiles then lack solid foreground context, turning opaque
+                # hair into rectangular patches. Larger regions need a
+                # strong eroded semantic core; weak fields keep edge fallback.
+                core = cv2.erode((component & (margin >= CORE_MARGIN)).astype(np.uint8),
+                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))) > 0
+                if np.count_nonzero(core) < area*.5:
+                    continue
             support = cv2.dilate(component.astype(np.uint8),
                                  cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))) > 0
             local_hard = hard[top:bottom, left:right]
             guide = (local_hard == selected).astype(np.uint8)*255
             guide[support] = 128
             guide[component & (margin >= threshold)] = 255
+            if core is not None:
+                guide[core] = 255
             for px, py, label in points:
                 ax, ay = round(px*(width-1)), round(py*(height-1))
                 if left <= ax < right and top <= ay < bottom:
@@ -96,7 +138,7 @@ def recover(image, mask, logits, points, *, engine=None, progress=None):
         raise ValueError("细节约束的模型输出无效，原选区保留")
     original = np.asarray(raster_mask({**mask, "feather": 0}, image.size))
     hard = original >= 128
-    plans = _plans(hard, logits, points)
+    plans = _plans(hard, logits, points, started=started)
     if not plans:
         return None
     radius = min(64, max(8, round(8*max(image.size)/1600)))
@@ -123,6 +165,7 @@ def recover(image, mask, logits, points, *, engine=None, progress=None):
         output[top:bottom, left:right][support] = pixels[support]
         regions.append({"roi": list(box), "class": "selected" if selected else "excluded",
                         "area": area, "seed_margin": round(threshold, 3),
+                        "constraints": "semantic-core" if guide.size > SPARSE_ROI else "sparse-ranking",
                         "unknown_pixels": int((guide == 128).sum()), "tiles": count})
     for x, y, label in points:
         value = output[round(y*(image.height-1)), round(x*(image.width-1))]

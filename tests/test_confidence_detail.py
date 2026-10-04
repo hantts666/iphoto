@@ -143,3 +143,57 @@ def test_hint_only_AI_job_receives_internal_anchor_without_visible_point_changes
     assert captured and len(captured[0]) == 1 and captured[0][0][2] == 1
     assert mask == before and result["label"] == "天空"
     assert q["detail_recovery"]["guidance"] == "learned-confidence"
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_larger_regions_need_a_semantic_core_and_retain_uncertain_detail(monkeypatch, selected):
+    _, seed, logits, _ = scene()
+    logits[25:135,25:175] -= 1  # Enough strong interior to pass the core gate.
+    monkeypatch.setattr(confidence, "SPARSE_ROI", 20_000)
+    hard = seed >= 128
+    if selected:
+        hard, logits = ~hard, -logits
+    plans = confidence._plans(hard, logits, [])
+    assert plans
+    _, box, support, guide, class_, _ = plans[0]
+    component = hard[box[1]:box[3], box[0]:box[2]] == selected
+    margin = confidence._local_logits(logits, box, (600, 360)) * (1 if selected else -1)
+    assert class_ == selected and guide.size > confidence.SPARSE_ROI
+    assert (guide[component] == 255).mean() >= .5
+    assert np.any((guide == 128) & component & (margin < confidence.CORE_MARGIN))
+    assert np.any((guide == 128) & support & ~component)
+    # Geometry never invents solid foreground from a weak neural field.
+    weak = np.where(hard, 4., -4.).astype(np.float32)
+    weak[25:135, 25:175] += np.linspace(0, 1.5, 150, dtype=np.float32) * (1 if selected else -1)
+    assert confidence._plans(hard, weak, []) == []
+
+
+def test_weak_regions_are_declined_before_native_float_allocations(monkeypatch):
+    _, seed, _, _ = scene()
+    monkeypatch.setattr(confidence, "_local_logits", lambda *a: pytest.fail("Weak field allocated a native ROI"))
+    weak = np.where(seed > 127, 8., -2.).astype(np.float32)
+    assert confidence._plans(seed >= 128, weak, []) == []
+
+
+def test_interpolation_bounds_never_reject_a_field_that_passes_seed_gates():
+    rng = np.random.default_rng(120)
+    for size, box in [((6016,4016),(0,0,190,140)), ((500,300),(277,114,490,296)),
+                      ((25,17),(1,1,24,16))]:
+        for selected in (False, True):
+            for scale in (.00001,.1,.499,.501,1,8):
+                logits = rng.uniform(2.9-scale, 2.9+scale, (37,53)).astype(np.float32)
+                if not selected:
+                    logits = -logits
+                local = confidence._local_logits(logits, box, size) * (1 if selected else -1)
+                threshold = float(np.percentile(local,95))
+                if threshold >= 3 and threshold-float(np.median(local)) >= .5:
+                    assert confidence._could_supply_seeds(logits, box, size, selected)
+
+
+def test_planning_deadline_covers_work_before_the_first_matte_tile(monkeypatch):
+    _, seed, logits, _ = scene()
+    monkeypatch.setattr(confidence, "perf_counter", lambda: 11.)
+    monkeypatch.setattr(confidence, "MAX_SECONDS", 1.)
+    monkeypatch.setattr(confidence, "_local_logits", lambda *a: pytest.fail("Expired planning sampled an ROI"))
+    with pytest.raises(ValueError, match="规划超时"):
+        confidence._plans(seed >= 128, logits, [], started=9.)

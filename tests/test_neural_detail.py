@@ -281,8 +281,8 @@ def test_native_selection_uses_detail_model_but_background_preview_does_not(monk
     phases = []
     foreground = service.segment_jobs(image,[{"id":"sky","points":points}],source=image,detail_progress=lambda *x:phases.append(x))
     assert foreground["items"][0]["quality"]["detail_recovery"]["reopened_pixels"]>1000
-    assert phases[:2] == [("segment",1,1),("details",1,1)]
-    assert phases[2:] and all(p[0]=="details" and len(p)==5 for p in phases[2:])
+    assert phases[:3] == [("segment",1,1),("details_plan",1,1),("details",1,1)]
+    assert phases[3:] and all(p[0]=="details" and len(p)==5 for p in phases[3:])
     phases.clear()
     background = service.segment_jobs(image,[{"id":"sky","points":points}],tolerant=True,detail_progress=lambda *x:phases.append(x))
     assert "original_matting" not in background["items"][0]["quality"]

@@ -185,7 +185,7 @@ def segment(image, hint=None, points=None, *, engine=None, soften=True, progress
     detail_done = False
     if use_details:
         if progress is not None:
-            progress("details")
+            progress("details_plan")
         try:
             from .detail import recover
             from .confidence import recover as confidence_recover
@@ -194,12 +194,22 @@ def segment(image, hint=None, points=None, *, engine=None, soften=True, progress
             def tile_progress(tile,tiles):
                 if progress is not None:
                     progress("details",tile,tiles)
+            announced = False
+            def planned_progress(tile, tiles):
+                nonlocal announced
+                if not announced:
+                    if progress is not None:
+                        progress("details")
+                    announced = True
+                tile_progress(tile, tiles)
             # Hint-only AI jobs already have an internal semantic anchor. Use
             # it for validation without adding visible points to user history.
             anchors = points or [[float(x)/max(1, proxy.width-1), float(y)/max(1, proxy.height-1), int(label)]
                                  for (x, y), label in zip(coords, labels) if label in (0, 1)]
             recovered = confidence_recover(image, result, semantic_logits[quality["candidate"]],
-                                           anchors, progress=tile_progress)
+                                           anchors, progress=planned_progress)
+            if not announced and progress is not None:
+                progress("details")
             if recovered is None:
                 recovered = recover(image, result, points,progress=tile_progress)
             if recovered is not None:

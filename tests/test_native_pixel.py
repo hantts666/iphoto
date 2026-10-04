@@ -80,7 +80,7 @@ def test_object_phase_never_publishes_a_partial_mask_or_releases_a_job(case):
     active = {"id": 7, "op": "segment", "generation": 9 if case == "old_active" else 10,
               "jobs": [{"mask_target": "body_skin" if case == "wrong_target" else "object"}],
               "cancelled": case == "cancelled", "priority": "low" if case == "background" else "normal"}
-    line = json.dumps({"id": 7, "generation": 9 if case == "stale" else 10, "progress": progress}) + "\n"
+    line = json.dumps({"id": 7, "op": "segment", "generation": 9 if case == "stale" else 10, "progress": progress}) + "\n"
     layers = [{"id": "unchanged"}]
     owner = SimpleNamespace(_pixel_buffer=b"", _pixel_active=active, _generation=10,
                             _status="previous", _layers=layers, _warm_ready_sha="unprepared",

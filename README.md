@@ -1,8 +1,8 @@
-# iPhoto 1.10.3
+# iPhoto 1.10.4
 
 基于 Qt 6 / PySide6 的 Windows 原生修图工作室。采用独立选区、调整图层和 AI 助手的操作方式，无需 Electron 或 WebView。
 
-双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.10.3**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
+双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.10.4**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
 
 ## 通道曲线 · 1.10
 
@@ -13,6 +13,8 @@
 1.10.1 加快多曲线与 HSL／明暗混合调色，并修复 HSL 经过陡曲线后少量像素的舍入差异。安装时会一并准备曲线缓存；已有环境可运行 `.venv\Scripts\python.exe scripts/setup_color.py`，缺缓存时首次混合调色需要准备。加速不可用时仍可继续编辑，单纯通道曲线保持原有快速查表。[性能与精确性实测](planning/iphoto-v1.8/curve-performance-2026-10-04.md)。
 
 1.10.3 让范围、调色和分区预览分别保留浏览位置。磨皮后再次点击选中的图层返回范围，人脸和气色入口仍在原来的位置；浏览长元素清单再切回调色，也会回到此前的控制位置。打开另一张照片时回到面板开头，修蒙版后仍回到原调整控件。[连续操作与实际AI分层验证](planning/iphoto-v1.8/face-workflow-navigation-2026-10-04.md)。
+
+1.10.4 让部分大图目标继续使用原尺寸 AI 细节细化：较大范围须有可靠实体内部，避免稀疏约束产生分块透明度差异；规划和分块计算均显示状态，可取消。弱细节先排除无效采样，原小区域路线保持。复杂发丝、耳饰和薄纱仍需检查，通道抠图尚未加入。[大图与真实AI验证](planning/iphoto-v1.8/large-native-detail-2026-10-04.md)；[下一步入口与透明材质方案](planning/iphoto-v1.8/selection-workflow-proposal-2026-10-04.md)。
 
 ## 人脸与颜色调整 · 1.9
 
@@ -239,7 +241,7 @@ AI 请求期间，对话区和底部状态栏显示已等待时间、接收回�
 
 1.9.14 在明确的鼻部、嘴唇分区中支持 SAM2.1 Small 排除点修正，需按[本地模型说明](models/README.md)显式配置。首次加载和局部编码显示状态，可随时取消；后续同一局部图复用编码。整脸皮肤继续使用原分割路径，避免把新模型在脸颊产生的碎孔引入磨皮。部位信息随蒙版保存，改名、修边和重开后仍按正确部位处理；旧版重新保存会丢失此信息。嘴唇面积小会提示放大检查，避免误报“选区几乎为空”。遮挡上唇的首次自动识别仍需改善。[实测与问题记录](planning/iphoto-v1.8/face-precise-points-2026-10-04.md)。
 
-相机 RAW 通过 rawpy 解码为 8-bit sRGB 后编辑；HEIC/16-bit、曲线和色阶工具、裁切变形、生成式消除、通用 SAM2/SAM3 选物、混合模式、PSD/8bf 和批处理尚未实现。细枝和发丝使用已配置的 ViTMatte，但其透明度仍需检查。修复画笔与内容感知填充使用 OpenCV，适合较小瑕疵；大孔洞可能留下模糊痕迹。柔化是普通滤镜，不是 AI 降噪。
+相机 RAW 通过 rawpy 解码为 8-bit sRGB 后编辑；HEIC/16-bit、色阶工具、裁切变形、生成式消除、通用 SAM2/SAM3 选物、混合模式、PSD/8bf 和批处理尚未实现。细枝和发丝使用已配置的 ViTMatte，但其透明度仍需检查。修复画笔与内容感知填充使用 OpenCV，适合较小瑕疵；大孔洞可能留下模糊痕迹。柔化是普通滤镜，不是 AI 降噪。
 
 [画布升级与验收](planning/iphoto-v1.4.1/canvas.md) · [v1.4 计划](planning/iphoto-v1.4/plan.md) · [v1.4 验收](planning/iphoto-v1.4/delivery.md) · [代码仓库说明](docs/repository-guide.md)
 
