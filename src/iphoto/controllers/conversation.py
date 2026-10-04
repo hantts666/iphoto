@@ -197,6 +197,7 @@ def applyDescription(self, text):
 
 
 def _spatial_context(self):
+    face_targets = face_inventory.layer_targets(self)
     return {
         "face_skin_available": face_skin_available(),
         "detected_faces": face_inventory.spatial_context(self),
@@ -207,10 +208,12 @@ def _spatial_context(self):
         ],
         "existing_layers": [
             {
+                "id": l["id"],
                 "name": l["name"],
                 "recipe": l["recipe"],
                 "kind": l["kind"],
                 "parent_id": l["parent_id"],
+                **({'face_target':face_targets[l['id']]} if l['id'] in face_targets else {}),
             }
             for l in self._layers
         ],
@@ -376,9 +379,11 @@ def sendMessage(self, text, mode):
             mask_buffer.getvalue()
         ).decode("ascii")
     selection.pop("bitmap", None)
+    selection.pop("face_binding", None)
     selection["description"] = self._quality_text(
         self._candidate or self._layer()["mask"]
     )
+    face_targets = face_inventory.layer_targets(self)
     self._ai.plan(
         text,
         Recipe().to_dict() if new_selection_layer else dict(self._recipe),
@@ -388,6 +393,7 @@ def sendMessage(self, text, mode):
         mode,
         {
             "layer_name": self.activeLayerName,
+            "active_layer_id": self._selected,
             "current_scope": current_scope,
             "current_display_enabled": new_selection_layer or layer_display[self._selected]["enabled"],
             "selection_output": "new_layer" if new_selection_layer else "replace_mask" if selection_request else "current_layer",
@@ -408,6 +414,7 @@ def sendMessage(self, text, mode):
                     "visible": l["visible"],
                     "opacity": l["opacity"],
                     "display": layer_display[l["id"]],
+                    **({'face_target':face_targets[l['id']]} if l['id'] in face_targets else {}),
                 }
                 for l in self._layers
             ],

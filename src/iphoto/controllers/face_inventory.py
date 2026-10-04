@@ -26,8 +26,9 @@ def current(editor):
 
 
 def spatial_context(editor):
-    return [{k: face[k] for k in ("name", "anchor", "skin_crop")}
-            for face in current(editor)]
+    names = {item['id']:item['name'] for item in choices(editor)}
+    return [{**{k: face[k] for k in ("id", "name", "anchor", "skin_crop")},
+             'display_name':names[face['id']]} for face in current(editor)]
 
 
 def choices(editor):
@@ -56,21 +57,35 @@ def binding(editor, face):
     return {'face_id':face['id'],'source_sha256':editor._sha}
 
 
+def _matches(editor, layer, face):
+    mask = layer['mask']
+    if (layer['kind']!='adjustment' or layer.get('inpaint') or layer.get('heal')
+            or mask.get('semantic_target')!='face_skin' or mask['inverted']):
+        return False
+    if 'face_binding' in mask:
+        return mask['face_binding']==binding(editor,face)
+    return mask['label']==face['mask']['label']+' · 面部皮肤'
+
+
+def layer_targets(editor):
+    """Offer verified face associations without source hashes or mask payloads."""
+    faces = current(editor)
+    names = {item['id']:item['name'] for item in choices(editor)}
+    targets = {}
+    for layer in editor._layers:
+        matches = [face for face in faces if _matches(editor,layer,face)]
+        if len(matches)==1:
+            face = matches[0]
+            targets[layer['id']] = {'id':face['id'],'name':face['name'],
+                                   'display_name':names[face['id']],'mask_target':'face_skin'}
+    return targets
+
+
 def retouch_layer(editor, face):
     """Prefer the chosen face layer; a name is not its persistent identity."""
-    expected = binding(editor,face)
-    label = face['mask']['label']+' · 面部皮肤'
     layers = [editor._layer(),*reversed(editor._layers)]
     for layer in layers:
-        mask = layer['mask']
-        if (layer['kind']!='adjustment' or layer.get('inpaint') or layer.get('heal')
-                or mask.get('semantic_target')!='face_skin' or mask['inverted']):
-            continue
-        if mask.get('face_binding')==expected:
-            return layer
-        # Legacy masks have a precise full-skin label. Do not infer identity
-        # from an arbitrary layer name, partial patch or stale binding.
-        if 'face_binding' not in mask and mask['label']==label:
+        if _matches(editor,layer,face):
             return layer
     return None
 

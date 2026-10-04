@@ -10,6 +10,7 @@ LAYER_EDITS_SCHEMA = {
         "type": "object", "additionalProperties": False,
         "properties": {
             "layer_id": {"type": "string"},
+            "face_id": {"type": ["string", "null"]},
             "recipe": {"anyOf": [{
                 "type": "object", "additionalProperties": False,
                 "properties": {k: {"type": "number", "minimum": lo, "maximum": hi} for k, (lo, hi) in RANGES.items()},
@@ -18,7 +19,7 @@ LAYER_EDITS_SCHEMA = {
             "visible": {"type": ["boolean", "null"]},
             "opacity": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
         },
-        "required": ["layer_id", "recipe", "visible", "opacity"],
+        "required": ["layer_id", "face_id", "recipe", "visible", "opacity"],
     },
 }
 
@@ -43,7 +44,7 @@ def validate_layer_edits(value, offered):
     targets = {l["id"]: l for l in (offered or []) if l.get("kind", "adjustment") in ("adjustment", "group") and "id" in l}
     seen, result = set(), []
     for edit in value:
-        if not isinstance(edit, dict) or "layer_id" not in edit or set(edit) - {"layer_id", "recipe", "visible", "opacity"}:
+        if not isinstance(edit, dict) or "layer_id" not in edit or set(edit) - {"layer_id", "face_id", "recipe", "visible", "opacity"}:
             raise ValueError("已有图层的修改字段无效")
         if all(edit.get(key) is None for key in ("recipe", "visible", "opacity")):
             raise ValueError("已有图层修改没有指定参数、显示状态或不透明度")
@@ -52,6 +53,13 @@ def validate_layer_edits(value, offered):
             raise ValueError("修改目标不存在或重复；请使用现有图层 id")
         seen.add(lid)
         layer = targets[lid]
+        face_id = edit.get('face_id')
+        face_target = layer.get('face_target')
+        if face_target:
+            if not isinstance(face_id,str) or face_id != face_target['id']:
+                raise ValueError('人脸身份与已有图层不匹配；请同时使用该层的 layer_id 和 face_target.id')
+        elif face_id is not None:
+            raise ValueError('该图层没有已验证的人脸关联，face_id 必须为 null')
         recipe = edit.get("recipe")
         if layer.get("kind") == "group":
             if recipe is not None:
