@@ -10,7 +10,7 @@ from iphoto.ai_protocol import parse_auto
 from iphoto.document import empty_mask, raster_mask
 from iphoto.engine import Recipe
 from iphoto.masks import encode_bitmap
-from iphoto.matting.channels import estimate, suggest, validate_options
+from iphoto.matting.channels import estimate, suggest, validate_options,whole_options,preview as channel_preview
 from iphoto.workspace import Editor
 from iphoto.controllers import channel_auto
 from test_ai import configure, mock_api, wait_for
@@ -60,6 +60,32 @@ def test_normal_edge_mode_keeps_opaque_core_and_semantic_exclusions():
     old=np.asarray(raster_mask(mask,image.size));new=np.asarray(raster_mask(result,image.size))
     assert np.all(new[old==0]==0) and new[60,110]==255
     assert result['semantic_target']=='face_skin'
+
+
+def test_whole_photo_channels_create_native_gray_without_semantic_seed_or_model():
+    image,truth,_,_=scene();before=image.tobytes()
+    options={**whole_options(),'channel':'red','black':35,'white':210}
+    def forbidden(*args,**kwargs):pytest.fail('Manual whole-photo channel loaded a model')
+    output,quality=estimate(image,empty_mask(True),options,neural=forbidden)
+    actual=np.asarray(raster_mask(output,image.size))/255
+    assert np.abs(actual-truth).max()<.004 and image.tobytes()==before
+    assert quality['whole'] and quality['tiles']==0 and not output.get('color_recovery')
+    assert channel_preview(image,empty_mask(True),options,32)[0].tobytes()==raster_mask(output,image.size).tobytes()
+    inverted,_=estimate(image,empty_mask(True),{**options,'invert':True},neural=forbidden)
+    assert np.abs(np.asarray(raster_mask(inverted,image.size))/255-(1-truth)).max()<.004
+
+
+@pytest.mark.parametrize('change',[{'ai':True},{'detail':True},{'color':True},{'channel':'auto'}])
+def test_whole_photo_channel_cannot_request_unanchored_ai(change):
+    with pytest.raises(ValueError,match='先用通道'):
+        estimate(scene()[0],empty_mask(True),{**whole_options(),**change})
+
+
+def test_whole_photo_channel_cannot_override_local_or_semantic_scope():
+    image,_,mask,_=scene()
+    for protected in (mask,{**empty_mask(True),'semantic_target':'face_skin'}):
+        with pytest.raises(ValueError,match='整图通道只用于'):
+            estimate(image,protected,whole_options())
 
 
 @pytest.mark.parametrize('change',[{'black':210},{'gamma':float('nan')},{'radius':False},{'interior':'yes'},{'white':300}])

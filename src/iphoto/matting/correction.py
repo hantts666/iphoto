@@ -35,9 +35,6 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     original=raster_mask(mask,image.size)
     output=np.array(original)
     protected=not mask['inverted'] and mask.get('semantic_target') in ('face','face_skin','body_skin')
-    if semantic is None:
-        from ..segmentation.precise_sam import backend
-        semantic=backend()
     records=[];warnings=[]
     for patch in corrections:
         core=boxes[patch['edge']-1]
@@ -53,6 +50,9 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         if protected and any(previous[round(float(y)),round(float(x))]==0 for (x,y),label in zip(coords,labels) if label):
             raise ValueError('保留点位于受保护的皮肤分区外，原范围保留')
         if progress:progress(phase='semantic')
+        if semantic is None:
+            from ..segmentation.precise_sam import backend
+            semantic=backend()
         # A coarse mask is a hint. Saturated logits must not make its wrong
         # opaque foreground override the new explicit negative points.
         model_guide=guide.point(lambda value:max(64,min(191,value)))
@@ -67,7 +67,10 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         trimap[outside>patch['radius']]=0
         yy,xx=np.ogrid[:hard.shape[0],:hard.shape[1]]
         for (x,y),label in zip(coords,labels):
-            trimap[(xx-x)**2+(yy-y)**2<=8**2]=255 if label else 0
+            # An excluded background pixel can lie between fine hairs. A
+            # broad negative disk would delete those neighboring strands.
+            radius=8 if label else 2
+            trimap[(xx-x)**2+(yy-y)**2<=radius**2]=255 if label else 0
         if protected:trimap[previous==0]=0
         def report(tile,tiles):
             if progress:progress(tile,tiles)

@@ -81,7 +81,8 @@ class ChannelMaskController(QObject):
         from PySide6.QtCore import QUrl
         self._options, self._preview = result['options'], QUrl.fromLocalFile(result['path']).toString()
         self._loading = False
-        self._note = f"推荐 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else '')
+        self._note = ('从整张照片建立范围：选择通道，调黑白场和灰度；白色保留、黑色移除、灰色半透明。'
+                      if self._options.get('whole') else f"推荐 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else ''))
         self.changed.emit()
 
     def failed(self, message, context):

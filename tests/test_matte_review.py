@@ -8,7 +8,7 @@ import pytest
 from iphoto.document import empty_mask,new_layer
 from iphoto.engine import Recipe
 from iphoto.masks import encode_bitmap
-from iphoto.matte_review import edge_boxes,parse_review,render_review
+from iphoto.matte_review import edge_boxes,parse_review,render_review,exclude_candidates,keep_candidates
 from iphoto.matting.channels import estimate,suggest
 from iphoto.ai_protocol import build_payload
 from iphoto.ai_settings import AISettings
@@ -57,6 +57,9 @@ def test_channel_calculations_separate_shared_lighting_from_transparency():
     assert np.abs(alpha-a).mean()<.003
     assert np.all(alpha[78:84,130:140]==0) and mask==before
     assert max(v['score'] for v in metrics if v['channel'] in ('red','green','blue','luminance'))<2
+    from iphoto.matting.channels import whole_options
+    full,_=estimate(image,empty_mask(True),{**whole_options(),'channel':'red_green','black':88,'white':168})
+    assert np.abs(np.asarray(raster_mask(full,image.size))/255-a).mean()<.003
 
 
 def test_review_native_crops_match_actual_export_composition(tmp_path):
@@ -91,6 +94,30 @@ def test_review_payload_sends_labeled_evidence_once_and_strict_schema():
     content=body['messages'][1]['content']
     assert [v['image_url']['url'] for v in content if v['type']=='image_url']==[v['url'] for v in pictures]
     assert set(body['response_format']['json_schema']['schema']['properties'])=={'status','summary','corrections'}
+
+
+@pytest.mark.parametrize('invert',[False,True])
+def test_visual_exclusion_references_can_reach_wrong_opaque_foreground(invert):
+    # The coarse model calls a whole light/dark cloth patch foreground. An
+    # exclusion list derived only from alpha==0 cannot repair that mistake.
+    a=np.zeros((512,512),np.uint8);a[60:450,60:320]=255
+    a[180:300,320:430]=255
+    rgb=np.full((512,512,3),180,np.uint8);rgb[60:450,60:320]=35
+    if invert:rgb=255-rgb
+    image,alpha=Image.fromarray(rgb),Image.fromarray(a)
+    before=image.tobytes(),alpha.tobytes()
+    old=keep_candidates(alpha,False);points=exclude_candidates(image,alpha)
+    assert points[:len(old)]==old and len(old)<len(points)<=len(old)+3
+    selected=[(round(x/999*511),round(y/999*511)) for x,y in points[len(old):]]
+    assert any(320<=x<430 and 180<=y<300 and a[y,x]==255 for x,y in selected)
+    assert all(40<=x<472 and 40<=y<472 for x,y in selected)
+    assert (image.tobytes(),alpha.tobytes())==before
+
+
+def test_weak_color_contrast_does_not_invent_exclusion_references():
+    a=np.zeros((512,512),np.uint8);a[60:450,60:320]=255
+    alpha=Image.fromarray(a);image=Image.new('RGB',alpha.size,(95,95,95))
+    assert exclude_candidates(image,alpha)==keep_candidates(alpha,False)
 
 
 def test_tested_qwen_review_has_bounded_reasoning_without_incompatible_json_mode():

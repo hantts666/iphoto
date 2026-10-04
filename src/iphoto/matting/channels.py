@@ -17,11 +17,11 @@ CHANNEL_NAMES = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度',
 
 def validate_options(value):
     required = {'channel', 'black', 'white', 'gamma', 'invert', 'radius', 'ai', 'interior'}
-    if not isinstance(value, dict) or not required <= set(value) or not set(value) <= required | {'detail','color'}:
+    if not isinstance(value, dict) or not required <= set(value) or not set(value) <= required | {'detail','color','whole'}:
         raise ValueError('通道抠图参数无效')
     if value['channel'] not in (*CHANNELS, 'auto') or any(type(value[k]) is not bool for k in ('invert','ai','interior')):
         raise ValueError('通道抠图方法无效')
-    if any(type(value[k]) is not bool for k in ('detail','color') if k in value):
+    if any(type(value[k]) is not bool for k in ('detail','color','whole') if k in value):
         raise ValueError('通道细节与去背景串色选项无效')
     if (any(type(value[k]) is not int for k in ('black', 'white', 'radius'))
             or not 0 <= value['black'] < value['white'] <= 255 or not 1 <= value['radius'] <= 256
@@ -31,8 +31,24 @@ def validate_options(value):
     return dict(value)
 
 
-def _fields(image, mask, radius):
+def whole_options():
+    return {'channel':'luminance','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,
+            'ai':False,'interior':True,'detail':False,'color':False,'whole':True}
+
+
+def channel_planes(image):
+    """Native byte planes shared by channel alpha and visual reference sampling."""
     rgb = np.asarray(image.convert('RGB'), dtype=np.uint8)
+    planes = [rgb[..., i] for i in range(3)]
+    planes.append(np.rint(rgb[...,0]*.2126 + rgb[...,1]*.7152 + rgb[...,2]*.0722).astype(np.uint8))
+    # Photoshop-style Subtract, scale=1/offset=128. Cast before subtraction:
+    # uint8 wraparound would invent foreground/background contrast.
+    for first, second in ((0,1),(0,2),(1,2)):
+        planes.append(np.clip(rgb[...,first].astype(np.int16)-rgb[...,second]+128,0,255).astype(np.uint8))
+    return planes
+
+
+def _fields(image, mask, radius):
     alpha = np.asarray(raster_mask({**mask, 'feather': 0}, image.size))
     hard = (alpha > 32).astype(np.uint8)
     if not hard.any() or hard.all():
@@ -43,12 +59,7 @@ def _fields(image, mask, radius):
     bg = (outside > max(2, radius/2)) & (outside < max(8, radius*3)) & (alpha == 0)
     if fg.sum() < 16 or bg.sum() < 16:
         raise ValueError('缺少可靠的主体内部或周围背景，请先补选/擦除后再试')
-    planes = [rgb[..., i] for i in range(3)]
-    planes.append(np.rint(rgb[...,0]*.2126 + rgb[...,1]*.7152 + rgb[...,2]*.0722).astype(np.uint8))
-    # Photoshop-style Subtract, scale=1/offset=128. Cast before subtraction:
-    # uint8 wraparound would invent foreground/background contrast.
-    for first, second in ((0,1),(0,2),(1,2)):
-        planes.append(np.clip(rgb[...,first].astype(np.int16)-rgb[...,second]+128,0,255).astype(np.uint8))
+    planes = channel_planes(image)
     metrics = []
     for channel, plane in zip(CHANNELS, planes):
         f, b = plane[fg][::max(1, int(fg.sum())//10000)], plane[bg][::max(1, int(bg.sum())//10000)]
@@ -71,23 +82,46 @@ def suggest(image, mask, radius=32):
     return {**{k:v for k,v in best.items() if k != 'score'}, 'gamma': 1., 'radius': radius, 'ai': True, 'interior':False}, metrics
 
 
+def _curve(plane,options):
+    values=plane.astype(np.float32)
+    values=np.clip((values-options['black'])/(options['white']-options['black']),0,1)
+    if options['invert']:
+        values=1-values
+    return values**(1/options['gamma'])
+
+
 def _channel_alpha(planes, metrics, options):
     channel = options['channel']
     if channel == 'auto':
         channel = max(metrics, key=lambda item: item['score'])['channel']
-    values = planes[CHANNELS.index(channel)].astype(np.float32)
-    values = np.clip((values-options['black'])/(options['white']-options['black']), 0, 1)
-    if options['invert']:
-        values = 1-values
-    values = values ** (1/options['gamma'])
+    values = _curve(planes[CHANNELS.index(channel)],options)
     score = next(item['score'] for item in metrics if item['channel'] == channel)
     return values, channel, score
+
+
+def _whole_pixels(image,mask,options):
+    if (options['channel']=='auto' or options['ai'] or options.get('detail') or options.get('color')):
+        raise ValueError('先用通道生成目标范围，再使用 AI 修细节或去背景串色')
+    if image.width*image.height>32_000_000:
+        raise ValueError('整图通道超过3200万像素，请先选择目标区域')
+    if mask.get('semantic_target') or raster_mask(mask,image.size).getextrema()!=(255,255):
+        raise ValueError('整图通道只用于尚未限定目标的全选范围，局部范围请使用常规通道抠图')
+    plane=channel_planes(image)[CHANNELS.index(options['channel'])]
+    return np.rint(_curve(plane,options)*255).astype(np.uint8)
 
 
 def estimate(image, mask, options, *, neural=None, progress=None):
     """Only a bounded region near the selected target may grow; distant alpha stays exact."""
     started = perf_counter()
     options = validate_options(options)
+    if options.get('whole'):
+        result=_whole_pixels(image,mask,options)
+        final=validate_mask({**empty_mask(),'label':'通道 · '+CHANNEL_NAMES[options['channel']],
+                             'bitmap':encode_bitmap(Image.fromarray(result),sampling='alpha',preserve_resolution=True)})
+        return final,{'channel_mask':True,'whole':True,'backend':'整图通道透明度','channel':options['channel'],
+                      'contrast_score':0.,'native_detail':False,'color_recovery':False,'mask_size':list(image.size),
+                      'tiles':0,'elapsed_ms':round((perf_counter()-started)*1000,1),
+                      'unknown_pixels':0,'partial_pixels':int(((result>0)&(result<255)).sum()),'warnings':[]}
     radius = options['radius']
     original = raster_mask({**mask, 'feather': 0}, image.size)
     bounds = original.getbbox()
@@ -177,6 +211,9 @@ def estimate(image, mask, options, *, neural=None, progress=None):
 
 
 def preview(image, mask, options, radius):
+    options=validate_options(options)
+    if options.get('whole'):
+        return Image.fromarray(_whole_pixels(image,mask,options)),options['channel'],0.
     alpha, inside, outside, planes, metrics = _fields(image, mask, radius)
     values, channel, score = _channel_alpha(planes, metrics, validate_options(options))
     allowed = outside <= radius

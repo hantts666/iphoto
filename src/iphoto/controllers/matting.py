@@ -71,16 +71,20 @@ def complete(self, result, *, points=None):
             self._pixel_points = deepcopy(points)
             self._pixel_hint = deepcopy(self._candidate)
     if quality.get('channel_mask'):
-        names = {'red':'红','green':'绿','blue':'蓝','luminance':'亮度'}
+        from ..matting.channels import CHANNEL_NAMES
         method = 'AI 透明边缘' if quality['tiles'] else '通道透明度'
-        self._selection_quality = f"{names[quality['channel']]}通道 · {method} · {quality['elapsed_ms']/1000:.1f}s"
+        self._selection_quality = f"{CHANNEL_NAMES[quality['channel']]}通道 · {method} · {quality['elapsed_ms']/1000:.1f}s"
         if quality.get('native_detail'):
             self._selection_quality += ' · 原像素细纹理'
         if quality.get('color_recovery'):
             self._selection_quality += ' · 透明输出去背景串色'
         if quality.get('warnings'):
             self._selection_quality += ' · ' + '；'.join(quality['warnings'])
-        self._message('assistant', self._selection_quality + '\n可切换白底或黑底检查；透明 PNG 同步恢复前景颜色。主体外较远范围保持，请放大检查发丝、孔洞和透明内部。',
+        detail=('\n已从整张照片建立范围。同色背景可能一起选中，可用画笔补选／擦除，再用 AI 修细节；可直接调整或导出透明 PNG。'
+                if quality.get('whole') else '\n可切换白底或黑底检查；请放大检查发丝、孔洞和透明内部。')
+        if quality.get('color_recovery'):
+            detail+='透明 PNG 使用相同的前景颜色恢复。'
+        self._message('assistant', self._selection_quality + detail,
                       state='draft', origin={'mode':'selection','model':quality['backend']})
         self._notify('通道抠图已完成，可看黑白透明度；不合适可以撤销')
         return

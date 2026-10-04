@@ -102,7 +102,9 @@ def _progress(self, active, progress):
     if not isinstance(progress, dict):
         return
     if progress == {"phase": "prepare"} and not active.get("detail_tile"):
-        self._status = "正在读取原图并准备局部透明细化…可随时取消" if "stroke" in active else "正在读取原图并准备 AI 边缘模型…可随时取消"
+        self._status = ("正在读取原图并计算通道透明度…可随时取消"
+                        if active.get('method')=='channel' and not active.get('channel_options',{}).get('ai')
+                        else "正在读取原图并准备局部透明细化…可随时取消" if "stroke" in active else "正在读取原图并准备 AI 边缘模型…可随时取消")
     elif progress == {'phase':'polish'} and active.get('method') == 'channel':
         self._status = '正在按原像素颜色细化发丝与透明细纹…可随时取消'
     elif progress == {'phase':'semantic'} and active.get('method') == 'correction':

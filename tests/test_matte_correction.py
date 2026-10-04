@@ -103,3 +103,31 @@ def test_weak_prediction_and_protected_keep_point_fail_without_changes():
     with pytest.raises(ValueError,match='保留点'):
         correct(image,mask,patch,boxes,semantic=Semantic(),matte=Matte())
     assert {key:value for key,value in mask.items() if key!='semantic_target'}==original
+
+
+def test_invalid_foreground_reference_does_not_load_semantic_model(monkeypatch):
+    image,mask,boxes=scene()
+    points=deepcopy(correction_plan()['corrections']);points[0]['points'][0]=[900,900,1]
+    from iphoto.segmentation import precise_sam
+    monkeypatch.setattr(precise_sam,'backend',lambda:pytest.fail('Invalid reference loaded SAM2'))
+    with pytest.raises(ValueError,match='保留点'):
+        correct(image,mask,points,boxes,matte=Matte())
+
+
+def test_negative_reference_keeps_neighboring_strands_unknown():
+    image,mask,boxes=scene()
+    patch=deepcopy(correction_plan()['corrections'])
+    patch[0]['points'][1]=[625,375,0]
+    class InspectMatte(Matte):
+        inspected=False
+        def predict(self,pixels):
+            if not self.inspected:
+                self.inspected=True
+                # Native point is (600,500), crop origin (254,254). The
+                # adjacent foreground 3px away remains available to matting.
+                assert pixels[0,3,246,346]==0
+                assert pixels[0,3,246,343]>0
+            return super().predict(pixels)
+    matte=InspectMatte()
+    correct(image,mask,patch,boxes,semantic=Semantic(),matte=matte)
+    assert matte.inspected

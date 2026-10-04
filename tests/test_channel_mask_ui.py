@@ -1,6 +1,6 @@
 """The complete window can preview and apply a channel alpha at both sizes."""
 from copy import deepcopy
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt,QMetaObject
 
 from test_ai import wait_for
 from test_canvas_ui import canvas  # noqa: F401
@@ -71,3 +71,37 @@ def test_calculation_channel_can_be_selected_and_exports_native_gray(canvas,tmp_
     ui.click('channelApplyButton');wait_for(lambda:not ui.e.busy and settled(ui.e) and not ui.e.channelMask.opened)
     pixels=np.asarray(raster_mask(ui.e._candidate,image.size))/255
     assert np.abs(pixels-truth).mean()<.003 and ui.e._layers==original
+    assert '红−绿' in ui.e.selectionQuality
+    assert '处理边缘细化结果失败' not in ui.e.status
+
+
+def test_main_menu_can_create_channel_range_without_prior_selection(canvas,tmp_path):  # noqa: F811
+    import numpy as np
+    from iphoto.document import raster_mask
+    ui=canvas;image,truth,_,_=scene();path=tmp_path/'whole-photo.png';image.save(path)
+    ui.e.openImage(str(path));wait_for(lambda:ui.e.hasImage and settled(ui.e))
+    assert not ui.e.hasSelectionDraft
+    original=deepcopy(ui.e._layers);cursor=ui.e._cursor
+    assert QMetaObject.invokeMethod(ui.find('selectionMenu'),'open',Qt.DirectConnection)
+    wait_for(lambda:ui.find('channelMaskMenuAction').isVisible())
+    ui.click('channelMaskMenuAction')
+    wait_for(lambda:ui.e.channelMask.opened and not ui.e.channelMask.loading and ui.e.channelMask.previewUrl)
+    wait_for(lambda:ui.find('channelMaskDialog').property('opened'))
+    assert ui.e.channelMask.options['whole'] and ui.e.channelMask.options['ai'] is False
+    assert ui.find('channelApplyButton').property('text')=='生成选区'
+    assert not ui.find('channelUseAiBox').isVisible()
+    ui.click('channelChoiceBox');ui.key(Qt.Key_Home);ui.key(Qt.Key_Return)
+    wait_for(lambda:ui.e.channelMask.options['channel']=='red' and not ui.e.channelMask.loading)
+    for field,value in [('channelBlackBox','35'),('channelWhiteBox','210')]:
+        ui.click(field);ui.key(Qt.Key_A,Qt.ControlModifier);ui.type(value);ui.key(Qt.Key_Return)
+        wait_for(lambda:not ui.e.channelMask.loading)
+    before=deepcopy(ui.e._candidate)
+    wait_for(lambda:ui.find('channelMaskDialog').property('previewReady') and ui.find('channelApplyButton').property('enabled'))
+    ui.click('channelApplyButton')
+    wait_for(lambda:not ui.e.busy and settled(ui.e) and not ui.e.channelMask.opened)
+    alpha=np.asarray(raster_mask(ui.e._candidate,image.size))/255
+    assert np.abs(alpha-truth).max()<.004
+    assert ui.e._layers==original and ui.e._cursor==cursor
+    final=deepcopy(ui.e._candidate)
+    ui.e.undo();assert ui.e._candidate==before
+    ui.e.redo();assert ui.e._candidate==final

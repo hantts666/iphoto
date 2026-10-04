@@ -336,15 +336,20 @@ def main():
     @register("channel_preview")
     def _channel_preview(request):
         nonlocal current_crop_assets
-        from .matting.channels import suggest, preview as channel_preview
+        from .matting.channels import suggest, whole_options, preview as channel_preview
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，通道预览未应用')
         options = dict(request['options'])
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))
         if request.get('initial'):
-            options, _ = suggest(proxy, request['mask'], radius)
-            options['radius'] = request['options']['radius']
-            options.update({k:request['options'][k] for k in ('interior','detail','color') if k in request['options']})
+            from .document import raster_mask
+            whole=not request['mask'].get('semantic_target') and raster_mask(request['mask'],source.image.size).getextrema()==(255,255)
+            if whole:
+                options=whole_options()
+            else:
+                options, _ = suggest(proxy, request['mask'], radius)
+                options['radius'] = request['options']['radius']
+                options.update({k:request['options'][k] for k in ('interior','detail','color') if k in request['options']})
         alpha, channel, score = channel_preview(proxy, request['mask'], options, radius)
         path = cache / f"channel-preview-{request['id']}.png"
         alpha.save(path, compress_level=3)

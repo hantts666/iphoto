@@ -167,9 +167,10 @@ ApplicationWindow {
             MenuItem { text: "重做    Ctrl+Shift+Z"; enabled: editor.canRedo && !editor.busy; onTriggered: editor.redo() }
             MenuItem { text: "复制调整层"; enabled: editingEnabled; onTriggered: editor.duplicateLayer() }
         }
-        Menu { id: selectionMenu; title: "选择"
+        Menu { id: selectionMenu; objectName: "selectionMenu"; title: "选择"
             MenuItem { text: "新建选区"; enabled: editingEnabled; onTriggered: chooseTool("rect") }
             MenuItem { text: "载入当前层蒙版"; enabled: editingEnabled; onTriggered: reviewMask() }
+            MenuItem { objectName: "channelMaskMenuAction"; text: "通道抠图…"; enabled: editor.hasImage && !editor.busy && !editor.hasRegionDraft; onTriggered: editor.channelMask.open() }
             MenuItem { text: "全选    Ctrl+A"; enabled: editor.hasImage && !editor.busy && !editor.hasRegionDraft; onTriggered: editor.draftAction("all") }
             MenuItem { text: "反选    Ctrl+Shift+I"; enabled: editor.hasSelectionDraft && !editor.busy; onTriggered: editor.draftAction("invert") }
             MenuItem { text: "取消选区    Ctrl+D"; enabled: editor.hasSelectionDraft && !editor.busy; onTriggered: editor.discardSelection() }

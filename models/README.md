@@ -128,3 +128,7 @@ artifacts/face-converter/Scripts/python.exe -m pip install onnx==1.17.0
 来源：[U²-Net 官方仓库](https://github.com/xuebinqin/U-2-Net)、[rembg ONNX 模型与校验定义](https://github.com/danielgatis/rembg/blob/main/rembg/sessions/u2netp.py)。U²-Net 和本版 OpenCV 代码 Apache-2.0。模型文件 4,574,861 字节，SHA256 为 `309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8`。分发时应同时核对权重来源与相关许可，保留第三方说明。
 
 320×320 模型输入决定了细节上限；即使将蒙版输出放大到预览尺寸，也不代表发丝级精度。主体选择失败时请使用框选、魔棒、画笔或后续分割后端。
+
+## 1.11.4细节对比记录
+
+本轮隔离评估作者Composition-1k的ViTMatte-Base，使用同图、同三分图及相同原像素核心对比。部分模糊减少，但衣物误选和灰雾仍在，未替换默认ViTMatte-S，没有新增应用依赖或下载动作。固定来源、摘要、转换器、真实AI纠错与本人判断见[第128轮记录](../planning/iphoto-v1.8/channel-references-2026-10-05.md)。新整图手动通道入口不需要此模型；有局部范围的AI路径继续使用原已验证模型。
