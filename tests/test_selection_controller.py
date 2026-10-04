@@ -87,6 +87,26 @@ def test_review_mask_loads_current_layer(editor):
     wait_for(lambda: settled(editor))
 
 
+@pytest.mark.parametrize("condition", ["invalid", "no_draft", "busy", "regions"])
+def test_correct_draft_refuses_conflicts_without_starting_or_rebinding(editor, condition):
+    if condition != "no_draft":
+        editor.beginSelection("empty")
+    if condition == "busy":
+        editor._active = {"op": "selection"}
+    elif condition == "regions":
+        editor._region_candidate = {"layers": []}
+    sel = editor.selection
+    before = deepcopy((editor._layers, editor._candidate, editor._selection_target_id,
+                       editor._generation, editor._cursor, sel.tool, sel.mode, sel.showMask))
+    try:
+        assert not sel.correctDraft("replace" if condition == "invalid" else "subtract")
+        assert deepcopy((editor._layers, editor._candidate, editor._selection_target_id,
+                         editor._generation, editor._cursor, sel.tool, sel.mode, sel.showMask)) == before
+    finally:
+        editor._active = None
+        editor._region_candidate = None
+
+
 def test_mask_edit_intent_survives_project_reload(editor, tmp_path):
     from iphoto.document import read_project
 

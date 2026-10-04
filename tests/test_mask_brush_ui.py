@@ -5,8 +5,10 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtQml import QQmlProperty
 from PySide6.QtTest import QTest
+from PIL import Image, ImageDraw
 
 from iphoto.document import raster_mask
+from iphoto.segmentation.classical import bitmap_mask
 from test_ai import wait_for
 from test_canvas_ui import canvas as shared_canvas
 from test_editor import settled
@@ -160,3 +162,78 @@ def test_direct_correction_refuses_conflicting_state_without_rebinding(canvas, c
             ui.e._active = None
         elif condition == "regions":
             ui.e._region_candidate = None
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_draft_correction_preserves_ai_bitmap_identity_holes_and_history(canvas, bound):
+    ui = canvas
+    image = Image.new("L", (300, 200), 0)
+    drawing = ImageDraw.Draw(image)
+    drawing.rectangle((35, 35, 105, 125), fill=255)
+    drawing.rectangle((50, 55, 90, 100), fill=0)
+    mask = bitmap_mask(image, "面部皮肤")
+    mask["semantic_target"] = "face_skin"
+    mask["face_binding"] = {"face_id": "face-1", "source_sha256": ui.e._sha}
+    ui.e._set_candidate(mask)
+    wait_for(lambda: ready(ui) and ui.w.property("selectionPreviewReady"))
+    if bound:
+        ui.e.selection.applyDefault()
+        wait_for(lambda: ready(ui))
+        ui.e.setParameter("exposure", .2)
+        ui.e.finishGesture()
+        wait_for(lambda: ready(ui))
+        ui.e.selection.reviewMask()
+        wait_for(lambda: ready(ui) and ui.w.property("selectionPreviewReady"))
+    before = deepcopy(ui.e._layers)
+    cursor, target = ui.e._cursor, ui.e._selection_target_id
+    original = deepcopy(ui.e._candidate)
+    ui.e.selection.setMaskView("grayscale")
+    ui.w.setProperty("compare", True)
+    wait_for(lambda: ready(ui))
+    for name in ("addDraftMaskButton", "eraseDraftMaskButton"):
+        button, point = ui.find(name), ui.point(name)
+        assert button.isVisible() and 0 < point.y() < ui.w.height()
+    ui.click("eraseDraftMaskButton")
+    wait_for(lambda: ready(ui) and ui.w.property("selectionPreviewReady"))
+    assert ui.e.selection.tool == "brush" and ui.e.selection.mode == "subtract"
+    assert ui.e.maskView == "overlay" and not ui.w.property("compare")
+    assert not ui.find("selectionMode_replace").isVisible()
+    assert ui.find("selectionMode_add").property("text") == "补选"
+    assert ui.find("selectionMode_subtract").property("text") == "擦除"
+    assert ui.e._candidate == original and ui.e._selection_target_id == target
+    assert ui.e._layers == before and ui.e._cursor == cursor
+    ui.e.selection.setBrushDiameter(32)
+    ui.click("photoCanvas", .15, .22)
+    wait_for(lambda: ready(ui) and ui.w.property("selectionPreviewReady"))
+    removed = deepcopy(ui.e._candidate)
+    pixels = raster_mask(removed, (2400, 1600))
+    assert pixels.getpixel((360, 352)) == 0
+    assert pixels.getpixel((480, 640)) == 0  # Existing protected hole survives.
+    assert removed["bitmap"] == original["bitmap"]
+    assert removed["face_binding"] == original["face_binding"]
+    assert removed["semantic_target"] == original["semantic_target"]
+    assert ui.e._layers == before and ui.e._cursor == cursor
+    ui.e.undo()
+    wait_for(lambda: ready(ui))
+    assert ui.e._candidate == original
+    ui.e.redo()
+    wait_for(lambda: ready(ui))
+    assert ui.e._candidate == removed
+    ui.click("addDraftMaskButton")
+    ui.click("photoCanvas", .15, .22)
+    wait_for(lambda: ready(ui))
+    assert raster_mask(ui.e._candidate, (2400, 1600)).getpixel((360, 352)) == 255
+    ui.e.undo()
+    wait_for(lambda: ready(ui) and ui.w.property("selectionPreviewReady"))
+    assert ui.e._candidate == removed and ui.e._selection_target_id == target
+    ui.click("selectionToLayerButton")
+    wait_for(lambda: ready(ui) and not ui.e.hasSelectionDraft)
+    assert ui.e._layer()["mask"] == removed and ui.e._cursor == cursor + 1
+    if bound:
+        assert len(ui.e._layers) == len(before)
+        assert ui.e._layer()["recipe"] == before[-1]["recipe"]
+    else:
+        assert ui.e._layers[:-1] == before
+    ui.e.undo()
+    wait_for(lambda: ready(ui))
+    assert ui.e._layers == before

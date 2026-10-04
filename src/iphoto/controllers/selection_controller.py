@@ -445,6 +445,19 @@ class SelectionController(QObject):
         self.setMode(mode)
         return True
 
+    @Slot(str, result=bool)
+    def correctDraft(self, mode):
+        """Correct the visible draft without loading or rebinding a layer mask."""
+        editor = self._editor
+        if (mode not in ("add", "subtract") or not editor.hasImage or editor.busy
+                or editor.hasRegionDraft or not editor.hasSelectionDraft):
+            return False
+        self.chooseTool("brush")
+        self.setMode(mode)
+        if editor.maskView != "overlay":
+            self.setMaskView("overlay")
+        return True
+
     @Slot(str)
     def setMode(self, mode):
         if mode in MODES and mode != self._mode:

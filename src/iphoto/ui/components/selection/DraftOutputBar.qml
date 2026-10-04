@@ -25,6 +25,22 @@ Rectangle {
             Caption { text: root.editingMask ? "正在修正此层范围。保存后继续调整照片。" : "已选好范围。可先检查边缘，再开始调整。"; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pixelSize: 10 }
             Action { objectName: root.prefix+"jumpToRefineButton"; text: "修边 ›"; subtle: true; implicitHeight: 24; font.pixelSize: 10; hint: "查看修边方法、透明度预览与边缘调整"; onClicked: root.refineRequested() }
         }
+        RowLayout { visible: !root.region; Layout.fillWidth: true; spacing: 6
+            Action {
+                objectName: root.prefix+"addDraftMaskButton"; text: "补选"; Layout.fillWidth: true; implicitHeight: 28
+                primary: editor.selection.tool === "brush" && editor.selection.mode === "add"
+                enabled: !editor.busy
+                hint: "直接在画布上涂抹，补回漏选区域；保留当前范围，可撤销"
+                onClicked: workspace.correctDraft("add")
+            }
+            Action {
+                objectName: root.prefix+"eraseDraftMaskButton"; text: "擦除"; Layout.fillWidth: true; implicitHeight: 28
+                primary: editor.selection.tool === "brush" && editor.selection.mode === "subtract"
+                enabled: !editor.busy
+                hint: "直接在画布上涂抹，擦掉多选区域；保留当前范围，可撤销"
+                onClicked: workspace.correctDraft("subtract")
+            }
+        }
         Action {
             objectName: root.prefix+"selectionToLayerButton"
             text: root.region ? "开始分区调整" : root.editingMask ? "保存范围修改" : "开始调整此范围"

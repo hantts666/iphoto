@@ -15,7 +15,14 @@ RowLayout {
     Caption { text: ({smart:"像素点选",object:"对象点选",inspect:"浏览 / 平移",hand:"抓手 / 平移",zoom:"缩放工具",rect:"矩形选框",ellipse:"椭圆选框",polygon:"自由套索",brush:"蒙版画笔",wand:"颜色魔棒",heal:"修复画笔"})[root.selection.tool]; Layout.preferredWidth: 104; color: root.workspace.ink }
     RowLayout { visible: !root.selection.navigationTool && root.selection.tool!=="smart"; spacing: 5
         Repeater { model: [{key:"replace",label:"新选区"},{key:"add",label:"＋ 添加"},{key:"subtract",label:"－ 减去"}]
-            delegate: Action { required property var modelData; visible: root.selection.tool!=="heal"; text: modelData.key==="replace" && root.selection.editingLayerMask ? "重选范围" : modelData.label; primary: root.selection.mode===modelData.key; onClicked: root.selection.setMode(modelData.key) }
+            delegate: Action {
+                required property var modelData
+                objectName: "selectionMode_" + modelData.key
+                visible: root.selection.tool!=="heal" && !(root.selection.tool==="brush" && modelData.key==="replace")
+                text: root.selection.tool==="brush" ? modelData.key==="add" ? "补选" : "擦除" : modelData.key==="replace" && root.selection.editingLayerMask ? "重选范围" : modelData.label
+                primary: root.selection.mode===modelData.key
+                onClicked: root.selection.setMode(modelData.key)
+            }
         }
         Caption { visible: root.selection.tool==="brush" || root.selection.tool==="heal"; text: "大小" }
         SpinBox { objectName: "brushDiameterInput"; visible: root.selection.tool==="brush" || root.selection.tool==="heal"; from: root.selection.minBrushDiameter; to: root.selection.maxBrushDiameter; value: root.selection.brushDiameter; stepSize: root.selection.brushDiameterStep; editable: true; implicitHeight: 30; implicitWidth: 124; Layout.minimumWidth: 124; enabled: !root.editor.busy; onValueModified: root.selection.setBrushDiameter(value) }

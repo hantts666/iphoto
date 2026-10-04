@@ -74,6 +74,13 @@ ApplicationWindow {
             canvasPane.focusCanvas()
         } else inspectorPane.clearMaskPosition()
     }
+    function correctDraft(mode) {
+        if (selection.correctDraft(mode)) {
+            compare = false
+            sceneHoverId = ""
+            canvasPane.focusCanvas()
+        }
+    }
     function reviewAdjustments(ids) {
         if (selection.reviewAdjustments(ids)) {
             compare = false

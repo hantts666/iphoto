@@ -517,5 +517,6 @@ def complete(self, result, context):
         origin=context.get("origin"),
     )
     self.changed.emit()
-    self._notify("范围需检查：" + "；".join(warnings) + "；可用补点 / 排除点修正"
+    correction = "可用补点 / 排除点修正" if purpose == "regions" else "可点“补选”或“擦除”修正"
+    self._notify("范围需检查：" + "；".join(warnings) + "；" + correction
                  if warnings else "已生成像素蒙版，请检查边缘与漏选", scope="draft")
