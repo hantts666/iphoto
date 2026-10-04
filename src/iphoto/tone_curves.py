@@ -7,6 +7,7 @@ import numpy as np
 FIELDS = ('curve_rgb', 'curve_red', 'curve_green', 'curve_blue')
 LABELS = dict(zip(FIELDS, ('RGB 总曲线', '红通道曲线', '绿通道曲线', '蓝通道曲线')))
 MAX_POINTS = 16
+_accelerator_failed = False
 SCHEMA = {'type': 'array', 'maxItems': MAX_POINTS, 'items': {
     'type': 'array', 'minItems': 2, 'maxItems': 2,
     'items': {'type': 'integer', 'minimum': 0, 'maximum': 255}}}
@@ -82,3 +83,65 @@ def apply(encoded, recipe):
             if points:
                 encoded[..., index] = evaluate(encoded[..., index], points)
     return encoded
+
+
+@lru_cache(maxsize=16)
+def _packed_coefficients(curves):
+    """A small immutable kernel input, shared by preview/tile/export threads."""
+    packed = np.zeros((4, 5, MAX_POINTS), np.float64)
+    counts = np.zeros(4, np.int64)
+    for index, points in enumerate(curves):
+        if points:
+            counts[index] = len(points)
+            for row, values in enumerate(_coefficients(points)):
+                packed[index, row, :len(values)] = values
+    packed.setflags(write=False)
+    counts.setflags(write=False)
+    return packed, counts
+
+
+def apply_fast(encoded, recipe):
+    """Evaluate large strips without float64 gather/polynomial temporaries."""
+    global _accelerator_failed
+    curves = tuple(getattr(recipe, key) for key in FIELDS)
+    if not any(curves):
+        return encoded
+    if _accelerator_failed or encoded.dtype != np.float32 or encoded.size < 3 * 4096:
+        return apply(encoded, recipe)
+    try:
+        from .color_accel import run_curves
+        return run_curves(encoded, *_packed_coefficients(curves))
+    except Exception:
+        # Editing remains available with the same reference math if the optional
+        # compiler/cache is unavailable. Do not retry a failure on every strip.
+        _accelerator_failed = True
+        return apply(encoded, recipe)
+
+
+@lru_cache(maxsize=64)
+def _max_slope(points):
+    """Bound the gain of each continuous polynomial, including inner extrema."""
+    if not points:
+        return 1.
+    x, c3, c2, c1, _ = _coefficients(points)
+    width = np.diff(x)
+    slopes = [np.abs(c1), np.abs((3*c3*width + 2*c2)*width + c1)]
+    vertex = np.divide(-c2, 3*c3, out=np.zeros_like(c2), where=c3 != 0)
+    inside = (c3 != 0) & (vertex > 0) & (vertex < width)
+    slopes.append(np.abs(((3*c3*vertex + 2*c2)*vertex + c1)[inside]))
+    return max(float(np.max(values, initial=0)) for values in slopes)
+
+
+@lru_cache(maxsize=16)
+def _rounding_window(curves):
+    master = _max_slope(curves[0])
+    channel = np.array([_max_slope(points) for points in curves[1:]], np.float64)
+    # Carry the HSL kernel's existing .003-byte ambiguity margin through both
+    # curves, plus a float32 rounding margin between and after the curves.
+    window = np.maximum(.003, .003*master*channel + .0001*(1+channel)).astype(np.float32)
+    window.setflags(write=False)
+    return window
+
+
+def rounding_window(recipe):
+    return _rounding_window(tuple(getattr(recipe, key) for key in FIELDS))

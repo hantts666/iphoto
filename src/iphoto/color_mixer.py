@@ -73,9 +73,24 @@ def mix(rgb, recipe):
 
 def mix_fast(rgb, recipe):
     """Use the fused kernel for strips; retain the reference at byte rounding ties."""
+    return _mix_fast(rgb, recipe, curves=False)
+
+
+def mix_curves_fast(rgb, recipe):
+    """HSL followed by curves, correcting ties in the final encoded output."""
+    from .tone_curves import FIELDS as CURVE_FIELDS
+    return _mix_fast(rgb, recipe, curves=any(getattr(recipe, key) for key in CURVE_FIELDS))
+
+
+def _mix_fast(rgb, recipe, *, curves):
     global _accelerator_failed
+    if curves:
+        from .tone_curves import apply_fast, rounding_window
+        transform = lambda value: apply_fast(value, recipe)
+    else:
+        transform = lambda value: value
     if _accelerator_failed or rgb.dtype != np.float32 or rgb.size < 3 * 4096:
-        return mix(rgb, recipe)
+        return transform(mix(rgb, recipe))
     try:
         from .color_accel import run
         controls = np.array([[getattr(recipe, f"hsl_{name}_{field}")
@@ -85,11 +100,13 @@ def mix_fast(rgb, recipe):
     except Exception:
         # Optional acceleration must not block editing, original pixels or export.
         _accelerator_failed = True
-        return mix(rgb, recipe)
+        return transform(mix(rgb, recipe))
+    result = transform(result)
     # libm cos can differ by an ulp from the vector implementation. Recompute
     # pixels near an 8-bit half value with the reference before quantization.
     scaled = result * 255
-    ambiguous = np.any(np.abs(scaled - np.floor(scaled) - .5) < .003, axis=-1)
+    window = rounding_window(recipe) if curves else .003
+    ambiguous = np.any(np.abs(scaled - np.floor(scaled) - .5) < window, axis=-1)
     if ambiguous.any():
-        result[ambiguous] = mix(rgb[ambiguous], recipe)
+        result[ambiguous] = transform(mix(rgb[ambiguous], recipe))
     return result

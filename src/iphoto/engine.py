@@ -15,10 +15,10 @@ import re
 import numpy as np
 from PIL import Image, ImageCms, ImageFilter, ImageOps
 from .storage import atomic_output
-from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors, mix_fast as mix_colors_fast
-from .tone_curves import FIELDS as CURVE_FIELDS, LABELS as CURVE_LABELS, SCHEMA as CURVE_SCHEMA, validate as validate_curve, apply as apply_curves
+from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors, mix_fast as mix_colors_fast, mix_curves_fast
+from .tone_curves import FIELDS as CURVE_FIELDS, LABELS as CURVE_LABELS, SCHEMA as CURVE_SCHEMA, validate as validate_curve, apply as apply_curves, apply_fast as apply_curves_fast
 
-ENGINE_VERSION = "1.10.0-srgb-curves"
+ENGINE_VERSION = "1.10.1-compiled-curves"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),
@@ -247,7 +247,7 @@ def preview(image: Image.Image, edge=1600) -> Image.Image:
     return result
 
 
-def _transform_linear(rgb, recipe, *, accelerate_hsl=False):
+def _transform_linear(rgb, recipe, *, accelerate_hsl=False, accelerate_curves=False):
     """Reference float32 math; receives linear RGB and returns encoded sRGB."""
     if recipe.warmth:
         # A relative creative warm/cool control, not calibrated RAW Kelvin.
@@ -293,8 +293,10 @@ def _transform_linear(rgb, recipe, *, accelerate_hsl=False):
         rgb <= 0.0031308, rgb * 12.92, 1.055 * np.power(rgb, 1 / 2.4) - 0.055
     )
     if any(getattr(recipe, key) for key in HSL_FIELDS):
+        if accelerate_hsl and accelerate_curves:
+            return mix_curves_fast(encoded, recipe)
         encoded = (mix_colors_fast if accelerate_hsl else mix_colors)(encoded, recipe)
-    return apply_curves(encoded, recipe)
+    return (apply_curves_fast if accelerate_curves else apply_curves)(encoded, recipe)
 
 
 @lru_cache(maxsize=12)
@@ -348,9 +350,9 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
         corrected = np.empty_like(pixels)
         for top in range(0, image.height, strip_height):
             strip = pixels[top:top + strip_height]
-            exact = (apply_curves(mix_colors_fast(channel_table[strip, np.arange(3)], color_recipe), color_recipe)
+            exact = (mix_curves_fast(channel_table[strip, np.arange(3)], color_recipe)
                      if channel_table is not None else
-                     _transform_linear(LINEAR_LUT[strip].copy(), color_recipe, accelerate_hsl=True))
+                     _transform_linear(LINEAR_LUT[strip].copy(), color_recipe, accelerate_hsl=True, accelerate_curves=True))
             corrected[top:top + strip_height] = np.rint(exact * 255).clip(0, 255).astype(np.uint8)
         result = Image.fromarray(corrected)
     elif color_active and not any(value for key, value in values.items()
@@ -364,7 +366,7 @@ def render(image: Image.Image, recipe: Recipe, strip_height=192, *, detail_size=
         pixels = np.asarray(rgb)
         corrected = np.empty_like(pixels)
         for top in range(0, image.height, strip_height):
-            exact = _transform_linear(LINEAR_LUT[pixels[top:top+strip_height]].copy(), color_recipe)
+            exact = _transform_linear(LINEAR_LUT[pixels[top:top+strip_height]].copy(), color_recipe, accelerate_curves=True)
             corrected[top:top+strip_height] = np.rint(exact*255).clip(0,255).astype(np.uint8)
         result = Image.fromarray(corrected)
     elif color_active:

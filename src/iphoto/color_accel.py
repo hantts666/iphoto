@@ -1,9 +1,9 @@
-"""Lazy, bounded HSL kernel. The NumPy path remains the colour reference."""
+"""Lazy, bounded colour kernels. NumPy remains the colour reference."""
 import os
 
 import numpy as np
 
-# This module is imported only when an image process needs HSL. Keep its pool
+# This module is imported only when an image process needs HSL/large curves. Keep its pool
 # small even when a preview, original pixel tile and export run concurrently.
 os.environ.setdefault("NUMBA_NUM_THREADS", str(min(4, os.cpu_count() or 1)))
 from numba import config, get_num_threads, njit, prange, set_num_threads
@@ -77,7 +77,52 @@ def run(rgb, controls):
         set_num_threads(previous)
 
 
+@njit(cache=True, inline="always", fastmath=False)
+def _curve_value(value, coefficients, count):
+    # Match vector evaluation: clip/multiply in float32, Horner/divide in
+    # float64, then round to float32 between master and channel curves.
+    scaled = np.float32(min(np.float32(1), max(np.float32(0), value)) * np.float32(255))
+    left, right = 0, count
+    while left < right:
+        middle = (left + right) // 2
+        if scaled < coefficients[0, middle]:
+            right = middle
+        else:
+            left = middle + 1
+    index = min(max(left, 1), count - 1) - 1
+    distance = np.float64(scaled) - coefficients[0, index]
+    result = ((coefficients[1, index] * distance + coefficients[2, index]) * distance
+              + coefficients[3, index]) * distance + coefficients[4, index]
+    return np.float32(min(255., max(0., result)) / 255.)
+
+
+@njit(cache=True, nogil=True, parallel=True, fastmath=False)
+def _curves(rgb, coefficients, counts):
+    result = np.empty_like(rgb)
+    for i in prange(rgb.shape[0]):
+        for channel in range(3):
+            value = rgb[i, channel]
+            if counts[0]:
+                value = _curve_value(value, coefficients[0], counts[0])
+            if counts[channel + 1]:
+                value = _curve_value(value, coefficients[channel + 1], counts[channel + 1])
+            result[i, channel] = value
+    return result
+
+
+def run_curves(rgb, coefficients, counts):
+    previous = get_num_threads()
+    try:
+        set_num_threads(min(previous, 4))
+        return _curves(np.ascontiguousarray(rgb).reshape(-1, 3), coefficients, counts).reshape(rgb.shape)
+    finally:
+        set_num_threads(previous)
+
+
 def warm():
     controls = np.zeros((8, 3), np.float32)
     controls[0, 0] = 20
     run(np.array([[.6, .2, .1]], np.float32), controls)
+    from .tone_curves import _packed_coefficients
+    curve = ((0, 0), (128, 140), (255, 255))
+    run_curves(np.array([[.6, .2, .1]], np.float32), *_packed_coefficients((curve,) * 4))
