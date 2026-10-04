@@ -107,11 +107,12 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                 # Background catalog previews stay cheap. Foreground requests
                 # must use the native RGB for refinement, not an enlarged proxy.
                 native = source is not None and not tolerant
-                if 'part_restore' in job:
-                    from .face_restore import restore
-                    if not native or job.get('points') or 'part_boundary' in job:
+                if 'part_restore' in job or 'part_reselect' in job:
+                    from .face_restore import restore, reselect
+                    if not native or job.get('points') or 'part_boundary' in job or ('part_restore' in job and 'part_reselect' in job):
                         raise ValueError('五官补选需要原图与独立完整人脸关系')
-                    mask, quality = restore(source,job['hint'],job['part_restore'],progress=report)
+                    operation,key=(reselect,'part_reselect') if 'part_reselect' in job else (restore,'part_restore')
+                    mask, quality = operation(source,job['hint'],job[key],progress=report)
                     items.append({'id':job['id'],'mask':mask,'quality':quality})
                     continue
                 if 'part_boundary' in job:

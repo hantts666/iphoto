@@ -171,6 +171,10 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, revie
         monkeypatch.setattr(mask_refinement,'restore_context',lambda owner,mask:{'crop':[0,0,1,1],
             'features':{'eyes':[[.3,.2],[.6,.2]],'mouth':[[.3,.6],[.6,.6]]},
             'anchor':[.5,.4],'mask':empty_mask(full=True)})
+    if method=='reselect':
+        monkeypatch.setattr(mask_refinement,'reselect_context',lambda owner,mask:{'crop':[0,0,1,1],
+            'features':{'eyes':[[.3,.2],[.6,.2]],'mouth':[[.3,.6],[.6,.6]]},
+            'anchor':[.5,.4],'mask':empty_mask(full=True)})
     pending_jobs = []
     request = e._request
     def intercept(op, **data):
@@ -183,7 +187,7 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, revie
         context = json.loads(payload['messages'][1]['content'][0]['text'])
         if context['mode'] == 'mask_points':
             return response(points_reply) if points_reply is not None else point_plan([[0, 0] if bad_points else [500, 400]])
-        if context['mode'] in ('mask_validate','mask_restore_validate'):
+        if context['mode'] in ('mask_validate','mask_restore_validate','mask_reselect_validate'):
             return response(verification or {'status': 'accept', 'summary': '本次减少保留真实目标'})
         if context['mode'] == 'mask_review': return response(review(context) if callable(review) else review or {'status':'keep', 'summary':'未发现可明确排除的残留', 'exclude_regions':[]})
         target = next((l for l in context['existing_layers'] if l['id'] == lid), None)
@@ -191,6 +195,7 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, revie
         plan=proposal(context['current_recipe'], 'existing_layers' if mode == 'existing' else 'current_selection',
                       lid if mode == 'existing' else None, recipe)
         plan['mask_refinement']['method']=method
+        if method=='reselect':plan['mask_refinement']['intent']='whole_visible_part'
         return response(plan)
     ui.w.setProperty('chatOpen', True)
     return mask, lid, pending_jobs, mock_api(body, delay=delay)

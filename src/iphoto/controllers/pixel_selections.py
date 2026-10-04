@@ -38,7 +38,7 @@ def start(self, jobs, context, priority=None, composition=None):
         if not face_available():
             self._notify("面部分区模型尚未配置：运行 scripts/setup_face_parsing.py 后重新检测图像能力；本次范围未应用。", True)
             return False
-    if (composition is None or jobs) and (not jobs or any(job.get("mask_target", "object") in ("object", "body_skin") and 'part_restore' not in job for job in jobs)) and not ready(self):
+    if (composition is None or jobs) and (not jobs or any(job.get("mask_target", "object") in ("object", "body_skin") and 'part_restore' not in job and 'part_reselect' not in job for job in jobs)) and not ready(self):
         return False
     if facial or body or semantic_correction:
         self._stop_warm()
@@ -60,6 +60,8 @@ def start(self, jobs, context, priority=None, composition=None):
                             else "正在自动分离面部皮肤、保护眉眼和嘴唇…")
         elif body:
             self._status = "正在按原图细节分别生成身体部位范围…"
+        elif any('part_reselect' in job for job in jobs):
+            self._status = '正在重新识别完整可见五官…可随时取消'
         elif any('part_restore' in job for job in jobs):
             self._status = '正在原始选择范围内补回可见五官…可随时取消'
         elif any('part_boundary' in job for job in jobs):

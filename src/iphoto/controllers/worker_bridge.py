@@ -227,7 +227,8 @@ def _pixel_read(self):
                         and 1 <= progress["part"] <= progress["total"] <= 16
                         and progress["total"] == len(active.get("jobs", []))
                         and (active["jobs"][progress["part"] - 1].get("mask_target") in ("face","face_skin")
-                             or 'part_restore' in active['jobs'][progress['part']-1])
+                             or 'part_restore' in active['jobs'][progress['part']-1]
+                             or 'part_reselect' in active['jobs'][progress['part']-1])
                         and response.get("op") == "segment" and active.get("op") == "segment"
                         and response.get("generation") == self._generation
                         and active.get("generation") == self._generation

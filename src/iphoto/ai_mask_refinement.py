@@ -17,6 +17,13 @@ MASK_REFINEMENT_SCHEMA = {"anyOf": [{
                    "method": {"type": "string", "enum": ["exclude", "boundary", "restore"]},
                    "recipe": LAYER_EDITS_SCHEMA["items"]["properties"]["recipe"]},
     "required": ["layer_id", "recipe", "method"],
+}, {
+    'type': 'object', 'additionalProperties': False,
+    'properties': {'layer_id': {'type': ['string','null']},
+                   'method': {'type': 'string', 'enum': ['reselect']},
+                   'intent': {'type': 'string', 'enum': ['whole_visible_part']},
+                   'recipe': LAYER_EDITS_SCHEMA['items']['properties']['recipe']},
+    'required': ['layer_id','recipe','method','intent'],
 }, {"type": "null"}]}
 POINTS_SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -49,7 +56,7 @@ def eligible(mask):
 
 
 def validate_request(value, scope, current, offered, workspace):
-    if (not isinstance(value, dict) or not {'layer_id','recipe'} <= set(value) <= {'layer_id','recipe','method'}
+    if (not isinstance(value, dict) or not {'layer_id','recipe'} <= set(value) <= {'layer_id','recipe','method','intent'}
             or not workspace.get('mask_refinement_available')):
         raise ValueError('精细范围修正不可用，已有范围和参数保留')
     lid = value['layer_id']
@@ -66,14 +73,18 @@ def validate_request(value, scope, current, offered, workspace):
     else:
         raise ValueError('精细范围修正的作用范围无效')
     method=value.get('method','exclude')
-    if method not in ('exclude','boundary','restore'):
+    if method not in ('exclude','boundary','restore','reselect'):
         raise ValueError('五官范围修正方式无效')
-    if method != 'restore' and not workspace.get('mask_exclusion_available', True):
+    if ('intent' in value and method!='reselect') or (method=='reselect' and value.get('intent')!='whole_visible_part'):
+        raise ValueError('完整五官重选必须明确声明整个可见部位，原范围保留')
+    if method in ('exclude','boundary') and not workspace.get('mask_exclusion_available', True):
         raise ValueError('五官排除模型尚未配置，原范围保留')
     if method=='boundary' and not (workspace.get('selection_mask_boundary_refinable') if scope=='current_selection' else target.get('mask_boundary_refinable')):
         raise ValueError('此范围缺少可靠的五官边缘修正条件，原范围保留')
     if method=='restore' and not (workspace.get('selection_mask_restorable') if scope=='current_selection' else target.get('mask_restorable')):
         raise ValueError('此五官范围缺少原始选择范围或可靠人脸关系，无法补回漏选；原范围保留')
+    if method=='reselect' and not (workspace.get('selection_mask_reselectable') if scope=='current_selection' else target.get('mask_reselectable')):
+        raise ValueError('此五官范围无法可靠对应唯一人脸，无法完整重选；原范围保留')
     recipe = value['recipe']
     if recipe is not None:
         if not isinstance(recipe, dict) or set(recipe) != set(RANGES):
@@ -85,7 +96,8 @@ def validate_request(value, scope, current, offered, workspace):
             raise ValueError('嘴唇范围修正不能夹带磨皮')
         if recipe == base:
             recipe = None
-    return {'layer_id': lid, 'recipe': recipe, 'method': method}
+    return {'layer_id': lid, 'recipe': recipe, 'method': method,
+            **({'intent': 'whole_visible_part'} if method=='reselect' else {})}
 
 
 def mask_data_url(path):
@@ -98,7 +110,7 @@ def mask_data_url(path):
     return 'data:image/png;base64,'+base64.b64encode(output.getvalue()).decode('ascii')
 
 
-def prepare_crop(image, mask, *, reference=None, opacity=.4):
+def prepare_crop(image, mask, *, reference=None, opacity=.4, reselection_scope=None):
     mask = validate_mask(mask)
     if not eligible(mask):
         raise ValueError('此范围不是可修正的鼻部或嘴唇分区')
@@ -107,7 +119,11 @@ def prepare_crop(image, mask, *, reference=None, opacity=.4):
     if bounds is None:
         raise ValueError('已有五官范围为空，未准备修正图')
     if reference is not None:
-        reference = validate_result(reference, mask, image.size)
+        if reselection_scope is None:
+            reference = validate_result(reference, mask, image.size)
+        else:
+            reference = validate_mask(reference)
+            validate_reselection(mask,reference,image.size,reselection_scope)
         previous = raster_mask(reference, image.size).getbbox()
         if previous:
             bounds = (min(bounds[0], previous[0]), min(bounds[1], previous[1]),
@@ -199,4 +215,25 @@ def validate_restoration(mask, previous, size):
     limit = np.asarray(raster_mask(scope, size).crop(box))
     if np.any(current<original) or np.any(current>np.maximum(original,limit)):
         raise ValueError('五官补选减少了原覆盖或超出原始选择范围，原范围保留')
+    return result
+
+
+def validate_reselection(mask, previous, size, scope):
+    """A declared whole-part replacement may change alpha, never its person."""
+    import numpy as np
+    from .document import spatial_mask
+
+    previous=validate_result(previous,previous,size)
+    scope=spatial_mask(scope)
+    reference={**previous,'face_part_scope':scope}
+    result=validate_result(mask,reference,size)
+    before,after=raster_mask(previous,size),raster_mask(result,size)
+    old,new=before.getbbox(),after.getbbox()
+    if not old or not new:
+        raise ValueError('完整五官重选范围为空，原范围保留')
+    box=(min(old[0],new[0]),min(old[1],new[1]),max(old[2],new[2]),max(old[3],new[3]))
+    if (box[2]-box[0])*(box[3]-box[1])>4_000_000:
+        raise ValueError('完整五官核对范围过大，原范围保留')
+    if np.any(np.asarray(after.crop(box))>np.asarray(raster_mask(scope,size).crop(box))):
+        raise ValueError('完整五官重选超出对应人脸范围，原范围保留')
     return result

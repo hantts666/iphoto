@@ -228,7 +228,8 @@ def main():
             raise ValueError("照片已变化，过期范围修正图未准备")
         if request.get('verify'):
             picture, mask, overlay, box = prepare_crop(source.image, request['mask'], reference=request['reference_mask'],
-                opacity=.5 if request.get('restore_verify') is True else .4)
+                opacity=.5 if request.get('restore_verify') is True or request.get('reselect_verify') is True else .4,
+                reselection_scope=request.get('reselect_scope') if request.get('reselect_verify') is True else None)
             regions = []
         elif request.get('review'):
             from .ai_mask_review import prepare_review
@@ -250,9 +251,15 @@ def main():
         extra = {}
         crop_assets = set(paths)
         if (request.get('review') or request.get('verify')) and request.get('reference_mask') is not None:
-            from .ai_mask_review import comparison_images
+            from .ai_mask_review import comparison_images, reselection_images
 
-            for kind, item in zip(('reference', 'changes'), comparison_images(source.image, request['mask'], request['reference_mask'], box, restore=request.get('restore_verify') is True)):
+            if request.get('reselect_verify') is True:
+                kinds=('reference','changes','additions')
+                comparisons=reselection_images(source.image,request['mask'],request['reference_mask'],box,request['reselect_scope'])
+            else:
+                kinds=('reference','changes')
+                comparisons=comparison_images(source.image,request['mask'],request['reference_mask'],box,restore=request.get('restore_verify') is True)
+            for kind,item in zip(kinds,comparisons):
                 path = cache / f"mask-refinement-{request['id']}-{kind}.png"
                 display(item).save(path, icc_profile=SRGB_PROFILE); assets.append(path)
                 crop_assets.add(path)

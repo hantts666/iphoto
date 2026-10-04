@@ -123,19 +123,20 @@ def test_comparison_payload_has_registered_views_and_no_private_geometry():
     assert not set(context)&{'context_crop', '_mask_path', 'reference_image', 'changes_image', 'face_context_image'}
 
 
-def test_six_image_crop_batch_and_display_assets_survive_worker_cleanup(tmp_path):
+@pytest.mark.parametrize('images',[6,7])
+def test_crop_batch_and_display_assets_survive_worker_cleanup(tmp_path,images):
     from iphoto.worker import _prune_assets
 
     old = [tmp_path/f'old-{i}.png' for i in range(4)]
     display = [tmp_path/f'display-{i}.png' for i in range(3)]
-    batch = [tmp_path/f'crop-{i}.png' for i in range(6)]
+    batch = [tmp_path/f'crop-{i}.png' for i in range(images)]
     assets = old+display+batch
     for path in assets: path.write_bytes(b'image')
     _prune_assets(assets, set(display+batch))
     assert all(path.exists() for path in display+batch) and all(not path.exists() for path in old)
-    assert len(assets)==9
+    assert len(assets)==images+3
     # A later batch releases the previous crop rather than growing the cache forever.
-    next_batch=[tmp_path/f'next-{i}.png' for i in range(6)]
+    next_batch=[tmp_path/f'next-{i}.png' for i in range(images)]
     for path in next_batch: path.write_bytes(b'image')
     assets += next_batch; _prune_assets(assets, set(display+next_batch))
     assert all(path.exists() for path in display+next_batch) and all(not path.exists() for path in batch)

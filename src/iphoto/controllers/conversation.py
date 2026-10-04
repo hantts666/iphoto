@@ -383,7 +383,7 @@ def sendMessage(self, text, mode):
     selection.pop('face_part_scope', None)
     from ..ai_mask_refinement import eligible as refinable_mask
     from ..segmentation.precise_sam import available as precise_available
-    from .mask_refinement import boundary_context, restore_context
+    from .mask_refinement import boundary_context, restore_context, reselect_context
     from ..segmentation.face_precision import available as precision_available
     selection["description"] = self._quality_text(
         self._candidate or self._layer()["mask"]
@@ -419,6 +419,7 @@ def sendMessage(self, text, mode):
                     "mask_refinable": refinable_mask(l["mask"]) and l["kind"] == "adjustment" and not l.get("heal") and not l.get("inpaint"),
                     "mask_boundary_refinable": bool(boundary_context(self,l["mask"])) if l["kind"] == "adjustment" and not l.get("heal") and not l.get("inpaint") else False,
                     'mask_restorable': bool(restore_context(self,l['mask'])) if l['kind']=='adjustment' and not l.get('heal') and not l.get('inpaint') else False,
+                    'mask_reselectable': bool(reselect_context(self,l['mask'])) if l['kind']=='adjustment' and not l.get('heal') and not l.get('inpaint') else False,
                     "mask_label": l["mask"]["label"],
                     "visible": l["visible"],
                     "opacity": l["opacity"],
@@ -438,6 +439,7 @@ def sendMessage(self, text, mode):
             "selection_mask_refinable": self.hasSelectionDraft and refinable_mask(self._candidate),
             "selection_mask_boundary_refinable": self.hasSelectionDraft and bool(boundary_context(self,self._candidate)),
             'selection_mask_restorable': self.hasSelectionDraft and bool(restore_context(self,self._candidate)),
+            'selection_mask_reselectable': self.hasSelectionDraft and bool(reselect_context(self,self._candidate)),
         },
     )
     self.changed.emit()
