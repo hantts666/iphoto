@@ -537,6 +537,8 @@ def _cloud_plan(self, result, generation):
     pending = self._pending_request or {}
     if generation != self._generation or pending.get("layer_id") != self._selected:
         return self._notify("照片或图层已变化，过期结果未应用", True)
+    if (pending.get("target_localization") or result.get("mode") == "targets") and pending.get("binding") != self._document_signature():
+        return self._notify("照片或图层已变化，过期选区未应用", True)
     if pending.get("object_grounding"):
         from .object_grounding import planned
 
@@ -629,6 +631,21 @@ def _cloud_plan(self, result, generation):
         pending["skin_grounded"] = True
         del pending["skin_grounding"]
     mode = result.get("mode", "edit")
+    if mode == "targets" and result["status"] == "locate":
+        if pending.get("target_localization"):
+            return self._notify("目标定位状态无效，原选区保留", True)
+        # Continue the same user request. Do not publish a coarse composition,
+        # append another user message, or release its document binding.
+        pending["target_localization"] = True
+        self._status = "AI 正在图中定位具体目标，原选区保留…"
+        self.changed.emit()
+        if self._ai.plan(
+            pending["text"], dict(self._recipe), sorted(self._locked),
+            QUrl(self._original).toLocalFile(), self._generation, "selection",
+            _spatial_context(self),
+        ):
+            return
+        return self._notify("图中定位未能启动，原选区保留", True)
     if (
         mode == "auto"
         and result["status"] == "unsupported"

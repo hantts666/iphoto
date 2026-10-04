@@ -380,3 +380,10 @@ CurveEditor在原调整面板增添可折叠“通道曲线”，选择RGB/红/�
 1.10.4的confidence规划最多400万像素局部引导；超过旧200万的区域必须有神经margin≥6并腐蚀8像素后占组件至少一半的核心，核心保留确定前景，其他细节继续ViTMatte。原小区域稀疏排序约束保持，未能满足大区域核心时保留已有窄边路线；语义分数不是校准概率或物理透明度，不能据此处理整块薄纱。全部区域共享400万未知像素／128分块／180秒，模型仍固定640输入，组件≤原图15%、最多4个，无新依赖／权重／项目格式。代理插值贡献域上下界只用于保守排除不可能通过种子门槛的字段，不生成语义标签；规划循环也检查整体时间。
 
 前台details_plan进度显示检查细节范围与计算预算，再进入details及块进度；worker_bridge核对id／op／generation／对象类型、取消／关闭，状态不能发布部分结果。test_confidence_detail、test_detail_planning_progress及既有原尺寸／取消门槛覆盖。第120轮原入口Lake前后alpha／PNG差异0，真实直接头发定位与同hint参考精确，清单组合误选手臂仍待下一轮解决；详见large-native-detail-2026-10-04.md。选区入口收敛、局部未知笔触和通道引导的后续方案另见selection-workflow-proposal-2026-10-04.md，尚未全部实现。
+
+
+## 单一文字选择与局部定位
+
+1.10.5：SelectionGuide仅aiSelectionButton，旁接selectionDescriptionInput，点击与回车同selectByDescription。无目录直接selection，不自动scene；有目录targets用selected／locate／unsupported，locate必须空id，禁止以人物相减替代不存在的局部。conversation保留原pending请求及binding，用原text续selection；状态、取消、过期门槛与原像素任务共用，不发布中间粗范围或第二条用户消息。已有选中层范围绑定保持。旧selectByTextDirect槽保留兼容，无对应UI按钮。
+
+补本地人脸后的目录内容相同不调用SceneIndex.set，避免重置revision、precise、pixel_status、hover；变化则仍完整替换。preview第一次必须升级source，原尺寸缓存可直接复用。第121轮实际千问分析九对象、帽子两次、头发自动定位共5HTTP，第二次帽子0本地模型任务且bitmap／cache／revision保持；头发未再带手臂。最终相关132通过，实际原尺寸PNG／ICC／tile／重开／撤销／源与设置保持。详见planning/iphoto-v1.8/selection-routing-2026-10-04.md；透明材质入口／通道尚未实现。

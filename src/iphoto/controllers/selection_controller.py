@@ -737,7 +737,7 @@ class SelectionController(QObject):
         from .face_inventory import current
         face=next((f for f in current(editor) if f["id"]==lid),None)
         if face is None:
-            return editor._notify("没有可靠的人脸定位；可用 AI 直接识别或框住可见人脸后描述",True)
+            return editor._notify("没有可靠的人脸定位；可在范围中描述要选择的人脸，或框住可见人脸后描述",True)
         return pixel_selections.select_hint(editor,deepcopy(face["mask"]),anchor=face["anchor"],
                          mask_target="face_skin" if skin else "face",crop=face["skin_crop"],
                          recover_face_anchor=True,

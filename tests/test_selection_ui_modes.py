@@ -1,7 +1,6 @@
 """State-driven inspector: picked layer shows adjustments, otherwise the range module."""
 
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -48,13 +47,17 @@ def ui(qt_app, ai_store, tmp_path):
 
 def test_no_tabs_and_default_is_range_module(ui):
     editor, window, find, warnings = ui
-    for gone in ("adjustmentsTab", "sceneTab", "selectionTab", "selectionUiToggle"):
+    for gone in ("adjustmentsTab", "sceneTab", "selectionTab", "selectionUiToggle", "directSelectionButton"):
         stack = [window.contentItem()]
         while stack:
             item = stack.pop()
             assert item.objectName() != gone, gone
             stack.extend(item.childItems())
     assert find("selectionDescriptionInput").property("visible")
+    assert find("aiSelectionButton").property("text") == "选择"
+    prompt, button = find("selectionDescriptionInput"), find("aiSelectionButton")
+    assert abs(prompt.mapToScene(QPointF()).y() - button.mapToScene(QPointF()).y()) < 1
+    assert button.mapToScene(QPointF()).x() >= prompt.mapToScene(QPointF()).x() + prompt.width()
     assert not find("parameter_exposure").property("visible")
     assert not warnings, warnings
 

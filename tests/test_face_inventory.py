@@ -148,7 +148,7 @@ def test_direct_text_only_remembers_a_successful_full_face_and_reopens_it(canvas
     with mock_api(completion(value)) as (url, requests):
         configure(e.ai, url)
         canvas.find("selectionDescriptionInput").setProperty("text", "选择完整人脸")
-        canvas.click("directSelectionButton")
+        canvas.click("aiSelectionButton")
         wait_for(lambda:not e.ai.busy and e._pending_request is None and settled(e))
         assert len(requests) == 1 and e.hasSelectionDraft and e._layers == before
     assert bool(e.selection.faces) == (target == "face")

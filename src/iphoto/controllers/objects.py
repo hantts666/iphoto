@@ -49,11 +49,15 @@ def selectByDescription(self, text):
     if not self._ai.ready:
         return self.sendMessage(text, "selection")
     if not self._scene.catalog and not self._scene.restore(self._scene_key()):
-        self._scene_followup = text.strip()
-        self.analyzeScene(False)
-    else:
-        self._scene.set(with_local_faces(self._scene.catalog, self._face_hints))
-        self.sendMessage(text, "targets")
+        # A description already supplies the intent. Do not make the user
+        # wait for an unrelated full-scene inventory before locating it.
+        return self.sendMessage(text, "selection")
+    catalog = with_local_faces(self._scene.catalog, self._face_hints)
+    if catalog != self._scene.catalog:
+        # set() intentionally replaces a scene revision and its pixel cache.
+        # Merely choosing another object must retain unchanged cached masks.
+        self._scene.set(catalog)
+    return self.sendMessage(text, "targets")
 
 
 def checkSceneObject(self, lid, checked):

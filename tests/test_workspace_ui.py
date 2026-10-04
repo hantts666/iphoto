@@ -73,7 +73,7 @@ def test_draw_layer_ai_draft_and_advice_controls(qt_app, ai_store, tmp_path, siz
             QTest.qWait(90)
             find("descriptionInput").setProperty("text","让照片更亮")
             find("selectionDescriptionInput").setProperty("text","选出主体，生成粗选区")
-            click("directSelectionButton")
+            click("aiSelectionButton")
             wait_for(lambda: editor.hasSelectionDraft and settled(editor))
             wait_for(lambda: window.property("selectionPreviewReady"))
             click("moreOutputButton")

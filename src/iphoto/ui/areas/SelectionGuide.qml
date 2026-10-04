@@ -34,7 +34,7 @@ ColumnLayout {
                 ? selection.editingLayerMask
                     ? "正在修正“" + selection.maskEditLayerName + "”的范围 · 修改尚未保存"
                     : "当前范围：" + editor.draftLabel + " · 尚未开始调整"
-                : editor.hasRegionDraft ? "分区预览中" : "悬停元素行可在画布预览范围；点击即设为当前范围。"
+                : editor.hasRegionDraft ? "分区预览中" : editor.sceneObjects.length ? "描述要选的对象，或点击画面元素；悬停可预览范围。" : "描述要调整的对象，或在图中点选 / 框选。"
             color: editor.hasSelectionDraft ? "#c6d9ca" : Theme.muted
             wrapMode: Text.Wrap
         }
@@ -73,7 +73,10 @@ ColumnLayout {
                     }
                 }
             }
-            Field { id: selectionPrompt; objectName: "selectionDescriptionInput"; Layout.fillWidth: true; implicitHeight: 30; placeholderText: "或用文字描述：天空，不要树枝"; onAccepted: selection.selectByText(text) }
+            RowLayout { Layout.fillWidth: true; implicitWidth: 0; spacing: 5
+                Field { id: selectionPrompt; objectName: "selectionDescriptionInput"; Layout.fillWidth: true; implicitHeight: 30; placeholderText: "描述对象或部位，如：头发"; onAccepted: selection.selectByText(text) }
+                Action { objectName: "aiSelectionButton"; text: "选择"; Layout.preferredWidth: 58; implicitHeight: 30; hint: "描述要调整的对象或部位；自动定位并生成范围，已有清单能准确表示时复用。无需先分析画面。"; enabled: editor.hasImage && !editor.busy && selectionPrompt.text.trim().length>0; onClicked: selection.selectByText(selectionPrompt.text) }
+            }
             RowLayout {
                 visible: selection.faces.length>0; Layout.fillWidth: true; spacing: 4
                 SelectBox { id: faceChoice; objectName:"faceChoiceBox"; model: selection.faces; textRole:"name"; Layout.fillWidth:true; implicitHeight:26; enabled:!editor.busy }
@@ -98,11 +101,7 @@ ColumnLayout {
                     }
                 }
             }
-            Caption { visible:editor.hasImage && selection.faces.length===0; text:"尚未定位人脸。可分析画面，或输入“选择完整人脸”并点 AI 直接识别；识别成功后可一键磨皮。"; font.pixelSize:10; wrapMode:Text.Wrap; Layout.fillWidth:true }
-            RowLayout { Layout.fillWidth: true; implicitWidth: 0
-                Action { objectName: "aiSelectionButton"; text: "按描述识别"; Layout.fillWidth: true; implicitHeight: 28; hint: "有元素清单时从清单匹配（快、可复核）；无清单先分析画面"; enabled: editor.hasImage && !editor.busy && selectionPrompt.text.trim().length>0; onClicked: selection.selectByText(selectionPrompt.text) }
-                Action { objectName: "directSelectionButton"; text: "AI 直接识别"; subtle: true; Layout.fillWidth: true; implicitHeight: 28; hint: "跳过清单，AI 直接在图中识别目标（云端）"; enabled: editor.hasImage && !editor.busy && selectionPrompt.text.trim().length>0; onClicked: selection.selectByTextDirect(selectionPrompt.text) }
-            }
+            Caption { visible:editor.hasImage && selection.faces.length===0; text:"尚未定位人脸。输入“选择完整人脸”并点选择；识别成功后可一键磨皮。"; font.pixelSize:10; wrapMode:Text.Wrap; Layout.fillWidth:true }
             RowLayout { Layout.fillWidth: true; implicitWidth: 0; spacing: 4
                 Caption { text: "画面元素"; Layout.fillWidth: true }
                 Action { objectName: "analyzeSceneButton"; text: editor.sceneObjects.length ? "重新分析" : "分析画面"; subtle: true; implicitHeight: 24; font.pixelSize: 10; enabled: editor.hasImage && !editor.busy; onClicked: editor.analyzeScene(editor.sceneObjects.length>0) }

@@ -128,7 +128,7 @@ def test_direct_partial_face_preserves_bounds_and_never_creates_a_full_face_iden
            'box':[210,240,250,300],'point':[230,270]}
     with mock_api(completion(value)) as (url,requests):
         configure(e.ai,url);canvas.find('selectionDescriptionInput').setProperty('text','只选脸颊')
-        canvas.click('directSelectionButton');wait_for(lambda:not e.ai.busy and e._pending_request is None)
+        canvas.click('aiSelectionButton');wait_for(lambda:not e.ai.busy and e._pending_request is None)
     args,kw=captured[0]
     assert args[1]['ops']==parse_selection(completion(value))['mask']['ops']
     assert kw['face_scope']=='region' and kw['face_context']==e._face_hints[0]['mask']
