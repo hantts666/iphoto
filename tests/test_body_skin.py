@@ -42,6 +42,14 @@ def jobs(item=None):
     return [{"hint": p["mask"], "points": [[*p["anchor"], 1]]} for p in planned["parts"]]
 
 
+def test_body_parts_do_not_overwrite_the_facial_part_contract():
+    for count in (1, 2, 4):
+        planned = parse(region((PARTS * 2)[:count]))
+        assert len(planned['parts']) == count and 'face_part' not in planned
+    with pytest.raises(ValueError, match='面部部位'):
+        parse({**region(), 'face_part': 'nose'})
+
+
 class TargetFixture:
     def predict(self, image, coords, labels):
         hard = np.asarray(image)[:, :, 0] > 128

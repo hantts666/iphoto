@@ -49,7 +49,9 @@ def start(self, jobs, context, priority=None, composition=None):
         if composition is not None and not jobs:
             self._status = f"正在组合 {len(composition['ids'])} 个对象的范围…"
         elif facial:
-            self._status = ("正在按原图分离人脸、排除头发帽子和衣物…" if all(job.get("mask_target") == "face" for job in jobs)
+            self._status = ("正在按原图分离上下嘴唇、保护嘴内与周围皮肤…" if all(job.get('face_part') == 'lips' for job in jobs)
+                            else "正在按原图分离鼻部皮肤、排除脸颊与其他五官…" if all(job.get('face_part') == 'nose' for job in jobs)
+                            else "正在按原图分离人脸、排除头发帽子和衣物…" if all(job.get("mask_target") == "face" for job in jobs)
                             else "正在自动分离面部皮肤、保护眉眼和嘴唇…")
         elif body:
             self._status = "正在按原图细节分别生成身体部位范围…"

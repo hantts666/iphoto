@@ -82,6 +82,11 @@ ColumnLayout {
             }
             RowLayout {
                 visible: selection.faces.length>0; Layout.fillWidth: true; spacing: 4
+                Action { objectName:"selectFaceNoseButton"; text:"选鼻部皮肤"; Layout.fillWidth:true; implicitHeight:26; hint:"本地 AI 按鼻部类别选取，排除脸颊与其他五官；遮挡处需检查"; enabled:!editor.busy && faceChoice.currentIndex>=0; onClicked:selection.selectFacePart(selection.faces[faceChoice.currentIndex].id,"nose") }
+                Action { objectName:"selectFaceLipsButton"; text:"选嘴唇"; Layout.fillWidth:true; implicitHeight:26; hint:"本地 AI 分离上下嘴唇，保护嘴内和周围皮肤，可独立调整唇色；请检查边缘"; enabled:!editor.busy && faceChoice.currentIndex>=0; onClicked:selection.selectFacePart(selection.faces[faceChoice.currentIndex].id,"lips") }
+            }
+            RowLayout {
+                visible: selection.faces.length>0; Layout.fillWidth: true; spacing: 4
                 Repeater {
                     model: [{key:"smooth",label:"磨皮"},{key:"rosy",label:"提气色"},{key:"refine",label:"自然精修"}]
                     delegate: Action {

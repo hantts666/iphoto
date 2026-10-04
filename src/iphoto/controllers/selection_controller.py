@@ -687,6 +687,24 @@ class SelectionController(QObject):
                          origin={"mode":"selection","model":"BiSeNet（本地 AI）"})
 
     @Slot(str, str)
+    def selectFacePart(self, lid, part):
+        editor = self._editor
+        from ..segmentation.face_parts import PARTS
+        if not editor.hasImage or editor.busy or editor.hasRegionDraft or part not in PARTS:
+            return
+        from .face_inventory import current
+        face = next((f for f in current(editor) if f['id'] == lid), None)
+        if face is None:
+            return editor._notify("未可靠定位到该人脸，请重新识别", True)
+        return pixel_selections.select_hint(
+            editor, deepcopy(face['mask']), anchor=face['anchor'],
+            mask_target=PARTS[part]['target'], crop=face['skin_crop'], recover_face_anchor=True,
+            face_scope='region', face_context=face['mask'], face_part=part,
+            features=face.get('face_features'),
+            origin={"mode": "selection", "model": "BiSeNet（本地 AI）"},
+        )
+
+    @Slot(str, str)
     def retouchFace(self, lid, preset):
         editor = self._editor
         presets = {

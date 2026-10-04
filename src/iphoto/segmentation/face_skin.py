@@ -16,6 +16,7 @@ from ..document import empty_mask, validate_mask, raster_mask
 from ..masks import encode_bitmap
 from .face_models import verified_path
 from .face_detection import validate_features
+from .face_parts import PARTS, validate_part
 from .prompts import validate_points
 from .runtime import prepare_runtime
 
@@ -156,8 +157,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     hint = validate_mask(hint)
     if scope not in ('full', 'region'):
         raise ValueError("面部编辑范围无效")
-    if part not in ('all','nose') or part == 'nose' and (target != 'face_skin' or scope != 'region'):
-        raise ValueError("面部部位类型无效")
+    part = validate_part(part, target, scope)
     context_hint = validate_mask(context_hint) if context_hint is not None else hint
     points = validate_points(points or [])
     if len(points) != 1 or points[0][2] != 1:
@@ -203,6 +203,10 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     if selected.mean() < .005 or not np.any(selected & (labels == 10)):
         raise ValueError("未可靠识别到目标面部，照片未改变；请框住单个人脸再试")
     protected = np.isin(labels, (14,15,16,17,18) if target == "face" else PROTECTED_CLASSES).astype(np.uint8)
+    if part == 'lips':
+        # Confirm the complete face at its nose first, then isolate its lips.
+        # The mouth class includes the interior, not a separate teeth class.
+        protected = (~np.isin(labels, PARTS[part]['classes'])).astype(np.uint8)
     protected = cv2.dilate(protected, np.ones((3, 3), np.uint8)) > 0
     if target=='face_skin' and features is not None:
         features = validate_features(features)
@@ -211,8 +215,12 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         face_width = cv2.boundingRect(selected.astype(np.uint8))[2]
         protected |= feature_guard_pixels(mapped,labels,face_width)
     hard = (selected & ~protected).astype(np.uint8)
-    if part == 'nose':
-        hard &= (labels == 10).astype(np.uint8)
+    if part in PARTS:
+        hard &= np.isin(labels, PARTS[part]['classes']).astype(np.uint8)
+        # Nearby faces can touch in the parser's complete-face component.
+        # A supplied identity context limits parts to the localized person.
+        context = raster_mask(context_hint, image.size).crop(box)
+        hard &= (np.asarray(context.resize((grid_width,grid_height),Image.Resampling.NEAREST)) > 0).astype(np.uint8)
     scope_alpha = None
     scope_feather = 0
     if scope == 'region':
@@ -222,11 +230,12 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         grid_scope = np.asarray(scope_alpha.resize((grid_width,grid_height), Image.Resampling.NEAREST))
         hard &= (grid_scope > 0).astype(np.uint8)
         if not hard.any():
-            raise ValueError("指定部位内未识别到面部皮肤，照片未改变；请调整描述")
+            label = PARTS[part]['label'] if part in PARTS else '面部皮肤'
+            raise ValueError(f"指定部位内未识别到{label}，照片未改变；请调整描述")
         # Local complexion/light edits need a soft transition inside their
         # spatial limit, without widening semantic eye/lip protection holes.
         bounds = scope_alpha.getbbox()
-        scope_feather = max(2,min(48,round(min(bounds[2]-bounds[0],bounds[3]-bounds[1])*.12)))
+        scope_feather = 2 if part == 'lips' else max(2,min(48,round(min(bounds[2]-bounds[0],bounds[3]-bounds[1])*.12)))
         extent = (np.asarray(scope_alpha)>0).astype(np.uint8)
         inside = cv2.distanceTransform(np.pad(extent,1),cv2.DIST_L2,5)[1:-1,1:-1]
         from PIL import ImageChops
@@ -249,12 +258,12 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     full.paste(alpha, (left, top))
     result = empty_mask()
     result.update(bitmap=encode_bitmap(full, sampling="alpha", preserve_resolution=True),
-                  label=(hint["label"] + (" · 鼻部皮肤" if part == 'nose' else " · 面部局部" if scope == 'region' else " · 人脸" if target == "face" else " · 面部皮肤"))[:200],
+                  label=(hint["label"] + (" · " + PARTS[part]['label'] if part in PARTS else " · 面部局部" if scope == 'region' else " · 人脸" if target == "face" else " · 面部皮肤"))[:200],
                   semantic_target=target)
     quality = {
-        "model": "BiSeNet · 人脸" if target == "face" else "BiSeNet · 面部皮肤", "semantic_target": target,
-        "protected_features": ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
-        "warnings": [("人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
+        "model": "BiSeNet · 嘴唇" if part == 'lips' else "BiSeNet · 人脸" if target == "face" else "BiSeNet · 面部皮肤", "semantic_target": target,
+        "protected_features": ["嘴内", "面部皮肤", "鼻子", "眼睛", "眉毛", "头发", "帽子", "衣物"] if part == 'lips' else ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
+        "warnings": [("嘴唇" if part == 'lips' else "人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "mask_size": list(image.size), "crop_size": list(patch.size),
         "boundary_grid": "source" if native else "model", "boundary_size": [grid_width, grid_height],

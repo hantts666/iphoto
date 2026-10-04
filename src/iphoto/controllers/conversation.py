@@ -642,7 +642,7 @@ def _cloud_plan(self, result, generation):
         for region in result['regions']:
             partial = region.get('face_scope') == 'region'
             face = match_hint(region['mask'],face_inventory.current(self), partial=partial,
-                              anchor=region.get('anchor')) if region.get('mask_target')=='face_skin' else None
+                              anchor=region.get('anchor')) if region.get('mask_target') in ('face_skin','face') else None
             if face:
                 region.update(mask=region['mask'] if partial else deepcopy(face['mask']),anchor=list(face['anchor']),
                               skin_crop=list(face['skin_crop']),recover_face_anchor=True)
@@ -872,8 +872,10 @@ def _cloud_plan(self, result, generation):
         )
     elif mode in ("selection", "targets", "regions", "auto") and foreground_pixel_pending:
         facial = any(r.get("mask_target") == "face_skin" for r in result.get("regions", []))
+        lips = any(r.get("face_part") == "lips" for r in result.get("regions", []))
         body = any(r.get("mask_target") == "body_skin" for r in result.get("regions", []))
         status = ("正在自动分离面部皮肤、保护眉眼和嘴唇；完成后自动建立图层…" if facial
+                  else "正在自动分离上下嘴唇、保护嘴内与周围皮肤；完成后自动建立图层…" if lips
                   else "正在按原图细节分别生成身体部位范围；完成后自动建立图层…" if body
                   else "AI 已规划局部图层，正在本地生成蒙版；完成后自动建立图层…" if auto_layering
                   else "AI 已定位目标，正在本地生成像素选区…")
