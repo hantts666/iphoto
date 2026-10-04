@@ -177,6 +177,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     patch = image.crop(box).convert("RGB")
     precision = False
     fallback = False
+    feature_refinement = False
     part_alpha = None
     if features is not None:
         features = validate_features(features)
@@ -303,10 +304,29 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         alpha = alpha.resize(patch.size, Image.Resampling.BILINEAR)
         support = Image.fromarray(hard * 255).resize(patch.size, Image.Resampling.NEAREST)
         alpha.paste(0, mask=support.point(lambda v: 255 - v))
+    if (engine is not None and not provided_engine and native and target == 'face_skin'
+            and part == 'all' and features is not None):
+        from . import face_precision
+        if face_precision.available():
+            try:
+                from .face_feature_fusion import MAX_PIXELS, refine
+                if patch.width * patch.height > MAX_PIXELS:
+                    raise ValueError('精细面部皮肤范围超过局部预算')
+                parser = face_precision.backend(progress=progress) if progress is not None else face_precision.backend()
+                if callable(getattr(parser, 'predict_skin', None)):
+                    landmarks = np.asarray([*features['eyes'], points[0][:2], *features['mouth']]) * image.size - (left, top)
+                    fine_labels, skin_alpha = parser.predict_skin(patch, landmarks, progress=progress)
+                    context = np.asarray(raster_mask(context_hint, image.size).crop(box))
+                    alpha = Image.fromarray(refine(np.asarray(alpha), labels, fine_labels, skin_alpha, selected, context))
+                    feature_refinement = True
+            except Exception:
+                fallback = True
+                if progress is not None:
+                    progress('face_fallback')
     if scope_alpha is not None:
         from PIL import ImageChops
         alpha = ImageChops.multiply(alpha, scope_alpha)
-    if continuous and not alpha.getbbox():
+    if (continuous or feature_refinement) and not alpha.getbbox():
         raise ValueError('五官类别分数不足以生成可靠范围，照片未改变')
     full = Image.new("L", image.size)
     full.paste(alpha, (left, top))
@@ -320,14 +340,15 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         result["face_part"] = part
         result['face_part_scope'] = spatial_mask(hint)
     quality = {
-        "model": ("FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
+        "model": ("BiSeNet + FaRL LaPa" if feature_refinement else "FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
         "protected_features": ["嘴内", "面部皮肤", "鼻子", "眼睛", "眉毛", "头发", "帽子", "衣物"] if part == 'lips' else ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
         "warnings": [("嘴唇" if part == 'lips' else "人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "mask_size": list(image.size), "crop_size": list(patch.size),
         "boundary_grid": "source" if native else "model", "boundary_size": [grid_width, grid_height],
-        "coverage": round((np.count_nonzero(np.asarray(alpha)) if continuous else float(hard.mean())*patch.width*patch.height) / (image.width * image.height) * 100, 2),
-        "continuous_boundary": continuous,
+        "coverage": round((np.count_nonzero(np.asarray(alpha)) if continuous or feature_refinement else float(hard.mean())*patch.width*patch.height) / (image.width * image.height) * 100, 2),
+        "continuous_boundary": continuous or feature_refinement,
+        "skin_feature_refinement": feature_refinement,
         "anchor_recovered": recovered,
         "landmark_protection": target=='face_skin' and features is not None,
         "face_scope": scope,

@@ -41,7 +41,7 @@ AI 分区使用 `mask_target=face_skin` 指定单个人脸，独立像素进程�
 
 ## 精细五官 · FaRL LaPa（1.9.10，可选）
 
-鼻部和嘴唇入口在精细模型已配置且有五点定位时自动使用FaRL LaPa；没有配置时沿用BiSeNet。完整人脸和皮肤磨皮继续使用19类BiSeNet，避免11类LaPa缺少颈部、帽子、衣物独立类别造成保护退步。模型异常时提示已使用基础分区；无法确认面部或指定部位时不扩大选区。
+鼻部和嘴唇入口在精细模型已配置且有五点定位时自动使用FaRL LaPa；没有配置时沿用BiSeNet。完整人脸外轮廓继续使用19类BiSeNet。1.10.2的完整／局部皮肤范围先做BiSeNet分区，再在同一人脸内部用FaRL皮肤／鼻部类别分数和眉眼／嘴唇类别细化，减少旧定位保护圈误挡皮肤；必须在当前脸框内、两模型共享唯一可见鼻部连通域。眼镜、耳饰、颈部、帽子、衣物、头发和外部边界仍由19类模型保护，耳部沿原范围，不用缺少这些类别的LaPa覆盖外轮廓。原图局部预算16MP、共享16MB语义缓存，无新增权重。模型异常、尺寸／对应不可靠或预算超限时提示并保留基础分区；现有保存蒙版不重算。
 
 权重为[FacER作者模型发布](https://github.com/FacePerceiver/facer/releases/tag/models-v1)的 `face_parsing.farl.lapa.main_ema_136500_jit191.pt`：646,604,126字节、SHA256 `f5a874906795ef89fadd7cf3b5b218ed8550fa9dbb383b7c0f95726c3a352914`。五点对齐、448输入、warp_factor=0.8和类别映射依据[固定作者源码](https://github.com/FacePerceiver/facer/blob/ddd35c76ff840174b8a5403ad1c1255e37b8782b/facer/face_parsing/farl.py)，保留[FaRL许可](../docs/licenses/FaRL-MIT.txt)与[FacER许可](../docs/licenses/facer-MIT.txt)。不是发丝透明度模型。
 

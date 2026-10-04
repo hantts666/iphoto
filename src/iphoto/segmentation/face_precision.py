@@ -2,7 +2,8 @@
 
 Coordinate formulas follow FacePerceiver/facer (MIT), revision
 ddd35c76ff840174b8a5403ad1c1255e37b8782b. Runtime uses NumPy and ONNX only.
-This eleven-class model is used for nose/lips, not whole-face skin protection.
+The 19-class parser retains whole-face outer protection; this model refines
+nose/lips and internal skin/feature boundaries within that person's domain.
 """
 from hashlib import sha256
 from importlib.util import find_spec
@@ -131,13 +132,13 @@ def native_part_alpha(scores, matrix, labels, part):
     Resample logits before softmax, as for labels. Work only around the native
     target and in bounded blocks; never allocate an eleven-channel source map.
     """
-    if part not in ('nose', 'lips'):
+    if part not in ('nose', 'lips', 'skin'):
         raise ValueError('连续五官边缘的目标无效')
     if (scores.shape != (1,11,512,512) or scores.dtype != np.float32 or not np.isfinite(scores).all()
             or np.shape(matrix) != (3,3) or not np.isfinite(matrix).all()
             or labels.ndim != 2 or labels.dtype != np.uint8 or labels.max(initial=0)>18):
         raise ValueError('连续五官边缘的语义输入无效')
-    classes = (7,9) if part=='lips' else (6,)
+    classes = (1,6) if part=='skin' else (7,9) if part=='lips' else (6,)
     target = np.isin(labels, CLASS_MAP[list(classes)])
     result = np.zeros(labels.shape, np.uint8)
     ys,xs = np.nonzero(target)
@@ -219,6 +220,12 @@ class FaceParser:
         if progress is not None:
             progress('face_continuous')
         return labels,native_part_alpha(scores,matrix,labels,part)
+
+    def predict_skin(self, image, points, *, progress=None):
+        labels,scores,matrix=self._prediction(image,points,progress=progress)
+        if progress is not None:
+            progress('face_skin_features')
+        return labels,native_part_alpha(scores,matrix,labels,'skin')
 
 
 def backend(*, progress=None):
