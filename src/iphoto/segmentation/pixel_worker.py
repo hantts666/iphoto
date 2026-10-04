@@ -29,6 +29,13 @@ def main():
             request = json.loads(line)
             if request.get("op") != "segment":
                 raise ValueError("未知像素操作")
+            def detail_progress(phase, part, total, tile=None, tiles=None):
+                details = {"tile": tile,"tiles": tiles} if tile is not None else {}
+                kind = "face" if phase.startswith("face_") else "object"
+                print(json.dumps({"id": request["id"], "op": "segment",
+                                  "generation": request.get("generation", 0),
+                                  "progress": {"kind": kind, "phase": phase, "part": part, "total": total,**details}}), flush=True)
+
             path = request["proxy_path"]
             if path != image_path:
                 with Image.open(path) as opened:
@@ -42,6 +49,10 @@ def main():
             jobs = request.get("jobs", [])
             if (any(job.get("mask_target") in ("face", "face_skin", "body_skin") for job in jobs)
                     or jobs and request.get("priority") != "low"):
+                first_face = next((index for index,job in enumerate(jobs,1)
+                                   if job.get("mask_target") in ("face","face_skin")),None)
+                if first_face is not None:
+                    detail_progress("face_source",first_face,len(jobs))
                 source = load_native(request)
             if composition is not None and not request.get("jobs"):
                 # Combining cached masks needs no model import or embedding.
@@ -53,12 +64,6 @@ def main():
                     print(json.dumps({"id": request["id"], "op": "segment",
                                       "generation": request.get("generation", 0),
                                       "progress": {"kind": "body", "part": part, "total": total}}), flush=True)
-
-                def detail_progress(phase, part, total, tile=None, tiles=None):
-                    details = {"tile": tile,"tiles": tiles} if tile is not None else {}
-                    print(json.dumps({"id": request["id"], "op": "segment",
-                                      "generation": request.get("generation", 0),
-                                      "progress": {"kind": "object", "phase": phase, "part": part, "total": total,**details}}), flush=True)
 
                 result = segment_jobs(
                     image, jobs, tolerant=request.get("priority") == "low", source=source,

@@ -77,6 +77,12 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
         return {"items": []}
     items = []
     for index, job in enumerate(jobs, 1):
+        def report(phase, tile=None, tiles=None):
+            if detail_progress is not None:
+                if tile is None:
+                    detail_progress(phase,index,len(jobs))
+                else:
+                    detail_progress(phase,index,len(jobs),tile,tiles)
         try:
             if job.get("mask_target", "object") in ("face", "face_skin"):
                 from .face_skin import segment as face_segment
@@ -92,7 +98,7 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                     options['context_hint'] = job['face_context']
                 if 'face_part' in job:
                     options['part'] = job['face_part']
-                mask, quality = face_segment(source or image, job.get("hint"), job.get("points"), crop=job.get("skin_crop"), **options)
+                mask, quality = face_segment(source or image, job.get("hint"), job.get("points"), crop=job.get("skin_crop"), progress=report, **options)
             elif job.get("mask_target") == "body_skin":
                 from .body_skin import segment as body_segment
 
@@ -101,12 +107,6 @@ def segment_jobs(image, jobs, *, tolerant=False, source=None, progress=None, det
                 # Background catalog previews stay cheap. Foreground requests
                 # must use the native RGB for refinement, not an enlarged proxy.
                 native = source is not None and not tolerant
-                def report(phase, tile=None, tiles=None):
-                    if detail_progress is not None:
-                        if tile is None:
-                            detail_progress(phase,index,len(jobs))
-                        else:
-                            detail_progress(phase,index,len(jobs),tile,tiles)
                 mask, quality = segment(source if native else image, job.get("hint"), job.get("points"),
                                         progress=report, model_image=image, native_detail=native)
                 quality["model"] = "EfficientSAM-S"

@@ -13,6 +13,17 @@ Rectangle {
     Layout.preferredHeight: Math.max(36, progressText.implicitHeight + 12)
     visible: root.selection.taskKind !== "none"
     color: "#30453e"
+    readonly property bool timingPixels: visible && root.selection.taskKind === "pixel"
+    property real pixelStartedAt: 0
+    property int pixelElapsedSeconds: 0
+    onTimingPixelsChanged: {
+        pixelStartedAt = timingPixels ? Date.now() : 0
+        pixelElapsedSeconds = 0
+    }
+    Timer {
+        interval: 1000; repeat: true; running: root.timingPixels
+        onTriggered: root.pixelElapsedSeconds = Math.max(0, Math.floor((Date.now() - root.pixelStartedAt) / 1000))
+    }
     RowLayout {
         anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 8
         BusyIndicator {
@@ -26,6 +37,12 @@ Rectangle {
             text: root.selection.taskText
             Layout.fillWidth: true; color: "#c6eadb"; font.pixelSize: 12
             wrapMode: Text.Wrap
+        }
+        Caption {
+            objectName: "localTaskElapsedText"
+            text: "已用 " + root.pixelElapsedSeconds + " 秒"
+            visible: root.timingPixels
+            color: "#c6eadb"; font.pixelSize: 12
         }
         Action {
             objectName: "cancelAiRequest"

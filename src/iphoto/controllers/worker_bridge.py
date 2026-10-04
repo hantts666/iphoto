@@ -210,6 +210,29 @@ def _pixel_read(self):
                     if "tile" in progress:
                         self._status = f"正在细化原图细节 {progress['tile']}/{progress['tiles']} 块（对象 {progress['part']}/{progress['total']}）…可随时取消"
                     self.changed.emit()
+                elif (isinstance(progress, dict) and progress.get("kind") == "face"
+                        and progress.get("phase") in ("face_source","face_prepare","face_model","face_infer",
+                                                       "face_cached","face_boundary","face_protect","face_encode","face_fallback")
+                        and type(progress.get("part")) is int and type(progress.get("total")) is int
+                        and 1 <= progress["part"] <= progress["total"] <= 16
+                        and progress["total"] == len(active.get("jobs", []))
+                        and active["jobs"][progress["part"] - 1].get("mask_target") in ("face","face_skin")
+                        and response.get("op") == "segment" and active.get("op") == "segment"
+                        and response.get("generation") == self._generation
+                        and active.get("generation") == self._generation
+                        and "tile" not in progress and "tiles" not in progress
+                        and not active.get("cancelled") and active.get("priority") != "low"
+                        and not getattr(self,"_closing",False)):
+                    job = active["jobs"][progress["part"]-1]
+                    phase = {"face_source":"读取原图、校正方向和颜色",
+                             "face_prepare":"准备人脸放大图", "face_model":"首次加载面部分区模型",
+                             "face_infer":"识别可见五官", "face_cached":"复用当前人脸分区",
+                             "face_boundary":"定位原图五官边界",
+                             "face_protect":"保护嘴内和周围皮肤" if job.get('face_part') == 'lips' else "保护其他五官和非面部区域",
+                             "face_encode":"生成调整范围",
+                             "face_fallback":"精细模型未完成，改用基础面部分区"}[progress["phase"]]
+                    self._status = f"正在{phase} {progress['part']}/{progress['total']}…可随时取消"
+                    self.changed.emit()
                 # Progress is not a result: it cannot release the active job,
                 # publish a partial layer, or mark whole-photo SAM as ready.
                 continue

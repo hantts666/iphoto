@@ -129,7 +129,9 @@ class FaceParser:
     def predict(self, image):
         return self._scores(image).argmax(0).astype(np.uint8)
 
-    def predict_native(self, image):
+    def predict_native(self, image, *, progress=None):
+        if progress is not None:
+            progress('face_infer')
         scores = self._scores(image)
         rough = np.isin(scores.argmax(0), tuple(range(1,14))).astype(np.uint8)
         x, y, w, h = cv2.boundingRect(rough)
@@ -142,17 +144,21 @@ class FaceParser:
                   max(0, int(np.floor((y-2)*image.height/512))-2),
                   min(image.width, int(np.ceil((x+w+2)*image.width/512))+2),
                   min(image.height, int(np.ceil((y+h+2)*image.height/512))+2))
+        if progress is not None:
+            progress('face_boundary')
         return native_labels(scores, image.size, bounds)
 
 
-def backend():
+def backend(*, progress=None):
     global _backend
     if _backend is None:
+        if progress is not None:
+            progress('face_model')
         _backend = FaceParser()
     return _backend
 
 
-def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None, scope="full", context_hint=None, part="all"):
+def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", recover_anchor=False, features=None, scope="full", context_hint=None, part="all", progress=None):
     started = perf_counter()
     hint = validate_mask(hint)
     if scope not in ('full', 'region'):
@@ -162,6 +168,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     points = validate_points(points or [])
     if len(points) != 1 or points[0][2] != 1:
         raise ValueError("面部皮肤分区需要一个有效的内部定位点，照片未改变")
+    if progress is not None:
+        progress('face_prepare')
     # This broader crop comes from the original face localization. Cropping to
     # the bare-skin box alone removes facial context and can misclassify lips.
     box = crop_pixels(crop or region_crop(hint, (384, 384)), image.size)
@@ -176,19 +184,31 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         if face_precision.available():
             landmarks = np.asarray([*features['eyes'], points[0][:2], *features['mouth']]) * image.size - (left,top)
             try:
-                labels = face_precision.backend().predict_native(patch,landmarks)
+                if progress is None:
+                    labels = face_precision.backend().predict_native(patch,landmarks)
+                else:
+                    labels = face_precision.backend(progress=progress).predict_native(patch,landmarks,progress=progress)
                 precision = True
             except Exception:
                 fallback = True
-    engine = engine or (None if precision else backend())
+                if progress is not None:
+                    progress('face_fallback')
+    provided_engine = engine is not None
+    if engine is None and not precision:
+        engine = backend(progress=progress) if progress is not None else backend()
     if precision:
         native = True
     else:
         native = callable(getattr(engine, "predict_native", None))
-        labels = np.asarray(engine.predict_native(patch) if native else engine.predict(patch))
+        if native and progress is not None and not provided_engine:
+            labels = np.asarray(engine.predict_native(patch,progress=progress))
+        else:
+            labels = np.asarray(engine.predict_native(patch) if native else engine.predict(patch))
     expected = (patch.height, patch.width) if native else (512, 512)
     if labels.shape != expected or labels.dtype != np.uint8 or labels.max() > 18:
         raise ValueError("面部皮肤分区无效，照片未改变")
+    if progress is not None:
+        progress('face_protect')
     grid_height, grid_width = labels.shape
     x, y = points[0][:2]
     scale_x, scale_y = (grid_width, grid_height) if native else (511, 511)
@@ -273,6 +293,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     full = Image.new("L", image.size)
     full.paste(alpha, (left, top))
     result = empty_mask()
+    if progress is not None:
+        progress('face_encode')
     result.update(bitmap=encode_bitmap(full, sampling="alpha", preserve_resolution=True),
                   label=(hint["label"] + (" · " + PARTS[part]['label'] if part in PARTS else " · 面部局部" if scope == 'region' else " · 人脸" if target == "face" else " · 面部皮肤"))[:200],
                   semantic_target=target)

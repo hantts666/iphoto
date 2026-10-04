@@ -139,23 +139,31 @@ class FaceParser:
         self.session = ort.InferenceSession(str(verified_path()),sess_options=options,providers=['CPUExecutionProvider'])
         self._cached = None
 
-    def predict_native(self, image, points):
+    def predict_native(self, image, points, *, progress=None):
         matrix = alignment(points)
         # Nose/lips jobs share one face's semantic output. Hash pixels as well
         # as its transform so another photo or moved crop cannot reuse it.
         pixels = np.asarray(image if image.mode == 'RGB' else image.convert('RGB'))
         key = (image.size, sha256(pixels).digest(), matrix.tobytes())
         if self._cached is not None and self._cached[0] == key:
+            if progress is not None:
+                progress('face_cached')
             return self._cached[1]
+        if progress is not None:
+            progress('face_infer')
         scores = self.session.run(None,{'image':aligned_image(image,matrix)})[0]
+        if progress is not None:
+            progress('face_boundary')
         labels = native_labels(scores,matrix,image.size)
         labels.setflags(write=False)
         self._cached = (key,labels) if labels.size <= MAX_CACHE_PIXELS else None
         return labels
 
 
-def backend():
+def backend(*, progress=None):
     global _backend
     if _backend is None:
+        if progress is not None:
+            progress('face_model')
         _backend = FaceParser()
     return _backend
