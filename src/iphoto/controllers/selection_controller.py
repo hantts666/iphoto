@@ -42,6 +42,7 @@ class SelectionController(QObject):
         self._mode = "replace"
         self._brush_radius = 0.025
         self._heal_radius = 0.003
+        self._transparency_profile = 'auto'
         self._wand_tolerance = 24.0
         self._show_mask = False
         self._draft_active = False
@@ -462,6 +463,24 @@ class SelectionController(QObject):
     def transparencyAvailable(self):
         return any(c["id"] == "details" and c["available"] for c in self._editor.imageCapabilities)
 
+    @Property(bool, notify=changed)
+    def hairMattingAvailable(self):
+        return any(c['id']=='hair_details' and c['available'] for c in self._editor.imageCapabilities)
+
+    @Property(str, notify=changed)
+    def transparencyProfile(self):
+        return self._transparency_profile
+
+    @Slot(str)
+    def setTransparencyProfile(self, value):
+        if self._editor.busy or value not in ('auto','hair','general'):
+            return
+        if value=='hair' and not self.hairMattingAvailable:
+            self._editor._notify('人物发丝模型未配置：scripts/setup_hair_matting.py',True)
+            return
+        self._transparency_profile = value
+        self.changed.emit()
+
     @Slot()
     def chooseTransparency(self):
         editor = self._editor
@@ -479,7 +498,11 @@ class SelectionController(QObject):
         if (layer != editor.activeLayerId or photo != editor.originalUrl or generation != editor._generation
                 or self._tool != "transparency"):
             return False
-        return matting.paint(editor, points, radius)
+        profile = self._transparency_profile
+        if profile=='auto':
+            label = (editor._candidate or {}).get('label','').lower()
+            profile = 'hair' if self.hairMattingAvailable and not (editor._candidate or {}).get('semantic_target') and any(word in label for word in ('头发','发丝','hair')) else 'general'
+        return matting.paint(editor, points, radius, profile=profile)
 
     @Slot()
     def reviewMask(self):

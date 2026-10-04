@@ -5,11 +5,14 @@ from copy import deepcopy
 from ..document import empty_mask, validate_mask
 
 
-def paint(self, points, radius):
+def paint(self, points, radius, *, profile='general'):
     if self.busy or not self.hasImage or not self.hasSelectionDraft or self.hasRegionDraft:
         return False
     if not any(c["id"] == "details" and c["available"] for c in self.imageCapabilities):
         self._notify("AI 细节模型未配置，请在图像能力中查看", True)
+        return False
+    if profile not in ('general','hair') or (profile=='hair' and not any(c['id']=='hair_details' and c['available'] for c in self.imageCapabilities)):
+        self._notify('人物发丝模型未配置，请在图像能力中查看',True)
         return False
     try:
         stroke = {"points": deepcopy(points), "radius": radius}
@@ -17,8 +20,8 @@ def paint(self, points, radius):
     except (ValueError, TypeError) as exc:
         self._notify(str(exc), True)
         return False
-    self._status = "AI 正在细化涂抹区域的透明度，其他范围保留…可随时取消"
-    return self._request("matte", mask=deepcopy(self._candidate), method="neural", stroke=stroke,
+    self._status = "AI 正在结合人像外缘与头发分区处理笔触…可取消" if profile=='hair' else "AI 正在细化涂抹区域的透明度，其他范围保留…可随时取消"
+    return self._request("matte", mask=deepcopy(self._candidate), method="hair" if profile=='hair' else "neural", stroke=stroke,
                          points=deepcopy(self._pixel_points)) is not False
 
 
@@ -89,7 +92,7 @@ def complete(self, result, *, points=None):
         self._notify('通道抠图已完成，可看黑白透明度；不合适可以撤销')
         return
     neural = quality.get("backend") == "ViTMatte-S · ONNX"
-    self._selection_quality = (f"局部 AI 透明度 · 已修改 {quality['changed_pixels']:,} 个像素 · {quality['elapsed_ms']/1000:.1f}s" if local else (
+    self._selection_quality = (f"{'人物发丝' if quality.get('hair_matting') else '局部 AI 透明度'} · 已修改 {quality['changed_pixels']:,} 个像素 · {quality['elapsed_ms']/1000:.1f}s" if local else (
         ("AI 原图边缘 · " if neural else "")
         + f"连续透明度 · {quality['partial_pixels']:,} 个过渡像素"
         f" · {quality['elapsed_ms'] / 1000:.1f}s"
@@ -101,7 +104,7 @@ def complete(self, result, *, points=None):
         "assistant",
         self._selection_quality + ("\n涂抹区域外的透明度保持；照片颜色未改写，可逐笔撤销。" if local else "\n已取消额外羽化；透明度已细化，未改写照片颜色。"),
         state="region_draft" if self._region_candidate else "draft",
-        origin={"mode": "selection", "model": "ViTMatte-S（本地 AI）" if neural else "PyMatting（本地）"},
+        origin={"mode": "selection", "model": quality['backend'] if quality.get('hair_matting') else "ViTMatte-S（本地 AI）" if neural else "PyMatting（本地）"},
     )
     self._notify("透明边缘已细化，请对照调色效果；不合适可以撤销")
     self.changed.emit()

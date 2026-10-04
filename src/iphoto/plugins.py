@@ -141,6 +141,15 @@ def capabilities():
         "model_path": str(MODEL_DIR / "face-parsing"),
     })
     detail_ready = detail_available()
+    from .matting.portrait_models import available as hair_available
+    rows.append({
+        'id':'hair_details','name':'人物发丝 · 人像透明度与头发分区',
+        'description':'透明细化画笔结合 MODNet 人像外缘、BiSeNet 头发分区与原图 ViTMatte；只修改笔触或 AI 核对的局部，整片头发仍需检查。',
+        'available':hair_available(),
+        'status':'可用 · 本地 ONNX' if hair_available() else '需要配置人物发丝模型：scripts/setup_hair_matting.py',
+        'license':'Apache-2.0 / MIT / ONNX Runtime MIT','source':'https://github.com/ZHKKKe/MODNet',
+        'model_path':str(MODEL_DIR/'matting'),
+    })
     from .segmentation.precise_sam import available as precise_available, MODEL_DIR as precise_dir
     precise_ready = precise_available()
     rows.append({

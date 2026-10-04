@@ -127,6 +127,7 @@ AUTO_PROMPT += """
 新增action=channel_mask：用户要求通道抠图、修发丝/细枝或薄纱透明度时，channel_mask_available=true可执行。程序结合通道灰度与原图 AI 透明度，不只返回建议；不承诺一次完美。
 自动比较RGB、亮度和红−绿/红−蓝/绿−蓝通道计算，再对实际黑白底与原像素边缘进行独立视觉复查；效果明显有问题或无法确认时保留原范围，不提前声称抠图成功。
 有当前草稿必须scope=current_selection、regions=[]，沿用现有范围；当前局部层范围匹配时scope=current_layer、regions=[]，原层参数与强度保留。否则scope=regions，regions只有一个object目标，region.recipe全部0/[]，先定位目标再提取透明度。不能用整图代替目标、不能夹带调色或生成内容。顶层recipe保持current_recipe，layer_edits=[]、group=null、repairs=[]、mask_refinement=null、strategy=null、edit_prompt=null。summary说明将执行的步骤。颜色相近或主体背景混杂时仍需局部修正，不能声称精确。
+人物头发抠图：hair_matting_available=true且用户目标明确为人物头发时，channel_mask的strategy使用hair_matte。程序先提取通道透明度，主动结合人像外缘透明度与头发分区处理最多四个原像素边缘区域，再复查实际输出，发现局部问题时以语义提示点纠错。不用于皮肤、帽子、普通细枝或整片薄纱。只承诺执行与复查，不提前声称干净或完整。其他目标strategy仍为null。
 """
 
 AUTO_PROMPT += """
@@ -466,7 +467,7 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             raise ValueError("此动作不能夹带修复部位")
         if action != "refine_mask" and plan.get("mask_refinement") is not None:
             raise ValueError("此动作不能夹带范围修正")
-        if action != "develop" and plan.get("strategy") is not None:
+        if action not in ('develop','channel_mask') and plan.get("strategy") is not None:
             raise ValueError("此动作不能夹带成片策略")
         if action != 'generate' and plan.get('edit_prompt') is not None:
             raise ValueError('此动作不能夹带生成图像要求')
@@ -481,6 +482,9 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
         if action == 'channel_mask':
             if plan['recipe'] != current or (workspace or {}).get('channel_mask_available') is not True:
                 raise ValueError('通道与 AI 抠图能力不可用或夹带调色配方')
+            strategy=plan.get('strategy')
+            if strategy not in (None,'hair_matte') or strategy=='hair_matte' and (workspace or {}).get('hair_matting_available') is not True:
+                raise ValueError('人物发丝策略不可用，原范围保留')
             regions = []
             if scope == 'regions':
                 if not isinstance(plan['regions'], list) or len(plan['regions']) != 1:
@@ -490,7 +494,8 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
                     raise ValueError('通道抠图仅支持普通物体范围，不夹带调色或面部精修')
             elif plan['regions'] != []:
                 raise ValueError('已有范围不能夹带新目标')
-            return {'status':'planned','action':action,'scope':scope,'summary':recipe['summary'],'regions':regions}
+            return {'status':'planned','action':action,'scope':scope,'summary':recipe['summary'],'regions':regions,
+                    **({'strategy':strategy} if strategy is not None else {})}
         if action == 'generate':
             prompt = plan.get('edit_prompt')
             if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 2000:

@@ -28,6 +28,7 @@ def begin(e, result):
             raise ValueError('照片已变化，通道抠图未启动')
         state = {'token':uuid4().hex, 'generation':e._generation, 'candidate':deepcopy(e._candidate),
                  'revision':0,
+                 'hair':result.get('strategy')=='hair_matte',
                  'target_id':e._selection_target_id, 'bound':result['scope']=='current_layer' or bool(e._selection_target_id),
                  'summary':result['summary'], 'interior':any(word in pending['text'] for word in ('薄纱','纱布','玻璃','透明内部','细枝','树枝','针叶','镂空','孔洞'))}
         pending['channel_auto'] = state
@@ -76,9 +77,20 @@ def complete(e, result, token):
             return
         pending, state = current
         mask = validate_mask(result['mask'])
+        if state.get('hair') and not state.get('hair_prepared'):
+            state['hair_prepared']=True
+            state['result']=deepcopy(result)
+            e._status='3/4 正在结合人物外缘与头发分区处理原像素边缘…可取消'
+            e._request('matte',method='hair',mask=mask,auto_token=state['token'])
+            return
         if state['revision']:
             previous=state['result']['quality']
             result={**result,'quality':{**previous,'correction':deepcopy(result['quality']),
+                                      'warnings':previous['warnings']+result['quality']['warnings'],
+                                      'elapsed_ms':round(previous['elapsed_ms']+result['quality']['elapsed_ms'],1)}}
+        elif result['quality'].get('edge_refinement'):
+            previous=state['result']['quality']
+            result={**result,'quality':{**previous,'hair_refinement':deepcopy(result['quality']),
                                       'warnings':previous['warnings']+result['quality']['warnings'],
                                       'elapsed_ms':round(previous['elapsed_ms']+result['quality']['elapsed_ms'],1)}}
         state['result'] = deepcopy(result)
@@ -113,6 +125,7 @@ def review_ready(e, result, context, generation):
                                    'keep_candidates':result['keep_candidates'],
                                    'exclude_candidates':result['exclude_candidates'],
                                    'correction_available':state['correction_available'],
+                                   'correction_method':'hair' if state.get('hair') else 'semantic',
                                    'previous_check':state.get('previous_check',''),
                                    'quality':state['result']['quality'],'review_images':images})
     except (ValueError, KeyError, OSError) as exc:
@@ -138,7 +151,7 @@ def reviewed(e, review):
             state['previous_check']=review['summary']
             e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'
             e._request('matte',method='correction',mask=state['result']['mask'],
-                       corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'])
+                       corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'],hair=bool(state.get('hair')))
             return
         if review['status'] != 'accept':
             e._pending_request = None
@@ -157,8 +170,12 @@ def reviewed(e, review):
             detail += ' · 原像素细纹理'
         if quality.get('color_recovery'):
             detail += ' · 透明输出去背景串色'
+        if quality.get('hair_refinement'):
+            detail += ' · 人像外缘与头发分区'
         if quality.get('correction'):
             detail += ' · AI 已按实际效果纠错并复查'
+            if quality['correction'].get('hair_matting'):
+                detail += ' · 人像外缘与头发分区'
         if quality['warnings']:
             detail += ' · ' + '；'.join(quality['warnings'])
         e._selection_quality = detail

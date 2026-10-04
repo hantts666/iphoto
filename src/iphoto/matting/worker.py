@@ -23,22 +23,28 @@ def main():
         if request.get("op") != "matte":
             raise ValueError("未知边缘细化操作")
         method = request.get("method", "classic")
-        if method not in ("classic", "neural", "channel", "correction"):
+        if method not in ("classic", "neural", "channel", "correction", "hair"):
             raise ValueError("未知边缘细化方法")
-        if "stroke" in request and method != "neural":
+        if "stroke" in request and method not in ('neural','hair'):
             raise ValueError("局部透明细化需要 AI 方法")
         source = load_source(Path(request["source_path"]))
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，原选区保持不变")
         mask = validate_mask(request["mask"])
-        if method in ('channel','correction'):
+        if method in ('channel','correction','hair'):
             from .channels import estimate
-            def channel_progress(tile=None, tiles=None, phase='details'):
+            def channel_progress(tile=None, tiles=None, phase='details', **fields):
                 print(json.dumps({'id':request['id'], 'op':'matte', 'generation':request['generation'],
-                                  'progress':({'phase':phase} if tile is None else {'phase':phase,'tile':tile,'tiles':tiles})}, ensure_ascii=False), flush=True)
-            if method=='correction':
+                                  'progress':{**({'phase':phase} if tile is None else {'phase':phase,'tile':tile,'tiles':tiles}),**fields}}, ensure_ascii=False), flush=True)
+            if method=='hair':
+                from .hair import refine_local, refine_edges
+                if 'stroke' in request:
+                    mask,quality=refine_local(source.image,mask,request['stroke'],points=request.get('points',[]),progress=channel_progress)
+                else:
+                    mask,quality=refine_edges(source.image,mask,progress=channel_progress)
+            elif method=='correction':
                 from .correction import correct
-                mask,quality=correct(source.image,mask,request['corrections'],request['review_boxes'],progress=channel_progress)
+                mask,quality=correct(source.image,mask,request['corrections'],request['review_boxes'],progress=channel_progress,hair=request.get('hair',False))
             else:
                 mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress)
         elif method == "neural":

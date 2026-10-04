@@ -33,6 +33,15 @@ RowLayout {
     RowLayout { visible: root.selection.tool==="heal"; spacing: 5
         Caption { text: "在瑕疵上拖动 · 松开即用周围内容修复 · 可撤销"; font.pixelSize: 11 }
     }
+    ComboBox {
+        objectName: "transparencyProfileBox"; visible: root.selection.tool==="transparency"
+        model: [{text:"自动",value:"auto"},{text:"人物发丝",value:"hair"},{text:"通用透明边缘",value:"general"}]
+        textRole: "text"; valueRole: "value"; implicitWidth: 148; implicitHeight: 30
+        currentIndex: Math.max(0,model.findIndex(function(item) { return item.value===root.selection.transparencyProfile }))
+        enabled: !root.editor.busy
+        onActivated: root.selection.setTransparencyProfile(currentValue)
+        ToolTip.visible: hovered; ToolTip.text: "自动模式为已有头发目标选择人像外缘与头发分区模型；其他目标使用通用透明度。"
+    }
     Caption { visible: root.selection.tool==="transparency"; text: "涂抹问题区域 · 松开后 AI 细化 · 其他范围保留"; Layout.fillWidth: true; elide: Text.ElideRight; font.pixelSize: 11 }
     RowLayout { visible: root.selection.tool==="smart"; spacing: 5
         Caption { text: "点目标内部保留 · Alt 点排除 · 已记 "+root.editor.pixelPoints.length+"/6 点"; font.pixelSize: 11 }

@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 CORRECTIONS_SCHEMA = {'type':'array','maxItems':2,'items':{
     'type':'object','additionalProperties':False,'properties':{
-        'edge':{'type':'integer','minimum':1,'maximum':2},
+        'edge':{'type':'integer','minimum':1,'maximum':4},
         'radius':{'type':'integer','minimum':12,'maximum':48},
         'points':{'type':'array','minItems':2,'maxItems':6,'items':{
             'type':'array','minItems':3,'maxItems':3,
@@ -17,13 +17,15 @@ SCHEMA = {'type':'object','additionalProperties':False,
                         'summary':{'type':'string'},'corrections':CORRECTIONS_SCHEMA},
           'required':['status','summary','corrections']}
 PROMPT = """你是iPhoto独立抠图质量检查员。依据提供的实际图片核对，不因为规划者说完成就认定成功。
-图片提供原照片整体、实际紫色棋盘格抠图整体，以及最多两组原像素质量对照图。每组是四格：左上Source原照片，右上Alpha透明度，左下White白底输出，右下Checker紫色棋盘格输出；四格是同一原像素位置，未缩放。最后的定位图仅供选择参照点。先逐组对照四格里的同一对象，再看整体目标范围。
+图片提供原照片整体、实际紫色棋盘格抠图整体，以及最多四组原像素质量对照图，包含半透明密集处与目标外缘。每组是四格：左上Source原照片，右上Alpha透明度，左下White白底输出，右下Checker紫色棋盘格输出；四格是同一原像素位置，未缩放。最后的定位图仅供选择参照点。先逐组对照四格里的同一对象，再看整体目标范围。
 核对用户指定的目标：透明发丝/细枝是否有明显灰云、旧背景串色、硬切、方块接缝；是否误包含其他对象、明显漏掉目标或破坏透明孔洞。白底下有连成片的灰雾、光晕或透出旧衣物的斑块，即使紫底上不显眼，也不能accept。只看到缩略图无法确认时应uncertain。
+逐组从Source追踪可见细丝的走向、分叉和末端，再看同一坐标的Alpha及白底：原图细丝继续向外延伸，而对应Alpha已经整片黑色或白底只剩空白，就是漏选。主体轮廓看起来柔和不证明细丝已保留；不能把大量可见细丝丢失称为自然过渡。原图真实虚焦可以保留，但不能据此忽略仍清楚可辨的延伸细丝。
 局部选区仅显示指定部分是正常的，例如只选头发时脸、帽子、衣服不显示，不应因此判失败。原片本身的虚焦、帽檐阴影也不是新增缺陷，不要求凭空重造隐藏发丝。但明显带背景的灰块/亮色边缘不能当成自然透明度。
 透明孔洞在白底是白色、在黑底是黑色；这表示该处已被排除，不能把背景色当成残留对象。各边缘的候选透明度图中白色=不透明目标、黑色=已排除、灰色=半透明。核对原照片同一位置：只选头发时，饰品/皮肤对应黑色透明度是正确排除；原图中真实发丝对应的缺失才是漏选。
 紫色棋盘格是用于消除白色饰品/黑色头发与底色混淆的实际透明合成。某处完整露出连续紫色棋盘格，意味着该处透明且对象已排除；这与白底的白色、黑底的黑色一致，不能称为对象残留或矛盾。存在误选必须看到对象在紫底中仍有自身颜色/纹理或遮挡棋盘格；存在漏选必须确认该位置本来属于用户目标。先完成这个交叉核对，再决定是否纠错或拒绝。
 accept：目标范围可用且没有明显上述缺陷；reject：实际结果存在具体可见缺陷且不能通过本轮局部纠错解决；uncertain：证据不足。
-当correction_available=true且revision=0时，发现明确的衣物/背景误选或局部漏选，应优先revise，给corrections（最多两处、总共最多6个点）。每处{edge:边缘编号1或2,radius:12到48的原图像素边缘宽度,points:[[x,y,label],...]}。
+当correction_available=true且revision=0时，发现明确的衣物/背景误选或局部漏选，应优先revise，给corrections（最多两处、总共最多6个点）。每处{edge:提供的边缘编号1到edge_count,radius:12到48的原图像素边缘宽度,points:[[x,y,label],...]}。correction_method=hair时，会结合人物外缘透明度、头发分区与语义提示点，重新判断该局部的细发丝；仍需核对实际输出，不保证成功。
+纠错点是给像素模型的语义参照，并非只修改点本身：同一裁片里的衣物与饰品误选可用一个保留点和多个不同位置的排除点处理。问题位于最多两幅裁片、且有可靠参照时应先尝试这唯一一次纠错，再依据实际复查拒绝或接受，不要仅因有两类误选或错误块面积较大就断言点不能处理。若缺少身份明确的参照仍应reject或uncertain。
 坐标只相对该编号的原像素原照片裁图：左上[0,0]，右下[999,999]，不是全图坐标，也不是512像素坐标。label=1保留、0排除，每处至少一个保留点和一个排除点。keep_candidates按边缘编号提供候选不透明参照点；定位图中的绿圈编号对应清单顺序。保留点必须精确使用清单中的坐标，并先在原照片确认它确实属于用户目标（绿圈只是候选，不证明语义正确）。不要点饰品、皮肤、衣物来保留头发。没有可靠参照时reject或uncertain。
 exclude_candidates提供候选排除参照，定位图橙圈N编号对应清单顺序。它同时包含已透明的背景和选区中颜色接近背景的可疑区域；橙圈不是已确认的背景，白色/灰色alpha也不是已确认的目标。排除点必须精确使用清单坐标，并在原照片确认是目标以外的衣物/皮肤/背景；不能把可见的细发丝当背景。发现选区中衣物等误选时，优先使用该错误区域内身份明确的N点，可再加一个已透明背景参照，不能只重复排除已经透明的远处背景。若N点都不能确认错误位置，则reject或uncertain。
 绿色P圈为候选保留点，橙色N圈为待核对排除点，定位图细线每格是200/999。每处优先一个可靠保留点，把余下预算用于不同误选位置；可用1至2个保留点、1至3个排除点，总数仍最多6。同一裁片若既有衣物又有饰品误选，需分别覆盖，不能用两个相近保留点占满预算而遗漏另一个错误区域。只选身份清楚的参照。语义模型用这些点重新判断局部，再由透明度模型处理半透明细节；不会修改照片像素。只选头发时项链、饰品、衣物和皮肤应排除，不能要求填回缺口中的皮肤。
@@ -33,7 +35,7 @@ exclude_candidates提供候选排除参照，定位图橙圈N编号对应清单�
 
 
 def validate_corrections(corrections, edge_count):
-    if (type(edge_count) is not int or not 1<=edge_count<=2
+    if (type(edge_count) is not int or not 1<=edge_count<=4
             or not isinstance(corrections,list) or not 1<=len(corrections)<=2):
         raise ValueError('局部抠图纠错范围无效，原范围保留')
     edges=set();total=0
@@ -98,8 +100,8 @@ def parse_review(data, workspace=None):
         raise ValueError('AI未返回有效抠图检查，原范围保留') from None
 
 
-def edge_boxes(alpha, count=2, side=512):
-    """Choose spatially separate native crops with the most partial coverage."""
+def edge_boxes(alpha, count=4, side=512):
+    """Inspect dense partial alpha and outward edges missing from that ranking."""
     partial=alpha.point([255 if 0<v<255 else 0 for v in range(256)])
     if partial.getbbox() is None:
         partial=alpha.filter(ImageFilter.FIND_EDGES)
@@ -116,8 +118,23 @@ def edge_boxes(alpha, count=2, side=512):
         if any(max(abs(box[0]-b[0]),abs(box[1]-b[1]))<side for b in boxes):
             continue
         boxes.append(box)
-        if len(boxes)==count:
+        if len(boxes)==min(count,2):
             break
+    bounds=alpha.getbbox()
+    if bounds and count>2 and max(bounds[2]-bounds[0],bounds[3]-bounds[1])>side*1.5:
+        proxy=alpha.copy();proxy.thumbnail((1024,1024),Image.Resampling.NEAREST)
+        ys,xs=np.where(np.asarray(proxy)>32)
+        if len(xs):
+            width,height=bounds[2]-bounds[0],bounds[3]-bounds[1]
+            px=(xs+.5)*alpha.width/proxy.width;py=(ys+.5)*alpha.height/proxy.height
+            for corner in ((bounds[2]-1,bounds[1]),(bounds[0],bounds[1])):
+                index=np.argmin(((px-corner[0])/width)**2+((py-corner[1])/height)**2)
+                x=max(0,min(round(px[index])-side//2,alpha.width-side))
+                y=max(0,min(round(py[index])-side//2,alpha.height-side))
+                box=(x,y,min(x+side,alpha.width),min(y+side,alpha.height))
+                if any(max(abs(x-b[0]),abs(y-b[1]))<side//4 for b in boxes):continue
+                boxes.append(box)
+                if len(boxes)==count:break
     return boxes
 
 
@@ -211,7 +228,7 @@ def render_review(source, layers, mask, directory, identity, boxes=None):
     rendered=render_layers(source,validate_layers(layers))
     output=compose_cutout(rendered,alpha,color_patch(source,layers,mask,alpha))
     boxes=edge_boxes(alpha) if boxes is None else boxes
-    if (not isinstance(boxes,list) or len(boxes)>2 or any(
+    if (not isinstance(boxes,list) or len(boxes)>4 or any(
         not isinstance(box,(list,tuple)) or len(box)!=4 or any(type(v) is not int for v in box)
         or not 0<=box[0]<box[2]<=source.width or not 0<=box[1]<box[3]<=source.height
         or box[2]-box[0]>512 or box[3]-box[1]>512 for box in boxes)):

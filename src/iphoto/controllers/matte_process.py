@@ -72,7 +72,7 @@ def read(self):
                      and not self.hasRegionDraft))
             )
             if "progress" in response:
-                if current and active.get("method") in ("neural", "channel", "correction"):
+                if current and active.get("method") in ("neural", "channel", "correction", "hair"):
                     _progress(self, active, response["progress"])
                 continue
             self._matte_active = None
@@ -100,6 +100,34 @@ def read(self):
 def _progress(self, active, progress):
     """Progress is informational; only the final reply may publish a mask."""
     if not isinstance(progress, dict):
+        return
+    hair_phases = {'portrait':'AI 正在估计人物外缘透明度…可取消',
+                   'hair_partition':'AI 正在区分头发、帽子、皮肤与衣物…可取消',
+                   'hair_outer':'AI 正在恢复原像素发丝外缘',
+                   'hair_split':'AI 正在排除非头发内容并细化透明度'}
+    phase = progress.get('phase')
+    if phase=='hair_region' and active.get('method')=='hair':
+        region,regions=progress.get('region'),progress.get('regions')
+        if type(region) is not int or type(regions) is not int or not 1<=region<=regions<=4 or region<=active.get('hair_region',0):
+            return
+        active['hair_region']=region
+        self._status=f'AI 正在处理人物发丝原像素区域 {region}/{regions}…可取消'
+        self.changed.emit()
+        return
+    if phase in hair_phases and (active.get('method')=='hair' or active.get('hair')):
+        if set(progress)=={'phase'}:
+            active.pop('detail_tile',None); active.pop('detail_tiles',None)
+            active['hair_phase'] = phase
+            self._status = hair_phases[phase]+'…可取消' if phase in ('hair_outer','hair_split') else hair_phases[phase]
+        elif (phase in ('hair_outer','hair_split') and active.get('hair_phase')==phase
+                and type(progress.get('tile')) is int and type(progress.get('tiles')) is int
+                and 1<=progress['tile']<=progress['tiles']<=128
+                and progress['tile']>active.get('detail_tile',0)
+                and progress['tiles']==active.get('detail_tiles',progress['tiles'])):
+            active['detail_tile'],active['detail_tiles'] = progress['tile'],progress['tiles']
+            self._status = f"{hair_phases[phase]} {progress['tile']}/{progress['tiles']} 块…可取消"
+        else: return
+        self.changed.emit()
         return
     if progress == {"phase": "prepare"} and not active.get("detail_tile"):
         self._status = ("正在读取原图并计算通道透明度…可随时取消"

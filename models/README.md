@@ -132,3 +132,19 @@ artifacts/face-converter/Scripts/python.exe -m pip install onnx==1.17.0
 ## 1.11.4细节对比记录
 
 本轮隔离评估作者Composition-1k的ViTMatte-Base，使用同图、同三分图及相同原像素核心对比。部分模糊减少，但衣物误选和灰雾仍在，未替换默认ViTMatte-S，没有新增应用依赖或下载动作。固定来源、摘要、转换器、真实AI纠错与本人判断见[第128轮记录](../planning/iphoto-v1.8/channel-references-2026-10-05.md)。新整图手动通道入口不需要此模型；有局部范围的AI路径继续使用原已验证模型。
+
+## 1.11.6人物发丝局部细化
+
+透明细化画笔新增“自动／人物发丝／通用透明边缘”。自动模式仅在已定位的头发目标标签下使用专用组合，再由头部分区核对目标；不满足条件时保持原范围。人物外缘透明度由 MODNet photographic 模型估计，BiSeNet 分离头发、帽子、皮肤和衣物，ViTMatte 按原像素处理透明度，最终只提交笔触内的变化。对话通道抠图可用 `strategy=hair_matte`，先主动处理最多四处原像素边缘，再检查真实输出；需要纠错时结合语义点在所指定的局部运行同一组合并复查。没有开放整片头发的一键替换；原图测试仍有灰雾和部分衣物误选。
+
+显式安装可选数据模型，应用不会自动下载：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/setup_hair_matting.py
+```
+
+也可用 `--from-onnx <文件>` 安装固定文件。需要已配置 ViTMatte 和 BiSeNet；只有 ONNX 数据进入模型目录，运行时不导入 PyTorch、远程 Python 或作者演示程序。模型大小 25,888,640 字节，SHA256 `07c308cf0fc7e6e8b2065a12ed7fc07e1de8febb7dc7839d7b7f15dd66584df9`。摘要由本次固定下载记录，作为安装及每次工作进程加载的完整性基准，不是作者签名。
+
+来源为 [MODNet 作者仓库](https://github.com/ZHKKKe/MODNet)、[作者 ONNX 说明](https://github.com/ZHKKKe/MODNet/blob/28165a451e4610c9d77cfdf925a94610bb2810fb/onnx/README.md)中的 photographic 下载链接。该仓库明确将代码、模型及演示（指定 GIF 除外）按 Apache-2.0 发布；许可副本为 [LICENSE-MODNet.txt](LICENSE-MODNet.txt)。ONNX Runtime/MIT、BiSeNet/MIT 的说明沿用上文。
+
+全局人物模型输入最长边不超过1536px、短边至多1024px，随后只在原图局部求解，不将放大的全局结果直接当发丝精度。头部上下文上限800万像素、单笔处理范围上限400万像素；前景颜色恢复沿用现有统一预览与 PNG 路径。测试及已知问题见[第130轮记录](../planning/iphoto-v1.8/hair-context-2026-10-05.md)。

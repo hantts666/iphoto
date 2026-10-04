@@ -440,6 +440,7 @@ def sendMessage(self, text, mode):
             "max_new_layers": min(4, MAX_LAYERS - len(self._layers)),
             "image_edit_available": self.ai.settings.provider in ("qianwen_token_plan", "qianwen", "qwen"),
             "channel_mask_available": any(c['id']=='details' and c['available'] for c in self.imageCapabilities),
+            "hair_matting_available": any(c['id']=='hair_details' and c['available'] for c in self.imageCapabilities),
             "active_is_group": self.activeIsGroup,
             "repair_available": repair_available(),
             "face_skin_available": face_skin_available(),

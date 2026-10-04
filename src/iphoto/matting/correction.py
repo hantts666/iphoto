@@ -21,9 +21,11 @@ HALO = 96
 JOIN = 32
 
 
-def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None):
+def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None):
     started=perf_counter()
-    if not isinstance(boxes,list) or not 1<=len(boxes)<=2:
+    if type(hair) is not bool:
+        raise ValueError('局部发丝纠错方法无效')
+    if not isinstance(boxes,list) or not 1<=len(boxes)<=4:
         raise ValueError('局部抠图缺少已核对的边缘，原范围保留')
     for box in boxes:
         if (not isinstance(box,list) or len(box)!=4 or any(type(v) is not int for v in box)
@@ -35,6 +37,8 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     original=raster_mask(mask,image.size)
     output=np.array(original)
     protected=not mask['inverted'] and mask.get('semantic_target') in ('face','face_skin','body_skin')
+    if hair and (protected or mask['inverted']):
+        raise ValueError('人物发丝纠错不能修改皮肤或反选范围')
     records=[];warnings=[]
     for patch in corrections:
         core=boxes[patch['edge']-1]
@@ -75,7 +79,16 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         def report(tile,tiles):
             if progress:progress(tile,tiles)
         matte=matte or neural.backend()
-        pixels,tiles=neural.solve(image.crop(box),trimap,engine=matte,progress=report)
+        if hair:
+            if hair_context is None:
+                from .hair import HairContext
+                hair_context=HairContext(image,original,progress=progress)
+            global_points=[[(box[0]+float(x))/max(1,image.width-1),
+                            (box[1]+float(y))/max(1,image.height-1),int(label)] for (x,y),label in zip(coords,labels)]
+            pixels,detail=hair_context.solve(image,previous,box,semantic=hard,points=global_points,engine=matte,progress=progress)
+            tiles=detail['tiles']
+        else:
+            pixels,tiles=neural.solve(image.crop(box),trimap,engine=matte,progress=report)
         scope=np.zeros(hard.shape,bool)
         sx,sy=core[0]-box[0],core[1]-box[1]
         scope[sy:sy+core[3]-core[1],sx:sx+core[2]-core[0]]=True
@@ -97,5 +110,6 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     result=copy_metadata(mask, empty_mask())
     result.update(label=mask['label'],bitmap=encode_bitmap(Image.fromarray(output),sampling='alpha',preserve_resolution=True))
     if matte.fallback:warnings.append(matte.fallback)
-    return validate_mask(result),{'backend':'SAM2.1 Small + ViTMatte-S','provider':matte.provider,'corrections':records,
+    return validate_mask(result),{'backend':'SAM2.1 Small + MODNet + BiSeNet + ViTMatte-S' if hair else 'SAM2.1 Small + ViTMatte-S',
+                                 'hair_matting':hair,'provider':matte.provider,'corrections':records,
                                  'elapsed_ms':round((perf_counter()-started)*1000,1),'warnings':warnings}
