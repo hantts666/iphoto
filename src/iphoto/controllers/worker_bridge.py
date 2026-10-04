@@ -452,11 +452,11 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
-            if op in ("repair_crop", "object_crop", "mask_refinement_crop") and active.get("cancelled"):
+            if op in ("repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply") and active.get("cancelled"):
                 self.changed.emit()
                 self._pump()
                 continue
-            if op == 'mask_refinement_crop' and not response['ok']:
+            if op in ('mask_refinement_crop', 'mask_refinement_apply') and not response['ok']:
                 from .mask_refinement import failed
 
                 failed(self, response['error'], active.get('context', {}))
@@ -628,6 +628,10 @@ def _read(self):
                 from .mask_refinement import crop_ready
 
                 crop_ready(self, response['result'], active['context'], response['generation'])
+            elif op == 'mask_refinement_apply':
+                from .mask_refinement import applied_regions
+
+                applied_regions(self, response['result'], active['context'], response['generation'])
             elif op == "matte":
                 if response["generation"] == self._generation and not active.get(
                     "cancelled"

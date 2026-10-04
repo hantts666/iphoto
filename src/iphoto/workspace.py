@@ -129,6 +129,7 @@ class Editor(QObject):
         self._ai.changed.connect(self.changed.emit)
         self._ai.planReady.connect(self._cloud_plan)
         self._ai.failure.connect(lambda message: self._notify(message, True))
+        self._ai.maskPointsUnavailable.connect(self._mask_points_unavailable)
         self._cache = tempfile.TemporaryDirectory(
             prefix="iphoto-", ignore_cleanup_errors=True
         )
@@ -264,7 +265,7 @@ class Editor(QObject):
             + ([self._export_request] if self._export_request else [])
         )
         return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or self.aiMaskPreparing or any(
-            request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop"}
+            request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply"}
             or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations
         )
@@ -1256,6 +1257,11 @@ class Editor(QObject):
 
     def _cloud_plan(self, result, generation):
         return conversation._cloud_plan(self, result, generation)
+
+    def _mask_points_unavailable(self, generation):
+        from .controllers.mask_refinement import points_unavailable
+
+        return points_unavailable(self, generation)
 
     @Slot(str)
     def applyAdvice(self, message_id):

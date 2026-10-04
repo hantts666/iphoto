@@ -9,7 +9,8 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from .ai_settings import AISettings, PROVIDERS, SettingsStore
 from .engine import Recipe
 from .ai_protocol import build_payload, image_data_url, parse_auto, parse_plan
-from .ai_mask_refinement import parse_points
+from .ai_mask_refinement import PointLocationError, parse_points
+from .ai_mask_review import parse_review
 from .ai_tasks import parse_selection, parse_regions
 from .ai_repair import parse_repair_spots
 from .scene import parse_scene, parse_targets
@@ -20,6 +21,7 @@ class AIController(QObject):
     progressChanged = Signal()
     planReady = Signal(object, int)
     failure = Signal(str)
+    maskPointsUnavailable = Signal(int)
     requestStarted = Signal()
 
     def __init__(self, parent=None, store=None):
@@ -95,7 +97,9 @@ class AIController(QObject):
             phase = "正在精定位：" + self._context["workspace"]["_grounding_label"]
         else:
             task = {"scene": "分析画面", "selection": "定位范围", "targets": "选择对象",
-                    "regions": "规划分区", "advice": "修图建议", "auto": "智能修图"}.get(self._context["mode"], "AI 修图")
+                    "regions": "规划分区", "advice": "修图建议", "auto": "智能修图",
+                    "mask_points": "定位五官误选", "mask_review": "复查修正范围",
+                    "repair": "检查局部瑕疵"}.get(self._context["mode"], "AI 修图")
             phase = task + ("：正在接收 AI 回复" if self._context["body"] else "：请求已发送，等待 AI 回应")
         return f"{phase} · 已等待 {elapsed} 秒 · 可取消"
 
@@ -337,6 +341,7 @@ class AIController(QObject):
                 "auto": "AI 正在判断调整范围并规划图层…",
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
                 "mask_points": "AI 正在对照原图与蒙版，定位误选范围…",
+                "mask_review": "AI 正在复查修正结果，检查残留误选…",
             }.get(mode, "AI 正在看图并生成修图参数…")
         )
 
@@ -415,6 +420,8 @@ class AIController(QObject):
                     result = parse_repair_spots(response, context["workspace"])
                 elif context["mode"] == "mask_points":
                     result = parse_points(response, context["workspace"])
+                elif context["mode"] == "mask_review":
+                    result = parse_review(response, context["workspace"])
                 elif context["mode"] == "scene":
                     result = parse_scene(response)
                 elif context["mode"] == "targets":
@@ -450,10 +457,14 @@ class AIController(QObject):
                 if isinstance(exc, (json.JSONDecodeError, UnicodeError))
                 else str(exc)
             )
-            self._connection = "请求未完成"
-            self._show(message, True)
-            if not context["testing"]:
-                self.failure.emit(message)
+            if not context["testing"] and context["mode"] == "mask_points" and isinstance(exc, PointLocationError):
+                self._show("AI 点位未能可靠定位，正在改用原图区域复查…")
+                self.maskPointsUnavailable.emit(context["generation"])
+            else:
+                self._connection = "请求未完成"
+                self._show(message, True)
+                if not context["testing"]:
+                    self.failure.emit(message)
         finally:
             context["secret"] = ""
             context["body"].clear()
@@ -464,7 +475,7 @@ class AIController(QObject):
     def _retry_invalid_result(self, context, reason):
         if (
             context["testing"]
-            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair", "mask_points"}
+            or context["mode"] not in {"auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review"}
             or context["validation_retry"]
             or context["abort"]
         ):

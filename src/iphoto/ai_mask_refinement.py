@@ -36,6 +36,10 @@ POINTS_PROMPT = """你是iPhoto已有五官蒙版的修正助手。三张图依�
 """
 
 
+class PointLocationError(ValueError):
+    """A valid point plan cannot locate exclusions inside existing coverage."""
+
+
 def eligible(mask):
     return (isinstance(mask, dict) and not mask.get('inverted') and 'bitmap' in mask
             and mask.get('face_part') in ('nose', 'lips')
@@ -134,7 +138,7 @@ def parse_points(data, context):
                     raise ValueError('排除点应按局部图0～999定位')
                 pixel = tuple(round(v/999*(side-1)) for v, side in zip(point, mask.size))
                 if pixel in seen or mask.getpixel(pixel) <= 127:
-                    raise ValueError('排除点必须落在当前白色蒙版的误选内部，不能点已保护的黑色区域或重复点')
+                    raise PointLocationError('排除点必须落在当前白色蒙版的误选内部，不能点已保护的黑色区域或重复点')
                 seen.add(pixel); points.append([point[0]/999, point[1]/999, 0])
         return {'status': 'planned', 'summary': plan['summary'].strip(), 'points': points}
     except (KeyError, IndexError, TypeError, json.JSONDecodeError, OSError):

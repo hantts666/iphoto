@@ -15,6 +15,7 @@ from .ai_layer_edits import LAYER_EDITS_SCHEMA, validate_layer_edits
 from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
+from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
     SELECTION_SCHEMA,
@@ -211,9 +212,11 @@ def build_payload(
     if mode == "targets":
         context = {"request": text, "objects": (workspace or {}).get("objects", [])}
         selection_image = None
-    if mode == "mask_points":
+    if mode in ("mask_points", "mask_review"):
         context = {"request": text, "mode": mode, "face_part": (workspace or {}).get("face_part"),
                    "crop_size": (workspace or {}).get("crop_size"), "coordinate_system": "local_0_to_999"}
+        if mode == 'mask_review':
+            context['regions'] = (workspace or {}).get('regions', [])
     payload = {
         "model": settings.model,
         "messages": [
@@ -225,6 +228,7 @@ def build_payload(
                     "regions": REGION_PROMPT,
                     "repair": REPAIR_SPOTS_PROMPT,
                     "mask_points": POINTS_PROMPT,
+                    "mask_review": REVIEW_PROMPT,
                     "scene": SCENE_PROMPT,
                     "targets": TARGETS_PROMPT,
                 }.get(mode, SYSTEM_PROMPT),
@@ -257,7 +261,7 @@ def build_payload(
         payload["messages"][1]["content"].append(
             {"type": "image_url", "image_url": {"url": selection_image}}
         )
-    if mode == "mask_points" and selection_overlay:
+    if mode in ("mask_points", "mask_review") and selection_overlay:
         payload["messages"][1]["content"].append(
             {"type": "image_url", "image_url": {"url": selection_overlay}})
     if settings.provider == "openai":
@@ -273,6 +277,7 @@ def build_payload(
                         "regions": REGION_SCHEMA,
                         "repair": REPAIR_SPOTS_SCHEMA,
                         "mask_points": POINTS_SCHEMA,
+                        "mask_review": REVIEW_SCHEMA,
                         "scene": SCENE_SCHEMA,
                         "targets": TARGETS_SCHEMA,
                     }.get(mode, RECIPE_SCHEMA),

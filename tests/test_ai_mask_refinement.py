@@ -156,7 +156,7 @@ def setup(ui, mode):
     return mask, lid
 
 
-def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False):
+def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False, review=None, points_reply=None):
     e = ui.e; mask, lid = setup(ui, mode)
     pending_jobs = []
     request = e._request
@@ -168,7 +168,9 @@ def start_chat(ui, monkeypatch, mode, color, *, delay=0, bad_points=False):
     monkeypatch.setattr('iphoto.controllers.pixel_selections.available', lambda: True)
     def body(payload):
         context = json.loads(payload['messages'][1]['content'][0]['text'])
-        if context['mode'] == 'mask_points': return point_plan([[0, 0] if bad_points else [500, 400]])
+        if context['mode'] == 'mask_points':
+            return response(points_reply) if points_reply is not None else point_plan([[0, 0] if bad_points else [500, 400]])
+        if context['mode'] == 'mask_review': return response(review(context) if callable(review) else review or {'status':'keep', 'summary':'未发现可明确排除的残留', 'exclude_regions':[]})
         target = next((l for l in context['existing_layers'] if l['id'] == lid), None)
         recipe = {**(target['recipe'] if target else Recipe().to_dict()), 'hsl_red_lightness': 6, 'warmth': 40} if color else None
         return response(proposal(context['current_recipe'], 'existing_layers' if mode == 'existing' else 'current_selection',
@@ -282,12 +284,12 @@ def test_cancel_cloud_detail_and_invalid_points_keep_original(canvas, monkeypatc
         wait_for(lambda: len(requests) == 2 and e.ai.busy)
         e.selection.cancelTask(); finished(e)
         assert not jobs and e._layers == before and e._candidate == mask
-    # Invalid white-interior points are retried once then rejected, with no local job.
+    # Rejected points are retried once, then the original mask is reviewed without guessing points.
     mask, _, jobs, api = start_chat(ui, monkeypatch, 'new', False, bad_points=True)
     with api as (url, requests):
         configure(e.ai, url); e.sendMessage('修正已有范围', 'auto'); finished(e)
-        assert len(requests) == 3 and not jobs and e._layers == before and e._candidate == mask
-        assert e.conversation[-1]['state'] == 'failed'
+        assert len(requests) == 4 and not jobs and e._layers == before and e._candidate == mask
+        assert e.conversation[-1]['state'] == 'answered' and '原范围与参数保持' in e.conversation[-1]['text']
 
 
 def test_first_cloud_reply_cannot_rebind_changed_draft(canvas, monkeypatch):  # noqa: F811

@@ -316,3 +316,7 @@ matte进程的prepare/details进度绑定请求ID、op、双代次与源SHA，�
 1.9.15的`ai_mask_refinement.py`定义`refine_mask`工具与局部点协议，`controllers/mask_refinement.py`编排裁切、云端定位和神经结果的原子发布。只允许已有明确nose/lips分区；当前草稿与指定已有层两种作用范围不能混用，目标层的配方与锁定独立校验。原图worker的`mask_refinement_crop`从实际alpha边界外扩64px，4MP预算后准备原图、L蒙版、覆盖对照，去源元数据；`mask_points`请求按此顺序发送三张图，私有路径与其他配方不发送。
 
 AI仅输出1～5个局部排除点，要求位于当前白色蒙版内，核对数值／尺寸／重复位置后按像素中心映射原图；实际修正沿`semantic_refine`的SAM2 dense先验路径，保留原零区与部位信息。源SHA、代次、token、层快照／锁定、草稿／绑定在各阶段一致才发布。草稿只修范围使用草稿历史；已有层的蒙版与颜色一起进入一次层历史。准备、云端、像素三阶段均经任务门面取消，过期／失败必须清理pending，晚到结果不再请求AI或修改文档。`test_ai_mask_refinement.py`覆盖这些边界，真实千问和24MP原应用证据见第109轮；该工具不恢复漏选或隐藏边缘。
+
+1.9.16在神经结果后增加`ai_mask_review.py`的视觉复查；结果先暂存，完整事务最后统一发布。4MP内alpha支持以1～4px邻接生成最多16个已有候选，主体内部最深点所属区域受保护，几何只编号。原图／L蒙版／编号覆盖对照交给AI，keep／remove／uncertain严格解析；最多删除8个明确且未保护的编号，未知／重复／主体编号拒绝。原图worker的`mask_refinement_apply`重算核对公共清单与源SHA，仅清除指定候选的原覆盖，框内其他alpha及主体保持；CV／NumPy在实际处理时导入。token新增stage防止迟到的旧阶段结果或错误改变新阶段。uncertain如实提示并保留本次神经修正，操作失败与取消则保留开始前内容。用户显示短结果句，AI内部编号／字段不进入产品说明；详细响应留诊断。`test_ai_mask_review.py`覆盖协议、精确alpha、状态、主体保护与事务，实际双照片／取消／原像素证据见第110轮。
+
+点协议的`PointLocationError`只标记合法结构的点落在已有黑区或重复像素。一次点位纠正仍失败时，`AIController.maskPointsUnavailable(generation)`触发原范围的一次区域复查；有效unsupported点计划走同一路径。尺寸、结构、非有限／越界坐标、网络／鉴权、取消均不走此后续路径，不吸附或猜点。原范围复查keep／uncertain不改配方、不消费绑定草稿、不加层或历史，明确说明保持；remove只清理AI明确指出的未保护候选，与可选配方统一提交。这条路径未运行SAM2，不在质量提示中冒称神经修正。复查自身非法或失败仍有界结束，不循环重试。

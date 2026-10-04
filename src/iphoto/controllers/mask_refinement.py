@@ -1,8 +1,10 @@
 """Close-up AI exclusions followed by one atomic mask/recipe transaction."""
 from copy import deepcopy
+import json
 from uuid import uuid4
 
 from ..ai_mask_refinement import eligible, mask_data_url, map_points, validate_result
+from ..ai_mask_review import parse_review
 from ..ai_protocol import image_data_url
 from ..document import new_layer, raster_mask_cached, validate_layers
 from ..engine import Recipe
@@ -48,13 +50,14 @@ def begin(self, result):
             raise ValueError('当前目标不是明确的鼻部或嘴唇范围，照片未改变')
         state = {'token': uuid4().hex, 'mask': deepcopy(mask), 'source_sha': self._sha, 'generation': self._generation,
                  'candidate': deepcopy(self._candidate), 'draft_target': self._selection_target_id,
-                 'draft': draft, 'target_id': lid, 'recipe': deepcopy(plan['recipe']), 'preparing': True}
+                 'draft': draft, 'target_id': lid, 'recipe': deepcopy(plan['recipe']),
+                 'stage': 'points_preparing', 'preparing': True}
         pending['mask_refinement'] = state
         _current(self, pending)
         self._status = '正在从原图准备五官与蒙版对照…可随时取消'
         self.changed.emit()
         if self._request('mask_refinement_crop', mask=state['mask'], source_sha=self._sha,
-                         context={'mask_token': state['token']}) is False:
+                         context={'mask_token': state['token'], 'mask_stage': state['stage']}) is False:
             raise ValueError('原图对照未能准备，已有范围和参数保留')
     except (ValueError, KeyError, StopIteration) as exc:
         failed(self, str(exc))
@@ -63,7 +66,9 @@ def begin(self, result):
 def crop_ready(self, result, context, generation):
     pending = self._pending_request or {}
     state = pending.get('mask_refinement')
-    if not state or context.get('mask_token') != state['token']:
+    if (not state or context.get('mask_token') != state['token']
+            or context.get('mask_stage') != state['stage']
+            or state['stage'] not in ('points_preparing', 'review_preparing')):
         return
     try:
         state = _current(self, pending)
@@ -76,12 +81,18 @@ def crop_ready(self, result, context, generation):
             raise ValueError('五官对照尺寸无效，已有范围保留')
         state['crop'] = deepcopy(result)
         state['preparing'] = False
-        self._status = 'AI 正在放大对照五官与蒙版，定位误选部分…'
+        review = state['stage'] == 'review_preparing'
+        state['stage'] = 'review' if review else 'points'
+        self._status = (('AI 正在复查当前范围，检查可明确排除的误选…' if state.get('points_fallback')
+                         else 'AI 正在复查修正结果，检查残留误选…') if review
+                        else 'AI 正在放大对照五官与蒙版，定位误选部分…')
         workspace = {'face_part': state['mask']['face_part'], 'crop_size': result['crop_size'],
                      '_mask_path': result['mask_path'], 'selection_image': mask_data_url(result['mask_path']),
                      'selection_overlay': image_data_url(result['overlay_path'])}
+        if review:
+            workspace['regions'] = result['regions']
         if self.ai.plan(pending['text'], Recipe().to_dict(), [], result['path'], self._generation,
-                        'mask_points', workspace) is False:
+                        'mask_review' if review else 'mask_points', workspace) is False:
             raise ValueError('AI对照未能启动，已有范围和参数保留')
         self.changed.emit()
     except (ValueError, KeyError, OSError) as exc:
@@ -92,11 +103,19 @@ def planned(self, result):
     pending = self._pending_request
     try:
         state = _current(self, pending)
-        if result.get('mode') != 'mask_points' or result['status'] == 'unsupported':
+        if state['stage'] == 'review':
+            return reviewed(self, result)
+        if state['stage'] != 'points':
+            return
+        if result.get('mode') != 'mask_points':
             raise ValueError('AI未可靠定位到误选区域，已有范围和参数保留。\n'+result['summary'])
+        if result['status'] == 'unsupported':
+            return review_original(self)
         state['points'] = map_points(result['points'], state['crop']['crop_box'], (self._width, self._height))
         state['summary'] = result['summary']
+        state['stage'] = 'neural'
         context = {'purpose': 'ai_mask_refinement', 'mask_token': state['token'],
+                   'mask_stage': state['stage'],
                    'origin': _origin(pending), 'points': deepcopy(state['points'])}
         if pixel_selections.start(self, [{'id': 'target', 'hint': state['mask'], 'points': state['points']}], context) is False:
             raise ValueError('精细神经修正未能启动，已有范围和参数保留')
@@ -104,10 +123,39 @@ def planned(self, result):
         failed(self, str(exc))
 
 
+def points_unavailable(self, generation):
+    pending = self._pending_request or {}
+    state = pending.get('mask_refinement')
+    if not state or state['stage'] != 'points' or self._closing:
+        return
+    if generation != self._generation:
+        return failed(self, '照片或范围已变化，过期修正未应用')
+    return review_original(self)
+
+
+def review_original(self):
+    """One semantic review of original coverage; never guess rejected points."""
+    try:
+        state = _current(self, self._pending_request)
+        state['points_fallback'] = True
+        state['summary'] = '点位未能可靠定位，已改用原图区域复查'
+        state['result'] = deepcopy(state['mask'])
+        state['quality'] = {'model': '已有五官分区', 'warnings': []}
+        state['stage'], state['preparing'] = 'review_preparing', True
+        self._status = '点位未能可靠定位，正在准备原图区域复查…可随时取消'
+        self.changed.emit()
+        if self._request('mask_refinement_crop', mask=state['mask'], source_sha=self._sha, review=True,
+                         context={'mask_token': state['token'], 'mask_stage': state['stage']}) is False:
+            raise ValueError('原图区域复查未能准备，已有范围和参数保留')
+    except (ValueError, KeyError) as exc:
+        failed(self, str(exc))
+
+
 def complete(self, result, context):
     pending = self._pending_request or {}
     state = pending.get('mask_refinement')
-    if not state or context.get('mask_token') != state['token']:
+    if (not state or context.get('mask_token') != state['token']
+            or context.get('mask_stage') != 'neural' or state['stage'] != 'neural'):
         return
     try:
         state = _current(self, pending)
@@ -119,7 +167,80 @@ def complete(self, result, context):
             raise ValueError('精细修正结果为空，已有范围保留')
         if mask == state['mask'] and state['recipe'] is None:
             raise ValueError('本次修正没有改变范围，已有范围保留')
+        state['result'], state['quality'] = mask, deepcopy(item.get('quality', {}))
+        state['stage'], state['preparing'] = 'review_preparing', True
+        self._status = '正在从原图准备修正结果对照，随后由AI复查残留误选…可随时取消'
+        self.changed.emit()
+        if self._request('mask_refinement_crop', mask=mask, source_sha=self._sha, review=True,
+                         context={'mask_token': state['token'], 'mask_stage': state['stage']}) is False:
+            raise ValueError('修正结果复查未能准备，已有范围和参数保留')
+    except (ValueError, KeyError, StopIteration) as exc:
+        failed(self, str(exc))
+
+
+def reviewed(self, result):
+    pending = self._pending_request
+    try:
+        state = _current(self, pending)
+        if result.get('mode') != 'mask_review':
+            raise ValueError('范围复查返回类型不一致，已有范围与参数保留')
+        plan = {key: result[key] for key in ('status', 'summary', 'exclude_regions')}
+        plan = parse_review({'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(plan)}}]},
+                            {'regions': state['crop']['regions']})
+        part = '嘴唇' if state['mask']['face_part'] == 'lips' else '鼻部'
+        kept = '原范围' if state.get('points_fallback') else '当前修正'
+        state['review_summary'] = {
+            'keep': f'保留现有覆盖；{part}边缘与漏选仍需放大检查',
+            'remove': f'已排除AI复查指出的残留范围；{part}边缘与漏选仍需放大检查',
+            'uncertain': f'剩余边缘未能可靠判明，保留{kept}；请放大检查{part}',
+        }[plan['status']]
+        if plan['status'] != 'remove':
+            if plan['status'] == 'uncertain':
+                state['quality'].setdefault('warnings', []).append('AI复查仍有无法可靠判明的边缘，未作整片排除')
+            return publish(self)
+        state['stage'], state['preparing'] = 'apply', True
+        self._status = '正在清理AI复查发现的误选，其余范围保留…可随时取消'
+        self.changed.emit()
+        if self._request('mask_refinement_apply', mask=state['result'], source_sha=self._sha,
+                         exclude_regions=plan['exclude_regions'], regions=state['crop']['regions'],
+                         context={'mask_token': state['token'], 'mask_stage': state['stage']}) is False:
+            raise ValueError('复查排除未能完成，已有范围和参数保留')
+    except (ValueError, KeyError) as exc:
+        failed(self, str(exc))
+
+
+def applied_regions(self, result, context, generation):
+    pending = self._pending_request or {}
+    state = pending.get('mask_refinement')
+    if (not state or context.get('mask_token') != state['token']
+            or context.get('mask_stage') != 'apply' or state['stage'] != 'apply'):
+        return
+    try:
+        state = _current(self, pending)
+        if generation != self._generation:
+            raise ValueError('范围复查结果已过期，已有范围和参数保留')
+        state['result'] = validate_result(result['mask'], state['mask'], (self._width, self._height))
+        if not raster_mask_cached(state['result'], (512, 512)).getbbox():
+            raise ValueError('范围复查结果为空，已有范围和参数保留')
+        state['quality'].setdefault('warnings', []).append('已按AI原图复查判断排除残留区域，其余覆盖保持')
+        publish(self)
+    except (ValueError, KeyError) as exc:
+        failed(self, str(exc))
+
+
+def publish(self):
+    pending = self._pending_request
+    try:
+        state = _current(self, pending)
+        mask = state['result']
         lid = state['target_id']
+        if state.get('points_fallback') and mask == state['mask']:
+            output = 'AI复查未确定可安全排除的误选，原范围与参数保持'
+            self._pending_request = None
+            self._message('assistant', output+'。\n'+state['summary']+'\n'+state['review_summary'],
+                          state='answered', origin=_origin(pending))
+            self._notify(output)
+            return
         if state['draft'] and not lid:
             if state['recipe'] is None:
                 self._set_candidate(mask)
@@ -147,16 +268,16 @@ def complete(self, result, context):
             self.selection.showAppliedResult(lid)
             self.selection.focusChangedParameters(previous_recipe)
             message_state, output = 'applied', '已修正已有图层的范围'+('并调整参数' if state['recipe'] is not None else '，颜色参数保持')
-        quality = item.get('quality', {})
+        quality = state['quality']
         warnings = [warning.replace('请补充提示点', '请放大检查边缘')
                     for warning in quality.get('warnings', [])]
         if lid:
             from .conversation import _layer_result_notes
             warnings += _layer_result_notes(self._layers, [{'layer_id': lid}])
-        self._selection_quality = self._quality_text(mask)+' · '+quality.get('model', '本地神经修正')
+        self._selection_quality = self._quality_text(mask)+' · '+quality.get('model', '本地神经修正')+' · AI视觉复查'
         origin = {**_origin(pending), **({'layer_id': lid, 'adjustment_layer_ids': [lid]} if lid else {})}
         self._pending_request = None
-        self._message('assistant', output+'。\n'+state['summary']+'\n请放大检查边缘；可一步撤销。'
+        self._message('assistant', output+'。\n'+state['summary']+'\nAI复查：'+state['review_summary']+'\n请放大检查边缘；可一步撤销。'
                       + ('\n'+'；'.join(warnings) if warnings else ''), state=message_state, origin=origin)
         self._notify(output+'；请检查边缘，可一步撤销', scope='draft' if message_state == 'draft' else '')
     except (ValueError, KeyError, StopIteration) as exc:
@@ -165,8 +286,11 @@ def complete(self, result, context):
 
 def failed(self, message, context=None):
     pending = self._pending_request or {}
-    if context and context.get('mask_token') != pending.get('mask_refinement', {}).get('token'):
-        return
+    if context:
+        state = pending.get('mask_refinement', {})
+        if (context.get('mask_token') != state.get('token')
+                or context.get('mask_stage') != state.get('stage')):
+            return
     self._pending_request = None
     self._message('error', message, state='failed', origin=_origin(pending))
     self._notify(message, True)

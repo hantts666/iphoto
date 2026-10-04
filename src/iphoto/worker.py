@@ -208,13 +208,27 @@ def main():
 
         if request["source_sha"] != source.digest:
             raise ValueError("照片已变化，过期范围修正图未准备")
-        picture, mask, overlay, box = prepare_crop(source.image, request["mask"])
+        if request.get('review'):
+            from .ai_mask_review import prepare_review
+            picture, mask, overlay, box, regions = prepare_review(source.image, request['mask'])
+        else:
+            picture, mask, overlay, box = prepare_crop(source.image, request["mask"])
+            regions = []
         paths = [cache / f"mask-refinement-{request['id']}-{kind}.png" for kind in ("photo", "mask", "overlay")]
         for item, path in zip((picture, mask, overlay), paths):
             item.save(path, **({"icc_profile": SRGB_PROFILE} if item.mode == 'RGB' else {}))
             assets.append(path)
         return {"path": str(paths[0]), "mask_path": str(paths[1]), "overlay_path": str(paths[2]),
-                "crop_box": box, "crop_size": list(picture.size), "source_size": list(source.image.size)}
+                "crop_box": box, "crop_size": list(picture.size), "source_size": list(source.image.size), 'regions': regions}
+
+    @register('mask_refinement_apply')
+    def _mask_refinement_apply(request):
+        from .ai_mask_review import remove_regions
+
+        if request['source_sha'] != source.digest:
+            raise ValueError('照片已变化，过期复查排除未应用')
+        mask = remove_regions(source.image, request['mask'], request['exclude_regions'], request['regions'])
+        return {'mask': mask}
 
     @register("selection")
     def _selection(request):
