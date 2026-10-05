@@ -100,6 +100,7 @@ def complete(e, result, token):
             next(layer for layer in staged if layer['id']==target)['mask'] = mask
         e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
         e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
+                   target_context=bool(state.get('hair')),
                    **({'review_boxes':state['review_boxes']} if state['revision'] else {}),
                    context={'token':token})
     except (ValueError, KeyError, StopIteration) as exc:

@@ -118,6 +118,37 @@ def test_review_payload_sends_labeled_evidence_once_and_strict_schema():
     assert set(body['response_format']['json_schema']['schema']['properties'])=={'status','summary','corrections'}
 
 
+def test_review_source_stays_original_and_target_context_preserves_its_coordinates(tmp_path):
+    from iphoto.document import render_layers
+    from iphoto.cutout import compose_cutout
+    from iphoto.engine import preview
+    source=Image.new('RGB',(2400,1800),(85,102,68));original=source.tobytes()
+    a=np.zeros((1800,2400),np.uint8);a[700:1200,900:1400]=255
+    mask={**empty_mask(),'bitmap':encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)}
+    layer=new_layer('已有曝光调整',True);layer['recipe']=Recipe(exposure=1).to_dict()
+    layers=[layer];snapshot=deepcopy((layers,mask))
+    box=[840,640,1352,1152]
+    result=render_review(source,layers,mask,tmp_path,2,[box],target_context=True)
+    whole=Image.open(result['images'][0]['path'])
+    assert whole.tobytes()==preview(source,1280).tobytes()
+    context=result['review_images'][1]
+    assert '上下文' in context['label'] and '纠错坐标只相对编号边缘' in context['label']
+    assert Image.open(context['path']).tobytes()==source.crop((644,188,1656,1328)).tobytes()
+    assert max(Image.open(context['path']).size)<=1280 and result['boxes']==[box]
+    native=next(item for item in result['images'] if item['label']=='边缘1原像素原照片')
+    assert Image.open(native['path']).tobytes()==source.crop(box).tobytes()
+    panel=Image.open(next(item['path'] for item in result['images'] if '四格质量对照' in item['label']))
+    assert panel.crop((0,24,512,536)).tobytes()==source.crop(box).tobytes()
+    adjusted=render_layers(source,layers);assert adjusted.tobytes()!=original
+    expected=Image.alpha_composite(Image.new('RGBA',source.size,'white'),compose_cutout(adjusted,Image.fromarray(a))).convert('RGB')
+    white=next(item for item in result['images'] if item['label']=='边缘1原像素候选白底')
+    assert Image.open(white['path']).tobytes()==expected.crop(box).tobytes()
+    assert source.tobytes()==original and (layers,mask)==snapshot
+    assert len({item['path'] for item in result['review_images']})==len(result['review_images'])
+    with pytest.raises(ValueError,match='上下文选项无效'):
+        render_review(source,layers,mask,tmp_path,3,[box],target_context='hair')
+
+
 @pytest.mark.parametrize('invert',[False,True])
 def test_visual_exclusion_references_can_reach_wrong_opaque_foreground(invert):
     # The coarse model calls a whole light/dark cloth patch foreground. An

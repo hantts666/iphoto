@@ -168,6 +168,7 @@ def test_hair_strategy_runs_native_model_before_review_without_publishing(monkey
     native={'mask':mask,'quality':{'edge_refinement':True,'warnings':[],'elapsed_ms':3}}
     channel_auto.complete(editor,native,'same')
     assert calls[1][0]=='matte_candidate'
+    assert calls[1][1]['target_context'] is True
     assert state['result']['quality']['hair_refinement']['edge_refinement']
     assert state['result']['quality']['elapsed_ms']==13
     assert snapshot==(editor._layers,editor._candidate,editor._cursor)

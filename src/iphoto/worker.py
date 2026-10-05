@@ -374,7 +374,7 @@ def main():
         from .matte_review import render_review
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，抠图检查未应用')
-        result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'))
+        result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'),target_context=request.get('target_context',False))
         current_crop_assets={Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result
