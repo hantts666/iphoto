@@ -18,7 +18,7 @@ from .storage import atomic_output
 from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors, mix_fast as mix_colors_fast, mix_curves_fast
 from .tone_curves import FIELDS as CURVE_FIELDS, LABELS as CURVE_LABELS, SCHEMA as CURVE_SCHEMA, validate as validate_curve, apply as apply_curves, apply_fast as apply_curves_fast
 
-ENGINE_VERSION = "1.11.11-grounded-matte"
+ENGINE_VERSION = "1.11.12-source-strand-pins"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),

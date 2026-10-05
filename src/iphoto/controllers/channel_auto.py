@@ -222,6 +222,8 @@ def points_ready(e, result, context, generation):
                                   'corrections':deepcopy(state['point_corrections']),
                                   'context_points':state.get('context_points',False),'point_bounds':result['point_bounds'],
                                   'keep_candidates':state['keep_candidates'],'windows':result['windows']}
+        if 'strand_candidates' in result:
+            state['point_workspace']['strand_candidates']=deepcopy(result['strand_candidates'])
         images=[{'label':item['label'],'url':image_data_url(item['path'])} for item in result['images']]
         e._status='4/4 AI 正在放大核对发丝落点，检查是否误点背景…可取消'
         e.changed.emit()

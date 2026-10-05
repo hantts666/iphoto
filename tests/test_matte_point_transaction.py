@@ -17,7 +17,7 @@ from test_matte_points import completion
 @pytest.mark.parametrize('outcome',['keep','revise','reject','cancel','stale','failure','malformed'])
 def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(qt_app,ai_store,tmp_path,outcome):
     image,mask,boxes=scene();path=tmp_path/'source.png';image.save(path)
-    editor=Editor(ai_store=ai_store);captured={};pixel_calls=[];gate=Event();request=editor._request
+    editor=Editor(ai_store=ai_store);captured={};expected={};pixel_calls=[];gate=Event();request=editor._request
     def dispatch(op,**data):
         if op=='matte' and data.get('method')=='correction':captured.update(data);pixel_calls.append(deepcopy(data));return
         return request(op,**data)
@@ -41,7 +41,11 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                 assert len([v for v in payload['messages'][1]['content'] if v['type']=='image_url'])==2
                 if outcome in ('cancel','stale'):gate.wait(6)
                 corrections=deepcopy(context['corrections'])
-                if outcome=='revise':corrections[0]['points'][-1]=[500,550,2]
+                if outcome=='revise':
+                    offered=context['strand_candidates']['1']
+                    if offered:corrections[0]['points'][-1]=[*offered[0],2]
+                    else:corrections[0]['points'].pop()
+                    expected['corrections']=deepcopy(corrections)
                 if outcome=='malformed':corrections[0]['points'][0]=[400,375,1]
                 return completion({'status':'revise' if outcome in ('revise','malformed') else 'reject' if outcome=='reject' else 'keep',
                                    'summary':'控制身份检查结果','corrections':corrections if outcome in ('revise','malformed') else []})
@@ -59,7 +63,8 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
             elif outcome in ('keep','revise'):
                 wait_for(lambda:bool(captured))
                 assert editor._layers==original and editor._cursor==cursor and state['revision']==1
-                assert captured['corrections'][0]['points'][-1]==([500,550,2] if outcome=='revise' else [450,500,2])
+                assert captured['corrections']==(expected['corrections'] if outcome=='revise' else [patch])
+                assert 'strand_candidates' in state['point_workspace']
                 count=len(pixel_calls)
                 channel_auto.points_reviewed(editor,{'status':'keep','summary':'重复回调','corrections':[]})
                 assert len(pixel_calls)==count and editor._layers==original

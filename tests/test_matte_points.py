@@ -60,6 +60,43 @@ def test_point_verification_cannot_reorder_overlapping_correction_jobs():
     with pytest.raises(ValueError,match='不能改变纠错区域'):parse_points(completion(result),context)
 
 
+def test_proposed_location_is_exact_and_bound_to_its_original_source_edge():
+    context=workspace();context['strand_candidates']={'1':[[398,263],[500,550]]}
+    revised=deepcopy(context['corrections']);revised[0]['points'][-1]=[398,263,2]
+    result={'status':'revise','summary':'选择原片C1对应可见细丝','corrections':revised}
+    assert parse_points(completion(result),context)['corrections']==revised
+    revised[0]['points'][-1]=[399,263,2]
+    with pytest.raises(ValueError,match='同一原片候选'):parse_points(completion(result),context)
+    # An unchanged real identity point can still be kept; no feature proposal
+    # is allowed to decide that this pixel belongs to hair by itself.
+    revised[0]['points'][-1]=context['corrections'][0]['points'][-1][:]
+    assert parse_points(completion(result),{**context,'strand_candidates':{'1':[]}})['corrections']==revised
+    revised[0]['points'][-1]=[398,263,2]
+    with pytest.raises(ValueError):parse_points(completion(result),{**context,'strand_candidates':{'2':[[398,263]]}})
+    for wrong in ([],{'1':[[398.,263]]},{'1':[[True,263]]},{'1':[[1000,263]]},{'1':[[398,263,2]]},{'1':[[398,263]]*17}):
+        with pytest.raises(ValueError,match='原片候选无效'):
+            parse_points(completion({'status':'keep','summary':'保持原落点','corrections':[]}),{**context,'strand_candidates':wrong})
+
+
+def test_thin_source_candidates_have_no_opacity_and_respect_native_scope():
+    from iphoto.matting.strand_candidates import propose
+    source=Image.new('RGB',(900,900),(80,90,70));array=np.array(source)
+    # Independently specified native bright and dark filaments; known photo
+    # structure, not a copy of the feature calculation used by propose().
+    array[200:700,590:594]=[200,180,130];array[200:700,420:424]=[10,20,10]
+    source=Image.fromarray(array);original=source.tobytes();core=[250,200,762,712]
+    frame=point_frame(core,source.size);bounds=point_bounds(core,frame)
+    points=[[100,500,1],[700,700,0],[500,500,2]]
+    offered=propose(source,core,frame,points,bounds)
+    assert 1<=len(offered)<=16 and all(len(point)==2 and all(type(v) is int for v in point) for point in offered)
+    native=[(frame[0]+round(x/999*(frame[2]-frame[0]-1)),frame[1]+round(y/999*(frame[3]-frame[1]-1))) for x,y in offered]
+    assert any(419<=x<=424 for x,y in native) and any(589<=x<=594 for x,y in native)
+    assert all(bounds[0]<=x<=bounds[2] and bounds[1]<=y<=bounds[3] for x,y in offered)
+    assert source.tobytes()==original
+    assert propose(Image.new('RGB',source.size,(80,90,70)),core,frame,points,bounds)==[]
+    assert propose(source,core,frame,points[:2],bounds)==[]
+
+
 def test_point_evidence_is_original_rgb_with_unpainted_centers_and_bounded_context(tmp_path):
     y,x=np.indices((900,1000));source=Image.fromarray(np.stack((x%251,y%251,(x+y)%251),axis=-1).astype(np.uint8))
     original=source.tobytes();core=[250,200,762,712];frame=point_frame(core,source.size)
@@ -76,6 +113,12 @@ def test_point_evidence_is_original_rgb_with_unpainted_centers_and_bounded_conte
     for px,py in ((10,10),(60,100),(430,450)):
         assert zoom.getpixel((px,py))==source.getpixel((window['source_box'][0]+px//2,window['source_box'][1]+py//2))
     assert native.getpixel((96,146))==(80,196,245)
+    for px,py in [p[:2] for p in patch['points']]+result['strand_candidates']['1']:
+        x=round(px/999*703);y=round(py/999*703)
+        assert native.getpixel((x,y))==source.getpixel((frame[0]+x,frame[1]+y))
+        zx=frame[0]+x-window['source_box'][0];zy=frame[1]+y-window['source_box'][1]
+        if 0<=zx<256 and 0<=zy<256:
+            assert zoom.getpixel((zx*2,zy*2))==source.getpixel((frame[0]+x,frame[1]+y))
     assert source.tobytes()==original and patch==snapshot
     for boxes in ([[250,200,763,712]],[[250,200,1001,712]],[[250.,200,762,712]]):
         with pytest.raises(ValueError):render_points(source,[patch],boxes,tmp_path,2,context_points=True)
