@@ -96,6 +96,22 @@ def test_semantic_exclusion_cannot_be_reopened_by_partial_person_alpha():
         context.solve(image,previous,box,semantic=hard,semantic_radius=True,engine=Matte())
 
 
+def test_strand_identity_can_recover_missing_alpha_without_becoming_opaque():
+    image,mask,portrait,_=fixture();photo=image.tobytes();snapshot=deepcopy(mask)
+    original=raster_mask(mask,image.size);box=(240,200,720,650)
+    context=HairContext(image,original,portrait=portrait,parser=Parser())
+    previous=np.asarray(original.crop(box));semantic=previous>127;semantic[230,265]=True
+    points=[[400/999,430/899,1],[690/999,430/899,0],[505/999,430/899,2]]
+    pixels,_=context.solve(image,previous,box,semantic=semantic,points=points,engine=Matte())
+    assert previous[230,265]==0 and 0<pixels[230,265]<128
+    assert pixels[230,160]==255 and pixels[230,450]==0
+    assert image.tobytes()==photo and mask==snapshot
+    with pytest.raises(ValueError,match='分割提示点'):
+        context.solve(image,previous,box,points=points,engine=Matte())
+    with pytest.raises(ValueError,match='皮肤、帽子或衣物'):
+        context.solve(image,previous,box,semantic=semantic,points=[*points[:2],[600/999,430/899,2]],engine=Matte())
+
+
 def test_portrait_model_digest_is_required_before_onnx_load(tmp_path,monkeypatch):
     data=b'changed';(tmp_path/portrait_models.NAME).write_bytes(data)
     monkeypatch.setattr(portrait_models,'MODEL_DIR',tmp_path)
@@ -171,4 +187,36 @@ def test_hair_strategy_runs_native_model_before_review_without_publishing(monkey
     assert calls[1][1]['target_context'] is True
     assert state['result']['quality']['hair_refinement']['edge_refinement']
     assert state['result']['quality']['elapsed_ms']==13
+    assert snapshot==(editor._layers,editor._candidate,editor._cursor)
+
+
+@pytest.mark.parametrize('hair',[False,True])
+def test_strand_capability_and_correction_roles_survive_the_controller_boundary(monkeypatch,hair):
+    from iphoto.controllers import channel_auto
+    image,mask,_,_=fixture();calls=[];plans=[]
+    state={'token':'same','hair':hair,'revision':0,'mask':mask,'result':{'mask':mask},'bound':False}
+    pending={'text':'核对头发'}
+    editor=SimpleNamespace(_layers=[{'id':'original'}],_candidate=deepcopy(mask),_cursor=0,_generation=0,
+                           _request=lambda op,**data:calls.append((op,data)),
+                           ai=SimpleNamespace(plan=lambda *args:plans.append(args)),
+                           changed=SimpleNamespace(emit=lambda:None),_notify=lambda *args:calls.append(('error',args)))
+    snapshot=deepcopy((editor._layers,editor._candidate,editor._cursor))
+    monkeypatch.setattr(channel_auto,'_current',lambda *args:(pending,state))
+    monkeypatch.setattr('iphoto.segmentation.precise_sam.available',lambda:True)
+    monkeypatch.setattr(channel_auto,'image_data_url',lambda path:'image')
+    result={'boxes':[[100,100,612,612]],'images':[{'path':'source.png'}],
+            'review_images':[{'label':'原片','path':'source.png'}],
+            'keep_candidates':{'1':[[700,800]]},'exclude_candidates':{'1':[[470,470]]}}
+    state['result']['quality']={}
+    channel_auto.review_ready(editor,result,{'token':'same'},0)
+    assert plans[0][6]['strand_points'] is hair
+    assert plans[0][6]['correction_method']==('hair' if hair else 'semantic')
+    editor._pending_request={'channel_auto':state}
+    patch={'edge':1,'radius':24,'points':[[700,800,1],[470,470,0],[320,640,2]]}
+    channel_auto.reviewed(editor,{'status':'revise','summary':'补细丝','corrections':[patch]})
+    if hair:
+        assert calls[0][0]=='matte' and calls[0][1]['hair'] is True
+        assert calls[0][1]['corrections']==[patch] and state['revision']==1
+    else:
+        assert calls[0][0]=='error' and state['revision']==0
     assert snapshot==(editor._layers,editor._candidate,editor._cursor)

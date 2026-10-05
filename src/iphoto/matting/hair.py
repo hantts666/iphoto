@@ -50,6 +50,7 @@ class HairContext:
             raise ValueError('当前范围不能可靠确认为头发，请使用通用细化或重新定位头发')
 
     def solve(self, image, previous, box, *, semantic=None, semantic_radius=32, points=None, engine=None, progress=None):
+        points=validate_points(points or [],allow_strands=semantic is not None)
         if (max(box[0],self.box[0])>=min(box[2],self.box[2])
                 or max(box[1],self.box[1])>=min(box[3],self.box[3])):
             raise ValueError('笔触超出头发定位上下文，请在目标附近分次修边')
@@ -61,12 +62,28 @@ class HairContext:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(25,25))
         trimap[cv2.erode((coarse>250).astype(np.uint8),kernel)>0] = 255
         trimap[cv2.erode((coarse<2).astype(np.uint8),kernel)>0] = 0
+        prior = np.asarray(previous)
+        anchors = {}
+        yy,xx = np.ogrid[:prior.shape[0],:prior.shape[1]]
+        for x,y,label in points:
+            x = round(x*(image.width-1))-box[0]; y = round(y*(image.height-1))-box[1]
+            if not (0<=x<crop.width and 0<=y<crop.height): continue
+            if (y,x) in anchors and anchors[y,x]!=label:
+                raise ValueError('保留点和排除点重叠，请先修正提示点')
+            if label==1 and (prior[y,x]<245 or labels[y,x]!=17):
+                raise ValueError('保留点不能确认为不透明头发，原范围保留')
+            if label==2:
+                if labels[y,x] in tuple(range(1,17))+(18,):
+                    raise ValueError('发丝参照不能落在皮肤、帽子或衣物上，原范围保留')
+                # A missing wisp can have zero coarse person support. Reopen
+                # only its tiny observed neighborhood; never paint it opaque.
+                trimap[(xx-x)**2+(yy-y)**2<=2**2]=128
+            anchors[y,x]=label
         engine = engine or neural.backend()
         def report(phase):
             if progress: progress(phase=phase)
             return lambda tile,tiles: progress(tile,tiles,phase=phase) if progress else None
         parent, outer_tiles = neural.solve(crop,trimap,engine=engine,progress=report('hair_outer'))
-        prior = np.asarray(previous)
         target = (prior>127) if semantic is None else np.asarray(semantic,dtype=bool)
         hard = (target & (labels==17)).astype(np.uint8)
         inside = cv2.distanceTransform(np.pad(hard,1),cv2.DIST_L2,5)[1:-1,1:-1]
@@ -83,24 +100,17 @@ class HairContext:
                 raise ValueError('发丝纠错边缘宽度无效，原范围保留')
             outside = cv2.distanceTransform((~target).astype(np.uint8),cv2.DIST_L2,5)
             trimap[outside>semantic_radius] = 0
-        anchors = {}
-        yy,xx = np.ogrid[:prior.shape[0],:prior.shape[1]]
-        for x,y,label in points or []:
-            x = round(x*(image.width-1))-box[0]; y = round(y*(image.height-1))-box[1]
-            if not (0<=x<crop.width and 0<=y<crop.height): continue
-            value = 255 if label else 0
-            if (y,x) in anchors and anchors[y,x]!=value:
-                raise ValueError('保留点和排除点重叠，请先修正提示点')
-            if label and (prior[y,x]<245 or labels[y,x]!=17 or parent[y,x]<128):
+        for (y,x),label in anchors.items():
+            if label==1 and parent[y,x]<128:
                 raise ValueError('保留点不能确认为不透明头发，原范围保留')
-            radius = 8 if label else 2
-            trimap[(xx-x)**2+(yy-y)**2<=radius**2] = 255 if label else 0
-            anchors[y,x] = value
+            radius = 8 if label==1 else 2
+            trimap[(xx-x)**2+(yy-y)**2<=radius**2] = 128 if label==2 else 255 if label else 0
         if (trimap==255).sum()<16 or (trimap==0).sum()<16:
             raise ValueError('附近缺少可靠的头发或背景，请保留部分内部参照')
         pixels, split_tiles = neural.solve(crop,trimap,engine=engine,progress=report('hair_split'))
         pixels = np.minimum(pixels,parent)
-        for (y,x),value in anchors.items(): pixels[y,x] = value
+        for (y,x),label in anchors.items():
+            if label!=2:pixels[y,x] = 255 if label else 0
         return pixels, {'outer_tiles':outer_tiles,'split_tiles':split_tiles,
                         'unknown_pixels':int((trimap==128).sum()),'tiles':outer_tiles+split_tiles}
 

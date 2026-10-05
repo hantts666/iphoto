@@ -64,6 +64,24 @@ def calculation_scene():
     return image,a,mask
 
 
+def test_strand_references_need_hair_capability_and_cannot_replace_opaque_anchors():
+    plan={'status':'revise','summary':'补充原片可见的半透明细丝',
+          'corrections':[{'edge':1,'radius':24,'points':[[700,800,1],[470,470,0],[320,640,2]]}]}
+    context={'revision':0,'correction_available':True,'edge_count':1,
+             'correction_method':'hair','strand_points':True,
+             'keep_candidates':{'1':[[700,800]]},'exclude_candidates':{'1':[[470,470]]}}
+    assert parse_review(completion(plan),context)==plan
+    for change in ({'strand_points':False},{'strand_points':'true'},{'correction_method':'semantic'},{'revision':1}):
+        with pytest.raises(ValueError):parse_review(completion(plan),{**context,**change})
+    for target in ([20,640,2],[320,960,2],[320,640,3]):
+        wrong=deepcopy(plan);wrong['corrections'][0]['points'][2]=target
+        with pytest.raises(ValueError):parse_review(completion(wrong),context)
+    wrong=deepcopy(plan);wrong['corrections'][0]['points'][0][2]=2
+    with pytest.raises(ValueError,match='保留与排除'):parse_review(completion(wrong),context)
+    wrong=deepcopy(plan);wrong['corrections'][0]['points'][0][0]=710
+    with pytest.raises(ValueError,match='不透明参照'):parse_review(completion(wrong),context)
+
+
 def test_channel_calculations_separate_shared_lighting_from_transparency():
     image,a,mask=calculation_scene()
     before=deepcopy(mask)
@@ -133,8 +151,14 @@ def test_review_source_stays_original_and_target_context_preserves_its_coordinat
     assert whole.tobytes()==preview(source,1280).tobytes()
     context=result['review_images'][1]
     assert '上下文' in context['label'] and '纠错坐标只相对编号边缘' in context['label']
-    assert Image.open(context['path']).tobytes()==source.crop((644,188,1656,1328)).tobytes()
-    assert max(Image.open(context['path']).size)<=1280 and result['boxes']==[box]
+    overview=Image.open(context['path'])
+    assert '蓝框数字对应边缘编号' in context['label']
+    assert overview.size==(1012,1140) and max(overview.size)<=1280 and result['boxes']==[box]
+    # The frame is lifted from source coordinates into this crop. Interior
+    # and outside source samples retain their exact unadjusted colors.
+    assert overview.getpixel((196,500))==(80,196,245)
+    for xy in ((50,50),(400,400),(400,600),(900,1000)):
+        assert overview.getpixel(xy)==source.getpixel((xy[0]+644,xy[1]+188))
     native=next(item for item in result['images'] if item['label']=='边缘1原像素原照片')
     assert Image.open(native['path']).tobytes()==source.crop(box).tobytes()
     panel=Image.open(next(item['path'] for item in result['images'] if '四格质量对照' in item['label']))

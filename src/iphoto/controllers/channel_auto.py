@@ -128,6 +128,7 @@ def review_ready(e, result, context, generation):
                                    'correction_available':state['correction_available'],
                                    'correction_method':'hair' if state.get('hair') else 'semantic',
                                    'visual_exclusions':bool(state.get('hair')),
+                                   'strand_points':bool(state.get('hair')),
                                    'previous_check':state.get('previous_check',''),
                                    'quality':state['result']['quality'],'review_images':images})
     except (ValueError, KeyError, OSError) as exc:
@@ -148,7 +149,7 @@ def reviewed(e, review):
             from ..matte_review import validate_corrections
             if state['revision'] or not state.get('correction_available'):
                 raise ValueError('本轮不能再次纠错，原范围保留')
-            corrections=validate_corrections(review['corrections'],len(state['review_boxes']))
+            corrections=validate_corrections(review['corrections'],len(state['review_boxes']),strand_points=bool(state.get('hair')))
             state['revision']=1
             state['previous_check']=review['summary']
             e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'

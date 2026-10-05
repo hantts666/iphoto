@@ -2,7 +2,7 @@
 import json
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 CORRECTIONS_SCHEMA = {'type':'array','maxItems':2,'items':{
     'type':'object','additionalProperties':False,'properties':{
@@ -26,7 +26,9 @@ PROMPT = """你是iPhoto独立抠图质量检查员。依据提供的实际图�
 accept：目标范围可用且没有明显上述缺陷；reject：实际结果存在具体可见缺陷且不能通过本轮局部纠错解决；uncertain：证据不足。
 当correction_available=true且revision=0时，发现明确的衣物/背景误选或局部漏选，应优先revise，给corrections（最多两处、总共最多6个点）。每处{edge:提供的边缘编号1到edge_count,radius:12到48的原图像素边缘宽度,points:[[x,y,label],...]}。correction_method=hair时，会结合人物外缘透明度、头发分区与语义提示点，重新判断该局部的细发丝；仍需核对实际输出，不保证成功。
 纠错点是给像素模型的语义参照，并非只修改点本身：同一裁片里的衣物与饰品误选可用一个保留点和多个不同位置的排除点处理。问题位于最多两幅裁片、且有可靠参照时应先尝试这唯一一次纠错，再依据实际复查拒绝或接受，不要仅因有两类误选或错误块面积较大就断言点不能处理。若缺少身份明确的参照仍应reject或uncertain。
-坐标只相对该编号的原像素原照片裁图：左上[0,0]，右下[999,999]，不是全图坐标，也不是512像素坐标。目标附近上下文用于结合完整人物辨认头发、皮肤和衣物，不能从该上下文图直接取纠错坐标。label=1保留、0排除，每处至少一个保留点和一个排除点。keep_candidates按边缘编号提供候选不透明参照点；定位图中的绿圈编号对应清单顺序。保留点必须精确使用清单中的坐标，并先在原照片确认它确实属于用户目标（绿圈只是候选，不证明语义正确）。不要点饰品、皮肤、衣物来保留头发。没有可靠参照时reject或uncertain。
+坐标只相对该编号的原像素原照片裁图：左上[0,0]，右下[999,999]，不是全图坐标，也不是512像素坐标。如果提供目标附近上下文，其蓝框数字对应边缘编号，用于结合完整人物辨认头发、皮肤和衣物；框线是检查区域，不是目标选区边界。先确认每幅Source在该框内的位置，不能把相距较远的裁片混为同一处，也不能从上下文图直接取纠错坐标。label=1保留、0排除，每处至少一个保留点和一个排除点。keep_candidates按边缘编号提供候选不透明参照点；定位图中的绿圈编号对应清单顺序。保留点必须精确使用该编号清单中的坐标，不能跨边缘复制P，并先在原照片确认它确实属于用户目标（绿圈只是候选，不证明语义正确）。不要点饰品、皮肤、衣物来保留头发。没有可靠参照时reject或uncertain。
+仅在strand_points=true且correction_method=hair时，可额外用label=2标出Source中清晰可辨的半透明或漏选细发丝，坐标x、y均须80到920。它是发丝身份参照，供语义模型保留该细丝，透明度仍由原像素模型估计，绝不强制不透明。它不必在P清单或现有不透明范围内；不能点皮肤、衣物、帽子或单纯背景，也不能用它替代每处必须有的不透明P和排除N。优先放在漏选的可见细丝上，不能在灰云中随意点。所有角色仍合计最多六点。没有上述显式能力时只允许label=0或1。
+具备发丝参照能力且两处同时纠错时，优先每处一个P、一个N、一个发丝身份参照T，三点加三点合计六点；没有漏选时把T预算用于另一处排除。其他情况只在P和N之间分配预算。每处必须单独满足P和N，不能靠另一处的P补齐，也不能把两处各自六点误当全局预算。返回前核对各编号P清单、每处角色和两处总点数。
 exclude_candidates提供候选排除参照，定位图橙圈N编号对应清单顺序。它同时包含已透明的背景和选区中颜色接近背景的可疑区域；橙圈不是已确认的背景，白色/灰色alpha也不是已确认的目标。在原照片确认是目标以外的衣物/皮肤/背景；不能把可见的细发丝当背景。发现选区中衣物等误选时，优先使用该错误区域内身份明确的N点，可再加一个已透明背景参照，不能只重复排除已经透明的远处背景。
 visual_exclusions=true时，若提供的N点未覆盖实际误选，可依据Source原片与网格自行给错误区域内部的排除坐标（x、y均须80到920，远离裁片衔接边界），不必重复清单坐标。应优先覆盖白底灰云在Source中对应的背景，保留点仍必须使用P清单且确认是头发。该排除提示会让语义模型重新判断整个局部，超出指定边缘宽度的排除部分不会被人物透明模型重新放开。visual_exclusions不为true时，排除点仍必须精确使用N清单；无法确认错误位置则reject或uncertain。
 绿色P圈为候选保留点，橙色N圈为待核对排除点，定位图细线每格是200/999。每处优先一个可靠保留点，把余下预算用于不同误选位置；可用1至2个保留点、1至3个排除点，总数仍最多6。同一裁片若既有衣物又有饰品误选，需分别覆盖，不能用两个相近保留点占满预算而遗漏另一个错误区域。只选身份清楚的参照。语义模型用这些点重新判断局部，再由透明度模型处理半透明细节；不会修改照片像素。只选头发时项链、饰品、衣物和皮肤应排除，不能要求填回缺口中的皮肤。
@@ -35,7 +37,9 @@ visual_exclusions=true时，若提供的N点未覆盖实际误选，可依据Sou
 """
 
 
-def validate_corrections(corrections, edge_count):
+def validate_corrections(corrections, edge_count, *, strand_points=False):
+    if type(strand_points) is not bool:
+        raise ValueError('发丝参照选项无效，原范围保留')
     if (type(edge_count) is not int or not 1<=edge_count<=4
             or not isinstance(corrections,list) or not 1<=len(corrections)<=2):
         raise ValueError('局部抠图纠错范围无效，原范围保留')
@@ -51,12 +55,14 @@ def validate_corrections(corrections, edge_count):
         for point in patch['points']:
             if (not isinstance(point,list) or len(point)!=3
                     or any(type(v) is not int for v in point)
-                    or any(not 0<=v<=999 for v in point[:2]) or point[2] not in (0,1)):
+                    or any(not 0<=v<=999 for v in point[:2]) or point[2] not in ((0,1,2) if strand_points else (0,1))):
                 raise ValueError('局部抠图提示点无效，原范围保留')
+            if point[2]==2 and any(not 80<=value<=920 for value in point[:2]):
+                raise ValueError('发丝参照过近裁片边界，原范围保留')
             if any((point[0]-p[0])**2+(point[1]-p[1])**2<32**2 for p in locations):
                 raise ValueError('局部抠图提示点过近，原范围保留')
             labels.add(point[2]);locations.append(point)
-        if labels!={0,1}:
+        if not {0,1}.issubset(labels):
             raise ValueError('每处纠错需要明确的保留与排除点，原范围保留')
         total+=len(patch['points'])
     if total>6:
@@ -81,12 +87,13 @@ def parse_review(data, workspace=None):
             context=workspace or {}
             if context.get('revision')!=0 or context.get('correction_available') is not True:
                 raise ValueError('本轮不能再次纠错，原范围保留')
-            validate_corrections(result.get('corrections'),context.get('edge_count'))
+            strands=context.get('strand_points') is True and context.get('correction_method')=='hair'
+            validate_corrections(result.get('corrections'),context.get('edge_count'),strand_points=strands)
             anchors=context.get('keep_candidates')
             if anchors is not None:
                 for patch in result['corrections']:
                     offered=anchors.get(str(patch['edge']),[])
-                    if any(point[:2] not in offered for point in patch['points'] if point[2]):
+                    if any(point[:2] not in offered for point in patch['points'] if point[2]==1):
                         raise ValueError('保留点必须使用已提供的不透明参照，原范围保留')
             exclusions=context.get('exclude_candidates')
             if exclusions is not None or context.get('visual_exclusions') is True:
@@ -253,8 +260,19 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
     context_image=None
     if target_context:
         bounds=alpha.getbbox()
-        box=(max(0,bounds[0]-256),max(0,bounds[1]-512),min(source.width,bounds[2]+256),min(source.height,bounds[3]+128))
-        save(preview(source.crop(box),1280),'目标附近原照片上下文（辨认目标用；纠错坐标只相对编号边缘原片）','context',True)
+        context_box=(max(0,bounds[0]-256),max(0,bounds[1]-512),min(source.width,bounds[2]+256),min(source.height,bounds[3]+128))
+        context=preview(source.crop(context_box),1280).convert('RGB')
+        draw=ImageDraw.Draw(context);font=ImageFont.load_default(size=20)
+        scale_x=context.width/(context_box[2]-context_box[0]);scale_y=context.height/(context_box[3]-context_box[1])
+        for index,box in enumerate(boxes,1):
+            left=max(0,round((box[0]-context_box[0])*scale_x));top=max(0,round((box[1]-context_box[1])*scale_y))
+            right=min(context.width-1,round((box[2]-context_box[0])*scale_x)-1)
+            bottom=min(context.height-1,round((box[3]-context_box[1])*scale_y)-1)
+            if left>=right or top>=bottom:continue
+            draw.rectangle((left,top,right,bottom),outline='#50c4f5',width=2)
+            draw.rectangle((left,top,min(right,left+24),min(bottom,top+26)),fill='#193546')
+            draw.text((left+4,top+2),str(index),fill='white',font=font)
+        save(context,'目标附近原照片上下文（蓝框数字对应边缘编号；纠错坐标只相对编号边缘原片）','context',True)
         context_image=images[-1]
     for index,box in enumerate(boxes):
         crop=source.crop(box).convert('RGB')

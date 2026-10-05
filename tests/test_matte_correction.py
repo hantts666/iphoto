@@ -131,3 +131,38 @@ def test_negative_reference_keeps_neighboring_strands_unknown():
     matte=InspectMatte()
     correct(image,mask,patch,boxes,semantic=Semantic(),matte=matte)
     assert matte.inspected
+
+
+def test_hair_strand_prompt_is_semantically_required_but_alpha_is_not_forced():
+    image,mask,boxes=scene();a=np.array(raster_mask(mask,image.size));a[580:600,540:565]=20
+    mask['bitmap']=encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)
+    snapshot=deepcopy(mask);photo=image.tobytes()
+    patches=deepcopy(correction_plan()['corrections']);patches[0]['points'].append([500,600,2])
+    class InspectSemantic(Semantic):
+        def predict_with_prior(self,image,coords,labels,guide):
+            assert labels.tolist()==[1,0,1]  # Not SAM's label-2 box corner.
+            return super().predict_with_prior(image,coords,labels,guide)
+    class Hair:
+        def solve(self,image,previous,box,*,semantic,points,**kwargs):
+            assert [p[2] for p in points]==[1,0,2]
+            pixels=np.where(semantic,72,0).astype(np.uint8)
+            for x,y,label in points:
+                if label==1:pixels[round(y*(image.height-1))-box[1],round(x*(image.width-1))-box[0]]=255
+            return pixels,{'tiles':0}
+    result,quality=correct(image,mask,patches,boxes,semantic=InspectSemantic(),matte=Matte(),hair=True,hair_context=Hair())
+    alpha=raster_mask(result,image.size)
+    assert alpha.getpixel((550,590))==72
+    assert quality['corrections'][0]['strand_points']==1 and result['color_recovery'] is True
+    outside=np.ones(a.shape,bool);outside[350:750,350:750]=False
+    assert np.array_equal(np.asarray(alpha)[outside],a[outside])
+    assert mask==snapshot and image.tobytes()==photo
+    with pytest.raises(ValueError,match='提示点无效'):
+        correct(image,mask,patches,boxes,semantic=InspectSemantic(),matte=Matte(),hair_context=Hair())
+    class MissedStrand(InspectSemantic):
+        def predict_with_prior(self,image,coords,labels,guide):
+            logits,scores,timing=super().predict_with_prior(image,coords,labels,guide)
+            x,y=coords[-1];logits[0,round(float(y)),round(float(x))]=-5
+            return logits,scores,timing
+    with pytest.raises(ValueError,match='可靠目标'):
+        correct(image,mask,patches,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,hair_context=Hair())
+    assert mask==snapshot

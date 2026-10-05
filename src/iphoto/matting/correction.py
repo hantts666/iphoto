@@ -32,7 +32,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
                 or not 0<=box[0]<box[2]<=image.width or not 0<=box[1]<box[3]<=image.height
                 or box[2]-box[0]>512 or box[3]-box[1]>512):
             raise ValueError('局部抠图边缘坐标无效，原范围保留')
-    validate_corrections(corrections,len(boxes))
+    validate_corrections(corrections,len(boxes),strand_points=hair)
     mask=validate_mask(mask)
     original=raster_mask(mask,image.size)
     output=np.array(original)
@@ -49,7 +49,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         coords=np.array([[core[0]-box[0]+p[0]/999*(core[2]-core[0]-1),
                           core[1]-box[1]+p[1]/999*(core[3]-core[1]-1)] for p in patch['points']],np.float32)
         labels=np.array([p[2] for p in patch['points']],np.float32)
-        if any(previous[round(float(y)),round(float(x))]<245 for (x,y),label in zip(coords,labels) if label):
+        if any(previous[round(float(y)),round(float(x))]<245 for (x,y),label in zip(coords,labels) if label==1):
             raise ValueError('局部纠错缺少可靠的不透明保留点，原范围保留')
         if protected and any(previous[round(float(y)),round(float(x))]==0 for (x,y),label in zip(coords,labels) if label):
             raise ValueError('保留点位于受保护的皮肤分区外，原范围保留')
@@ -60,8 +60,11 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         # A coarse mask is a hint. Saturated logits must not make its wrong
         # opaque foreground override the new explicit negative points.
         model_guide=guide.point(lambda value:max(64,min(191,value)))
-        logits,scores,timing=semantic.predict_with_prior(image.crop(box),coords,labels,model_guide)
-        hard,quality=choose_candidate(logits,scores,coords,labels,guide)
+        # Label 2 belongs to our hair contract, not SAM's box-corner tokens.
+        # It must be an included semantic point, without claiming opaque alpha.
+        semantic_labels=np.where(labels==2,1,labels).astype(np.float32)
+        logits,scores,timing=semantic.predict_with_prior(image.crop(box),coords,semantic_labels,model_guide)
+        hard,quality=choose_candidate(logits,scores,coords,semantic_labels,guide)
         if quality['predicted_iou']<.75:
             raise ValueError('局部纠错模型信心不足，原范围保留')
         inside=distance_transform_edt(np.pad(hard,1))[1:-1,1:-1]
@@ -73,8 +76,8 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         for (x,y),label in zip(coords,labels):
             # An excluded background pixel can lie between fine hairs. A
             # broad negative disk would delete those neighboring strands.
-            radius=8 if label else 2
-            trimap[(xx-x)**2+(yy-y)**2<=radius**2]=255 if label else 0
+            radius=8 if label==1 else 2
+            trimap[(xx-x)**2+(yy-y)**2<=radius**2]=128 if label==2 else 255 if label else 0
         if protected:trimap[previous==0]=0
         def report(tile,tiles):
             if progress:progress(tile,tiles)
@@ -98,12 +101,14 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         joined=np.rint(previous+weight*(pixels.astype(np.float32)-previous)).astype(np.uint8)
         if protected and mask.get('face_part_scope'):
             joined=np.minimum(joined,np.asarray(raster_mask(mask['face_part_scope'],image.size).crop(box)))
-        if any(bool(joined[round(float(y)),round(float(x))]>127)!=bool(label) for (x,y),label in zip(coords,labels)):
+        if any((joined[round(float(y)),round(float(x))]==0 if label==2
+                else bool(joined[round(float(y)),round(float(x))]>127)!=bool(label)) for (x,y),label in zip(coords,labels)):
             raise ValueError('局部透明结果未满足纠错点，原范围保留')
         changed=scope & (joined!=previous)
         output[box[1]:box[3],box[0]:box[2]][changed]=joined[changed]
         warnings.extend(quality['warnings'])
         records.append({'edge':patch['edge'],'box':core,'changed_pixels':int(changed.sum()),
+                        'strand_points':int((labels==2).sum()),
                         'tiles':tiles,'predicted_iou':quality['predicted_iou'],'timing':timing})
     if not any(record['changed_pixels'] for record in records):
         raise ValueError('局部纠错没有产生有效改变，原范围保留')
