@@ -89,7 +89,8 @@ def read(self):
 
                 complete(self, response["result"], points=active.get("points", []) if active.get("method") == "neural" else None)
             elif current:
-                self._status = "选区处理失败，原选区保留；可减小边缘范围后重试"
+                self._status = ("AI 抠图未通过像素验证，原范围保留" if active.get('method')=='correction' and 'auto_token' in active
+                                else "选区处理失败，原选区保留；可减小边缘范围后重试")
                 self._notify(response.get("error", "边缘细化失败"), True)
             self.changed.emit()
         except Exception as exc:

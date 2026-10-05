@@ -44,7 +44,7 @@ def main():
                     mask,quality=refine_edges(source.image,mask,progress=channel_progress)
             elif method=='correction':
                 from .correction import correct
-                mask,quality=correct(source.image,mask,request['corrections'],request['review_boxes'],progress=channel_progress,hair=request.get('hair',False))
+                mask,quality=correct(source.image,mask,request['corrections'],request['review_boxes'],progress=channel_progress,hair=request.get('hair',False),context_points=request.get('context_points',False))
             else:
                 mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress)
         elif method == "neural":

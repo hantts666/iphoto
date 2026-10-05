@@ -150,7 +150,7 @@ def test_review_source_stays_original_and_target_context_preserves_its_coordinat
     whole=Image.open(result['images'][0]['path'])
     assert whole.tobytes()==preview(source,1280).tobytes()
     context=result['review_images'][1]
-    assert '上下文' in context['label'] and '纠错坐标只相对编号边缘' in context['label']
+    assert '上下文' in context['label'] and '纠错坐标只相对编号定位图' in context['label']
     overview=Image.open(context['path'])
     assert '蓝框数字对应边缘编号' in context['label']
     assert overview.size==(1012,1140) and max(overview.size)<=1280 and result['boxes']==[box]
@@ -171,6 +171,47 @@ def test_review_source_stays_original_and_target_context_preserves_its_coordinat
     assert len({item['path'] for item in result['review_images']})==len(result['review_images'])
     with pytest.raises(ValueError,match='上下文选项无效'):
         render_review(source,layers,mask,tmp_path,3,[box],target_context='hair')
+
+
+def test_context_anchors_reach_opaque_hair_without_expanding_reviewed_pixels(tmp_path):
+    from iphoto.matte_review import point_bounds,point_frame
+    source=Image.new('RGB',(1000,900),(75,130,110));a=np.zeros((900,1000),np.uint8)
+    core=[400,200,912,712];a[260:650,315:390]=255;a[280:660,400:520]=40
+    mask={**empty_mask(),'bitmap':encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)}
+    before=source.tobytes(),deepcopy(mask)
+    assert keep_candidates(Image.fromarray(a).crop(core))==[]
+    result=render_review(source,[new_layer('原图',True)],mask,tmp_path,4,[core],target_context=True)
+    frame=point_frame(core,source.size)
+    assert result['context_points'] is True and result['point_boxes']==[frame]
+    assert result['boxes']==[core] and result['point_bounds']=={'1':point_bounds(core,frame)}
+    assert result['keep_candidates']['1']
+    for x,y in result['keep_candidates']['1']:
+        px=round(frame[0]+x/999*(frame[2]-frame[0]-1));py=round(frame[1]+y/999*(frame[3]-frame[1]-1))
+        assert 315<=px<390 and a[py,px]>=245  # Outside the edited core.
+    locator=Image.open(next(item['path'] for item in result['images'] if '-locate-' in item['path']))
+    assert locator.size==(frame[2]-frame[0],frame[3]-frame[1])
+    assert locator.getpixel((core[0]-frame[0],core[1]-frame[1]+50))==(80,196,245)
+    assert locator.getpixel((650,650))==source.getpixel((frame[0]+650,frame[1]+650))
+    native=Image.open(next(item['path'] for item in result['images'] if '-source-0' in item['path']))
+    assert native.tobytes()==source.crop(core).tobytes() and native.size==(512,512)
+    assert len(result['review_images'])==5 and (source.tobytes(),mask)==before
+
+
+def test_context_coordinates_require_hair_capability_and_keep_edit_points_inside():
+    plan={'status':'revise','summary':'上下文头发参照与蓝框内细丝',
+          'corrections':[{'edge':1,'radius':24,'points':[[80,700,1],[400,500,0],[650,650,2]]}]}
+    context={'revision':0,'correction_available':True,'edge_count':1,'correction_method':'hair',
+             'strand_points':True,'context_points':True,'point_bounds':{'1':[200,200,800,800]},
+             'keep_candidates':{'1':[[80,700]]},'exclude_candidates':{'1':[]},'visual_exclusions':True}
+    assert parse_review(completion(plan),context)==plan
+    for role in (0,2):
+        wrong=deepcopy(plan);wrong['corrections'][0]['points'][role//2+1]=[850,600,role]
+        with pytest.raises(ValueError,match='过近裁片边界'):parse_review(completion(wrong),context)
+    for change in ({'correction_method':'semantic'},{'point_bounds':None},{'keep_candidates':{}},
+                   {'point_bounds':{'1':[200,200,800,True]}},{'point_bounds':{'2':[200,200,800,800]}}):
+        with pytest.raises(ValueError):parse_review(completion(plan),{**context,**change})
+    wrong=deepcopy(plan);wrong['corrections'][0]['points'][0]=[90,700,1]
+    with pytest.raises(ValueError,match='不透明参照'):parse_review(completion(wrong),context)
 
 
 @pytest.mark.parametrize('invert',[False,True])

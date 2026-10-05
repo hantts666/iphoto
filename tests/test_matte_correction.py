@@ -166,3 +166,56 @@ def test_hair_strand_prompt_is_semantically_required_but_alpha_is_not_forced():
     with pytest.raises(ValueError,match='可靠目标'):
         correct(image,mask,patches,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,hair_context=Hair())
     assert mask==snapshot
+
+
+def test_context_opaque_anchor_is_only_a_reference_and_outside_alpha_stays_exact():
+    from iphoto.matte_review import point_frame
+    image,mask,_=scene();core=[560,350,880,670];frame=point_frame(core,image.size)
+    a=np.array(raster_mask(mask,image.size));a[350:670,560:880]=20
+    mask['bitmap']=encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)
+    snapshot=deepcopy(mask);photo=image.tobytes()
+    coordinates=[(530,500,1),(680,520,0),(590,570,2)]
+    points=[[round((x-frame[0])/(frame[2]-frame[0]-1)*999),round((y-frame[1])/(frame[3]-frame[1]-1)*999),label] for x,y,label in coordinates]
+    patches=[{'edge':1,'radius':24,'points':points}]
+    class Hair:
+        def solve(self,image,previous,box,*,semantic,points,**kwargs):
+            assert [p[2] for p in points]==[1,0,2]
+            assert abs(points[0][0]*(image.width-1)-530)<1
+            pixels=np.where(semantic,72,0).astype(np.uint8)
+            # This intentionally differs at the context P: publishing it
+            # would silently paint beyond the reviewed crop.
+            return pixels,{'tiles':0}
+    result,quality=correct(image,mask,patches,[core],semantic=Semantic(),matte=Matte(),hair=True,hair_context=Hair(),context_points=True)
+    alpha=np.asarray(raster_mask(result,image.size));outside=np.ones(a.shape,bool);outside[350:670,560:880]=False
+    assert np.array_equal(alpha[outside],a[outside]) and alpha[500,530]==255
+    assert alpha[520,680]==0 and 0<alpha[570,590]<255
+    assert quality['corrections'][0]['context_references']==1
+    assert quality['corrections'][0]['point_frame_box']==frame
+    json.dumps(quality)  # Native numeric arrays must not leak into metadata.
+    assert mask==snapshot and image.tobytes()==photo
+    for change in ({'context_points':'true'},{'context_points':True,'hair':False}):
+        with pytest.raises(ValueError,match='参照方法无效'):
+            correct(image,mask,patches,[core],matte=Matte(),**{'hair':True,**change})
+    class MissedStrand(Hair):
+        def solve(self,image,previous,box,*,points,**kwargs):
+            pixels,detail=super().solve(image,previous,box,points=points,**kwargs)
+            x,y,_=points[-1];pixels[round(y*(image.height-1))-box[1],round(x*(image.width-1))-box[0]]=0
+            return pixels,detail
+    with pytest.raises(ValueError,match='AI 发丝定位未通过透明度验证'):
+        correct(image,mask,patches,[core],semantic=Semantic(),matte=Matte(),hair=True,hair_context=MissedStrand(),context_points=True)
+    assert mask==snapshot
+
+
+@pytest.mark.parametrize('role',[0,2])
+def test_context_edit_points_cannot_cross_core_boundary_or_load_models(monkeypatch,role):
+    from iphoto.segmentation import precise_sam
+    image,mask,boxes=scene();snapshot=deepcopy(mask)
+    monkeypatch.setattr(precise_sam,'backend',lambda:pytest.fail('Outside edit point loaded model'))
+    # P is within the context, but neither an exclusion nor a strand identity
+    # point may target an area that this transaction cannot edit.
+    points=[[200,200,1],[700,450,0]]
+    if role==0:points[1]=[20,700,0]
+    else:points.append([20,700,2])
+    with pytest.raises(ValueError,match='修改范围外|过近裁片边界'):
+        correct(image,mask,[{'edge':1,'radius':24,'points':points}],boxes,matte=Matte(),hair=True,context_points=True)
+    assert mask==snapshot

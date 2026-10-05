@@ -12,19 +12,21 @@ from scipy.ndimage import distance_transform_edt
 
 from ..document import empty_mask, raster_mask, validate_mask
 from ..masks import encode_bitmap
-from ..matte_review import validate_corrections
+from ..matte_review import REFERENCE_HALO, inside_bounds, point_bounds, point_frame, validate_corrections
 from ..segmentation.service import choose_candidate
 from . import neural
 from .metadata import copy_metadata
 
-HALO = 96
+HALO = REFERENCE_HALO
 JOIN = 32
 
 
-def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None):
+def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None, context_points=False):
     started=perf_counter()
     if type(hair) is not bool:
         raise ValueError('局部发丝纠错方法无效')
+    if type(context_points) is not bool or context_points and not hair:
+        raise ValueError('上下文发丝参照方法无效，原范围保留')
     if not isinstance(boxes,list) or not 1<=len(boxes)<=4:
         raise ValueError('局部抠图缺少已核对的边缘，原范围保留')
     for box in boxes:
@@ -32,7 +34,14 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
                 or not 0<=box[0]<box[2]<=image.width or not 0<=box[1]<box[3]<=image.height
                 or box[2]-box[0]>512 or box[3]-box[1]>512):
             raise ValueError('局部抠图边缘坐标无效，原范围保留')
-    validate_corrections(corrections,len(boxes),strand_points=hair)
+    frames=[point_frame(core,image.size) if context_points else core for core in boxes]
+    bounds={str(index):point_bounds(core,frame) for index,(core,frame) in enumerate(zip(boxes,frames),1)} if context_points else None
+    validate_corrections(corrections,len(boxes),strand_points=hair,bounds=bounds)
+    if context_points:
+        for patch in corrections:
+            core=boxes[patch['edge']-1];frame=frames[patch['edge']-1]
+            if any(not inside_bounds(p,point_bounds(core,frame,0)) for p in patch['points'] if p[2]!=1):
+                raise ValueError('只有不透明保留参照可位于修改范围外，原范围保留')
     mask=validate_mask(mask)
     original=raster_mask(mask,image.size)
     output=np.array(original)
@@ -42,12 +51,13 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     records=[];warnings=[]
     for patch in corrections:
         core=boxes[patch['edge']-1]
+        frame=frames[patch['edge']-1]
         box=[max(0,core[0]-HALO),max(0,core[1]-HALO),
              min(image.width,core[2]+HALO),min(image.height,core[3]+HALO)]
         guide=original.crop(box)
         previous=np.asarray(guide)
-        coords=np.array([[core[0]-box[0]+p[0]/999*(core[2]-core[0]-1),
-                          core[1]-box[1]+p[1]/999*(core[3]-core[1]-1)] for p in patch['points']],np.float32)
+        coords=np.array([[frame[0]-box[0]+p[0]/999*(frame[2]-frame[0]-1),
+                          frame[1]-box[1]+p[1]/999*(frame[3]-frame[1]-1)] for p in patch['points']],np.float32)
         labels=np.array([p[2] for p in patch['points']],np.float32)
         if any(previous[round(float(y)),round(float(x))]<245 for (x,y),label in zip(coords,labels) if label==1):
             raise ValueError('局部纠错缺少可靠的不透明保留点，原范围保留')
@@ -101,14 +111,17 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         joined=np.rint(previous+weight*(pixels.astype(np.float32)-previous)).astype(np.uint8)
         if protected and mask.get('face_part_scope'):
             joined=np.minimum(joined,np.asarray(raster_mask(mask['face_part_scope'],image.size).crop(box)))
-        if any((joined[round(float(y)),round(float(x))]==0 if label==2
-                else bool(joined[round(float(y)),round(float(x))]>127)!=bool(label)) for (x,y),label in zip(coords,labels)):
+        if any(joined[round(float(y)),round(float(x))]==0 for (x,y),label in zip(coords,labels) if label==2):
+            raise ValueError('AI 发丝定位未通过透明度验证，原范围保留')
+        if any(bool(joined[round(float(y)),round(float(x))]>127)!=bool(label) for (x,y),label in zip(coords,labels) if label!=2):
             raise ValueError('局部透明结果未满足纠错点，原范围保留')
         changed=scope & (joined!=previous)
         output[box[1]:box[3],box[0]:box[2]][changed]=joined[changed]
         warnings.extend(quality['warnings'])
         records.append({'edge':patch['edge'],'box':core,'changed_pixels':int(changed.sum()),
                         'strand_points':int((labels==2).sum()),
+                        'context_references':int(sum(label==1 and not (core[0]<=box[0]+float(x)<core[2] and core[1]<=box[1]+float(y)<core[3]) for (x,y),label in zip(coords,labels))),
+                        'point_frame_box':frame,
                         'tiles':tiles,'predicted_iou':quality['predicted_iou'],'timing':timing})
     if not any(record['changed_pixels'] for record in records):
         raise ValueError('局部纠错没有产生有效改变，原范围保留')

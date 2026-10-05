@@ -115,6 +115,8 @@ def review_ready(e, result, context, generation):
         pending, state = current
         state['reviewing'] = True
         state['review_boxes'] = deepcopy(result['boxes'])
+        state['context_points'] = bool(state.get('hair')) and result.get('context_points') is True
+        state['point_bounds'] = deepcopy(result.get('point_bounds')) if state['context_points'] else None
         from ..segmentation.precise_sam import available
         state['correction_available'] = available() and bool(result['boxes']) and not state['revision']
         images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['review_images']]
@@ -129,6 +131,8 @@ def review_ready(e, result, context, generation):
                                    'correction_method':'hair' if state.get('hair') else 'semantic',
                                    'visual_exclusions':bool(state.get('hair')),
                                    'strand_points':bool(state.get('hair')),
+                                   'context_points':state['context_points'],
+                                   'point_bounds':state['point_bounds'],
                                    'previous_check':state.get('previous_check',''),
                                    'quality':state['result']['quality'],'review_images':images})
     except (ValueError, KeyError, OSError) as exc:
@@ -149,12 +153,12 @@ def reviewed(e, review):
             from ..matte_review import validate_corrections
             if state['revision'] or not state.get('correction_available'):
                 raise ValueError('本轮不能再次纠错，原范围保留')
-            corrections=validate_corrections(review['corrections'],len(state['review_boxes']),strand_points=bool(state.get('hair')))
+            corrections=validate_corrections(review['corrections'],len(state['review_boxes']),strand_points=bool(state.get('hair')),bounds=state.get('point_bounds'))
             state['revision']=1
             state['previous_check']=review['summary']
             e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'
             e._request('matte',method='correction',mask=state['result']['mask'],
-                       corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'],hair=bool(state.get('hair')))
+                       corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'],hair=bool(state.get('hair')),context_points=state.get('context_points',False))
             return
         if review['status'] != 'accept':
             e._pending_request = None
