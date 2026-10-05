@@ -74,6 +74,7 @@ def complete(self, result, *, points=None):
             self._pixel_points = deepcopy(points)
             self._pixel_hint = deepcopy(self._candidate)
     if quality.get('channel_mask'):
+        self.setMaskView('white')
         from ..matting.channels import CHANNEL_NAMES
         method = 'AI 透明边缘' if quality['tiles'] else '通道透明度'
         self._selection_quality = f"{CHANNEL_NAMES[quality['channel']]}通道 · {method} · {quality['elapsed_ms']/1000:.1f}s"
@@ -89,7 +90,7 @@ def complete(self, result, *, points=None):
             detail+='透明 PNG 使用相同的前景颜色恢复。'
         self._message('assistant', self._selection_quality + detail,
                       state='draft', origin={'mode':'selection','model':quality['backend']})
-        self._notify('通道抠图已完成，可看黑白透明度；不合适可以撤销')
+        self._notify('通道抠图已计算，正在显示实际白底效果；请检查边缘，不合适可以撤销')
         return
     neural = quality.get("backend") == "ViTMatte-S · ONNX"
     self._selection_quality = (f"{'人物发丝' if quality.get('hair_matting') else '局部 AI 透明度'} · 已修改 {quality['changed_pixels']:,} 个像素 · {quality['elapsed_ms']/1000:.1f}s" if local else (

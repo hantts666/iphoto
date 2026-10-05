@@ -10,7 +10,7 @@ import pytest
 
 from iphoto.document import empty_mask, raster_mask
 from iphoto.masks import encode_bitmap
-from iphoto.matting.hair import refine_local, refine_edges
+from iphoto.matting.hair import HairContext, refine_local, refine_edges
 from iphoto.matting.local import stroke_mask
 from iphoto.matting import portrait_models
 from iphoto.controllers.matte_process import _progress
@@ -79,6 +79,21 @@ def test_hair_does_not_silently_overwrite_contradictory_points():
     point=[400/999,430/899]
     with pytest.raises(ValueError,match='保留点和排除点重叠'):
         refine_local(image,mask,stroke,points=[[*point,1],[*point,0]],portrait=portrait,parser=Parser(),engine=Matte())
+
+
+def test_semantic_exclusion_cannot_be_reopened_by_partial_person_alpha():
+    image,mask,portrait,_=fixture()
+    original=raster_mask(mask,image.size);box=(240,200,720,650)
+    context=HairContext(image,original,portrait=portrait,parser=Parser())
+    previous=np.asarray(original.crop(box));hard=previous>127
+    excluded,_=context.solve(image,previous,box,semantic=hard,semantic_radius=24,engine=Matte())
+    unknown,_=context.solve(image,previous,box,semantic=hard,semantic_radius=40,engine=Matte())
+    # This lies on soft person support outside the semantic target; it must
+    # respect the requested 24px exclusion while staying unknown at 40px.
+    assert excluded[230,265]==0 and 0<unknown[230,265]<255
+    assert unknown[230,160]==255
+    with pytest.raises(ValueError,match='边缘宽度无效'):
+        context.solve(image,previous,box,semantic=hard,semantic_radius=True,engine=Matte())
 
 
 def test_portrait_model_digest_is_required_before_onnx_load(tmp_path,monkeypatch):

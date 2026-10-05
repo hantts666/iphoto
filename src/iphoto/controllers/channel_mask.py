@@ -16,6 +16,8 @@ class ChannelMaskController(QObject):
         self.state = None
         self._preview = ''
         self._options = {}
+        self._views = {}
+        self._view = 'alpha'
         self._note = ''
         self._loading = False
         self.timer = QTimer(self)
@@ -43,6 +45,18 @@ class ChannelMaskController(QObject):
         return self._options
 
     @Property(str, notify=changed)
+    def view(self):
+        return self._view
+
+    @Slot(str)
+    def setView(self, value):
+        if not self._valid() or self.editor.busy or value not in self._views:
+            return
+        self._view=value
+        self._preview=self._views[value]
+        self.changed.emit()
+
+    @Property(str, notify=changed)
     def note(self):
         return self._note
 
@@ -60,6 +74,7 @@ class ChannelMaskController(QObject):
         self.state = {'token':uuid4().hex, 'generation':e._generation, 'sha':e._sha,
                       'layer_id':e._selected, 'mask':deepcopy(e._candidate), 'revision':0}
         self._preview, self._note = '', '正在比较红、绿、蓝、亮度与通道计算…'
+        self._views, self._view = {}, 'alpha'
         self._options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,'ai':True,'interior':False,
                          'detail':True,'color':True}
         self._refresh(initial=True)
@@ -70,7 +85,7 @@ class ChannelMaskController(QObject):
         self.state['revision'] += 1
         self._loading = True
         self.editor._queue = type(self.editor._queue)(r for r in self.editor._queue if r['op'] != 'channel_preview')
-        self.editor._request('channel_preview', mask=self.state['mask'], options=self._options, initial=initial,
+        self.editor._request('channel_preview', mask=self.state['mask'], options=self._options, initial=initial, display_preview=True,
                               expected_sha256=self.state['sha'], context={'token':self.state['token'],
                               'revision':self.state['revision']})
         self.changed.emit()
@@ -79,10 +94,14 @@ class ChannelMaskController(QObject):
         if not self._valid() or context['token'] != self.state['token'] or context['revision'] != self.state['revision'] or generation != self.editor._generation:
             return
         from PySide6.QtCore import QUrl
-        self._options, self._preview = result['options'], QUrl.fromLocalFile(result['path']).toString()
+        self._options = result['options']
+        self._views = {name:QUrl.fromLocalFile(path).toString() for name,path in result.get('views',{'alpha':result['path']}).items()}
+        if self._view not in self._views:self._view='alpha'
+        self._preview = self._views[self._view]
         self._loading = False
         self._note = ('从整张照片建立范围：选择通道，调黑白场和灰度；白色保留、黑色移除、灰色半透明。'
                       if self._options.get('whole') else f"推荐 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else ''))
+        if result.get('focused'):self._note='当前范围局部 · '+self._note
         self.changed.emit()
 
     def failed(self, message, context):
@@ -129,6 +148,7 @@ class ChannelMaskController(QObject):
         owned = bool(token and any(job and job.get('channel_token')==token for job in jobs))
         self.state = None
         self._preview = ''
+        self._views = {}
         self._loading = False
         if owned:
             self.editor.cancelMatte()

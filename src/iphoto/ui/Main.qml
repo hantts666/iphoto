@@ -37,7 +37,7 @@ ApplicationWindow {
     property bool discardOnClose: false
     property bool editingText: activeFocusItem !== null && typeof activeFocusItem.undo === "function" && !activeFocusItem.readOnly
     property bool textFocus: activeFocusItem !== null && typeof activeFocusItem.selectAll === "function"
-    property bool modalActive: channelMaskDialog.opened || aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
+    property bool modalActive: cutoutToolsMenu.opened || channelMaskDialog.opened || aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
     property bool menuActive: fileMenu.opened || editMenu.opened || selectionMenu.opened || viewMenu.opened || extensionsMenu.opened
     property bool navigationShortcutsEnabled: editor.hasImage && !textFocus && !modalActive && !menuActive
     readonly property bool objectPreviewEnabled: editor.hasImage && !editor.busy && selection.pickedLayerId === ""
@@ -242,7 +242,20 @@ ApplicationWindow {
             RowLayout { anchors.fill: parent; anchors.leftMargin: 13; anchors.rightMargin: 13; spacing: 8
                 ToolOptionsBar { workspace: window; editor: editorContext; onNeedsFocus: canvasPane.focusCanvas() }
                 Item { Layout.fillWidth: true }
-                Action { text: "载入蒙版"; enabled: editingEnabled; hint: "将当前层蒙版载入独立选区后修正"; onClicked: selection.reviewMask() }
+                Action {
+                    id: cutoutToolsButton
+                    objectName: "cutoutToolsButton"; text: "抠图 / 修边…"; enabled: editor.hasImage && !editor.busy && !editor.hasRegionDraft
+                    hint: "通道抠图、编辑当前图层范围与局部透明细化"
+                    onClicked: cutoutToolsMenu.visible = !cutoutToolsMenu.visible
+                    Menu {
+                        id: cutoutToolsMenu; objectName: "cutoutToolsMenu"
+                        y: cutoutToolsButton.height + 4
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                        MenuItem { objectName: "toolbarChannelMaskAction"; text: "通道抠图…"; onTriggered: editor.channelMask.open() }
+                        MenuItem { text: "编辑当前图层范围"; enabled: editingEnabled; onTriggered: selection.reviewMask() }
+                        MenuItem { text: "透明细化画笔"; enabled: editor.hasSelectionDraft && selection.transparencyAvailable; onTriggered: selection.chooseTool("transparency") }
+                    }
+                }
                 Action { text: selection.showMask ? "隐藏蒙版 Q" : "显示蒙版 Q"; enabled: editor.hasImage; onClicked: selection.toggleShowMask() }
                 Action { objectName: "chatToggleButton"; text: "AI 助手"; primary: chatOpen; onClicked: chatOpen=!chatOpen }
             }

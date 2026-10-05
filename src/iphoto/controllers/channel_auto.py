@@ -126,6 +126,7 @@ def review_ready(e, result, context, generation):
                                    'exclude_candidates':result['exclude_candidates'],
                                    'correction_available':state['correction_available'],
                                    'correction_method':'hair' if state.get('hair') else 'semantic',
+                                   'visual_exclusions':bool(state.get('hair')),
                                    'previous_check':state.get('previous_check',''),
                                    'quality':state['result']['quality'],'review_images':images})
     except (ValueError, KeyError, OSError) as exc:

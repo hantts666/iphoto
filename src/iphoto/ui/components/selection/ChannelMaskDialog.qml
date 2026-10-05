@@ -28,10 +28,23 @@ Dialog {
     contentItem: ColumnLayout {
         spacing: 9
         Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: 270; color: "#131619"
+            Layout.fillWidth: true; Layout.preferredHeight: root.config.whole===true ? 270 : Math.min(270,Math.max(130,root.parent.height-570)); color: "#131619"
             Image { id: alphaImage; objectName: "channelAlphaPreview"; anchors.fill: parent; anchors.margins: 4; source: root.channel.previewUrl; fillMode: Image.PreserveAspectFit; cache: false; asynchronous: true }
             Caption { anchors.centerIn: parent; visible: root.channel.loading || alphaImage.status===Image.Loading; text: "正在更新通道预览…" }
             Caption { anchors.centerIn: parent; visible: alphaImage.status===Image.Error; text: "通道预览读取失败，请关闭后重新打开" }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            Caption { text: "预览" }
+            ComboBox {
+                objectName: "channelPreviewViewBox"; implicitWidth: 145
+                model: [{text:"黑白透明度",value:"alpha"},{text:"白底抠图",value:"white"},{text:"黑底抠图",value:"black"},{text:"原照片",value:"source"}]
+                textRole: "text"; valueRole: "value"
+                currentIndex: Math.max(0,model.findIndex(function(item) { return item.value===root.channel.view }))
+                enabled: !root.editor.busy && !root.channel.loading && root.channel.previewUrl.length>0
+                onActivated: root.channel.setView(currentValue)
+            }
+            Caption { text: root.config.ai===true ? "通道草图 · AI 细化效果在应用后查看" : "通道草图 · 应用后按原图计算"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
         }
         Caption { Layout.fillWidth: true; text: root.channel.note; wrapMode: Text.Wrap }
         RowLayout {
@@ -67,7 +80,7 @@ Dialog {
         CheckBox { objectName:"channelInteriorBox"; visible:root.config.whole!==true; text:"处理内部透明与孔洞（薄纱、玻璃、细枝）"; checked:root.config.interior===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("interior",checked) }
         CheckBox { objectName:"channelDetailBox"; visible:root.config.whole!==true; text:"按原像素细化发丝纹理"; checked:root.config.detail===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("detail",checked) }
         CheckBox { objectName:"channelColorBox"; visible:root.config.whole!==true; text:"去背景串色（黑白底检查与透明 PNG）"; checked:root.config.color===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("color",checked) }
-        Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:root.config.whole===true ? "无需先选目标。整图通道适合主体与背景颜色差异明显的照片，同色背景也会选中；生成范围后可用画笔或 AI 继续修细节。" : "应用时按原像素计算；切换黑白底检查实际效果。颜色接近的区域仍需局部修正。" }
+        Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:root.config.whole===true ? "无需先选目标。整图通道适合主体与背景颜色差异明显的照片，同色背景也会选中；生成范围后可用画笔或 AI 继续修细节。" : "草图用于比较通道与黑白场，未进行 AI 细化或去背景串色。应用后自动显示实际白底效果，可放大修正边缘。" }
     }
     footer: RowLayout {
         spacing:8

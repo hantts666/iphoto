@@ -49,7 +49,7 @@ class HairContext:
         if selected.sum() < 64 or (selected & (labels==17)).sum()/selected.sum() < .5:
             raise ValueError('当前范围不能可靠确认为头发，请使用通用细化或重新定位头发')
 
-    def solve(self, image, previous, box, *, semantic=None, points=None, engine=None, progress=None):
+    def solve(self, image, previous, box, *, semantic=None, semantic_radius=32, points=None, engine=None, progress=None):
         if (max(box[0],self.box[0])>=min(box[2],self.box[2])
                 or max(box[1],self.box[1])>=min(box[3],self.box[3])):
             raise ValueError('笔触超出头发定位上下文，请在目标附近分次修边')
@@ -75,11 +75,14 @@ class HairContext:
         nonhair = np.isin(labels,tuple(range(1,17))+(18,)).astype(np.uint8)
         protected = cv2.erode(nonhair,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(33,33)))>0
         trimap[protected | (parent==0) | ((labels==0)&(parent>245))] = 0
-        # An explicit semantic correction can exclude an opaque shirt/hat even
-        # when the parser calls it hair. Transparent outward strands stay unknown.
+        # A reviewed semantic correction must also exclude false transparent
+        # background. Its native uncertainty band retains nearby wisps; the
+        # portrait model cannot reopen an explicitly excluded region outside it.
         if semantic is not None:
+            if type(semantic_radius) is not int or not 12<=semantic_radius<=48:
+                raise ValueError('发丝纠错边缘宽度无效，原范围保留')
             outside = cv2.distanceTransform((~target).astype(np.uint8),cv2.DIST_L2,5)
-            trimap[(outside>32)&(parent>245)] = 0
+            trimap[outside>semantic_radius] = 0
         anchors = {}
         yy,xx = np.ogrid[:prior.shape[0],:prior.shape[1]]
         for x,y,label in points or []:

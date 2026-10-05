@@ -85,7 +85,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
                 hair_context=HairContext(image,original,progress=progress)
             global_points=[[(box[0]+float(x))/max(1,image.width-1),
                             (box[1]+float(y))/max(1,image.height-1),int(label)] for (x,y),label in zip(coords,labels)]
-            pixels,detail=hair_context.solve(image,previous,box,semantic=hard,points=global_points,engine=matte,progress=progress)
+            pixels,detail=hair_context.solve(image,previous,box,semantic=hard,semantic_radius=patch['radius'],points=global_points,engine=matte,progress=progress)
             tiles=detail['tiles']
         else:
             pixels,tiles=neural.solve(image.crop(box),trimap,engine=matte,progress=report)

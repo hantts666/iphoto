@@ -28,6 +28,28 @@ def test_terminal_review_cannot_return_editing_instructions(status):
     with pytest.raises(ValueError):parse_review({'choices':[{'finish_reason':'length','message':{'content':json.dumps(plan)}}]})
 
 
+def test_visual_exclusions_have_an_explicit_capability_and_preserve_opaque_references():
+    plan={'status':'revise','summary':'原片此处为背景，候选误选为灰云',
+          'corrections':[{'edge':1,'radius':24,'points':[[700,800,1],[470,470,0]]}]}
+    context={'revision':0,'correction_available':True,'edge_count':1,
+             'keep_candidates':{'1':[[700,800]]},'exclude_candidates':{'1':[[160,160]]}}
+    with pytest.raises(ValueError,match='已提供的背景参照'):
+        parse_review(completion(plan),context)
+    context['visual_exclusions']=True
+    assert parse_review(completion(plan),context)==plan
+    for coordinate in ([20,470],[470,960]):
+        wrong={**plan,'corrections':[{'edge':1,'radius':24,'points':[[700,800,1],[*coordinate,0]]}]}
+        with pytest.raises(ValueError,match='过近裁片边界'):
+            parse_review(completion(wrong),context)
+    wrong={**plan,'corrections':[{'edge':1,'radius':24,'points':[[710,800,1],[470,470,0]]}]}
+    with pytest.raises(ValueError,match='不透明参照'):
+        parse_review(completion(wrong),context)
+    # Explicit visual mode keeps its boundary guard even without an N list.
+    del context['exclude_candidates']
+    with pytest.raises(ValueError,match='过近裁片边界'):
+        parse_review(completion({**plan,'corrections':[{'edge':1,'radius':24,'points':[[700,800,1],[10,470,0]]}]}),context)
+
+
 def calculation_scene():
     rng=np.random.default_rng(37)
     a=np.zeros((160,256),np.float32);a[30:130,55:200]=.6

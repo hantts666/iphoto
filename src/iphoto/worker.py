@@ -353,9 +353,20 @@ def main():
         alpha, channel, score = channel_preview(proxy, request['mask'], options, radius)
         path = cache / f"channel-preview-{request['id']}.png"
         alpha.save(path, compress_level=3)
+        result={'path':str(path),'channel':channel,'score':score,'options':options}
         current_crop_assets = {path}
-        assets.append(path)
-        return {'path':str(path), 'channel':channel, 'score':score, 'options':options}
+        if request.get('display_preview') is True:
+            from .matting.channel_view import previews
+            pictures,focused=previews(proxy,alpha,request['mask'],radius,whole=bool(options.get('whole')))
+            views={}
+            for name,picture in pictures.items():
+                destination=cache / f"channel-view-{request['id']}-{name}.png"
+                picture.save(destination,compress_level=3)
+                views[name]=str(destination)
+                current_crop_assets.add(destination)
+            result.update(views=views,focused=focused)
+        assets.extend(current_crop_assets)
+        return result
 
     @register('matte_candidate')
     def _matte_candidate(request):
