@@ -374,7 +374,18 @@ def main():
         from .matte_review import render_review
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，抠图检查未应用')
-        result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'),target_context=request.get('target_context',False))
+        result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'),target_context=request.get('target_context',False),detail_points=request.get('detail_points'))
+        current_crop_assets={Path(item['path']) for item in result['images']}
+        assets.extend(current_crop_assets)
+        return result
+
+    @register('matte_point_evidence')
+    def _matte_point_evidence(request):
+        nonlocal current_crop_assets
+        from .matte_points import render_points
+        if request.get('expected_sha256')!=source.digest:
+            raise ValueError('照片已变化，发丝落点检查未应用')
+        result=render_points(source.image,request['corrections'],request['review_boxes'],cache,request['id'],context_points=request.get('context_points',False))
         current_crop_assets={Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result

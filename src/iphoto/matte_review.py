@@ -30,6 +30,12 @@ def reframe_points(points, core, frame):
     return [[round((core[0]-frame[0]+x/999*(core[2]-core[0]-1))/max(1,frame[2]-frame[0]-1)*999),
              round((core[1]-frame[1]+y/999*(core[3]-core[1]-1))/max(1,frame[3]-frame[1]-1)*999)] for x,y in points]
 
+
+def point_window(size, frame, point):
+    x=frame[0]+round(point[0]/999*(frame[2]-frame[0]-1))
+    y=frame[1]+round(point[1]/999*(frame[3]-frame[1]-1))
+    return [max(0,x-128),max(0,y-128),min(size[0],x+128),min(size[1],y+128)],(x,y)
+
 CORRECTIONS_SCHEMA = {'type':'array','maxItems':2,'items':{
     'type':'object','additionalProperties':False,'properties':{
         'edge':{'type':'integer','minimum':1,'maximum':4},
@@ -46,6 +52,7 @@ PROMPT = """你是iPhoto独立抠图质量检查员。依据提供的实际图�
 图片提供原照片整体、实际紫色棋盘格抠图整体，以及最多四组原像素质量对照图，包含半透明密集处与目标外缘。每组是四格：左上Source原照片，右上Alpha透明度，左下White白底输出，右下Checker紫色棋盘格输出；四格是同一原像素位置，未缩放。最后的定位图仅供选择参照点。先逐组对照四格里的同一对象，再看整体目标范围。
 核对用户指定的目标：透明发丝/细枝是否有明显灰云、旧背景串色、硬切、方块接缝；是否误包含其他对象、明显漏掉目标或破坏透明孔洞。白底下有连成片的灰雾、光晕或透出旧衣物的斑块，即使紫底上不显眼，也不能accept。只看到缩略图无法确认时应uncertain。
 逐组从Source追踪可见细丝的走向、分叉和末端，再看同一坐标的Alpha及白底：原图细丝继续向外延伸，而对应Alpha已经整片黑色或白底只剩空白，就是漏选。主体轮廓看起来柔和不证明细丝已保留；不能把大量可见细丝丢失称为自然过渡。原图真实虚焦可以保留，但不能据此忽略仍清楚可辨的延伸细丝。
+如果提供“发丝参照局部质量对照”，它是在纠错后的同一发丝位置把原像素放大2倍。特别核对Source中的卷曲、分叉和独立细丝是否在Alpha/白底/紫底延续；只有淡灰晕或一团模糊色块，而原片中具体细丝结构消失，仍属漏选或混淆，不能以“半透明”“自然虚焦”解释。参照点有非零Alpha也不证明邻近真实细丝已经恢复。应按具体结构判断，不因前一轮发丝身份检查通过就accept。
 局部选区仅显示指定部分是正常的，例如只选头发时脸、帽子、衣服不显示，不应因此判失败。原片本身的虚焦、帽檐阴影也不是新增缺陷，不要求凭空重造隐藏发丝。但明显带背景的灰块/亮色边缘不能当成自然透明度。
 透明孔洞在白底是白色、在黑底是黑色；这表示该处已被排除，不能把背景色当成残留对象。各边缘的候选透明度图中白色=不透明目标、黑色=已排除、灰色=半透明。核对原照片同一位置：只选头发时，饰品/皮肤对应黑色透明度是正确排除；原图中真实发丝对应的缺失才是漏选。
 紫色棋盘格是用于消除白色饰品/黑色头发与底色混淆的实际透明合成。某处完整露出连续紫色棋盘格，意味着该处透明且对象已排除；这与白底的白色、黑底的黑色一致，不能称为对象残留或矛盾。存在误选必须看到对象在紫底中仍有自身颜色/纹理或遮挡棋盘格；存在漏选必须确认该位置本来属于用户目标。先完成这个交叉核对，再决定是否纠错或拒绝。
@@ -264,7 +271,7 @@ def exclude_candidates(image, alpha):
     return points
 
 
-def render_review(source, layers, mask, directory, identity, boxes=None, *, target_context=False):
+def render_review(source, layers, mask, directory, identity, boxes=None, *, target_context=False, detail_points=None):
     from .cutout import color_patch,compose_cutout
     from .document import raster_mask,render_layers,validate_layers,validate_mask
     from .engine import preview
@@ -283,6 +290,10 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
         or not 0<=box[0]<box[2]<=source.width or not 0<=box[1]<box[3]<=source.height
         or box[2]-box[0]>512 or box[3]-box[1]>512 for box in boxes)):
         raise ValueError('抠图检查边缘坐标无效，原范围保留')
+    if detail_points is not None:
+        if not target_context:raise ValueError('发丝细节检查缺少头发上下文，原范围保留')
+        detail_bounds={str(i):point_bounds(box,point_frame(box,source.size)) for i,box in enumerate(boxes,1)}
+        validate_corrections(detail_points,len(boxes),strand_points=True,bounds=detail_bounds)
     images=[]
     anchors={};bounds={};frames=[]
     exclusions={}
@@ -356,6 +367,22 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
             draw.text((x+6,y+6),label,fill='white')
             panel.paste(picture.convert('RGB'),(x,y+24))
         save(panel,f'边缘{index+1}原像素四格质量对照（左上原片/右上透明度/左下白底/右下紫棋盘格）','panel-'+str(index),True)
+    for patch in detail_points or []:
+        frame=point_frame(boxes[patch['edge']-1],source.size)
+        for number,point in enumerate(patch['points'],1):
+            if point[2]!=2:continue
+            box,_=point_window(source.size,frame,point);width,height=box[2]-box[0],box[3]-box[1]
+            yy,xx=np.indices((height,width));pattern=(xx//10+yy//10)%2
+            colors=np.array([[119,82,166,255],[170,130,200,255]],np.uint8)
+            cropped=output.crop(box)
+            checker=Image.alpha_composite(Image.fromarray(colors[pattern]),cropped)
+            white=Image.alpha_composite(Image.new('RGBA',(width,height),'white'),cropped)
+            panel=Image.new('RGB',(width*4,(height*2+24)*2),'#24292f');draw=ImageDraw.Draw(panel)
+            for position,(picture,label) in enumerate(((source.crop(box),'Source'),(alpha.crop(box),'Alpha'),(white,'White'),(checker,'Checker'))):
+                x=position%2*width*2;y=position//2*(height*2+24)
+                draw.text((x+6,y+6),label,fill='white')
+                panel.paste(picture.convert('RGB').resize((width*2,height*2),Image.Resampling.NEAREST),(x,y+24))
+            save(panel,f'边缘{patch["edge"]}发丝参照T{number}局部质量对照（原像素放大2倍；左上原片/右上透明度/左下白底/右下紫棋盘格；须核对卷曲、分叉及末端实际延续）',f'strand-panel-{patch["edge"]}-{number}',True)
     # Whole composition without another full-size RGBA background allocation.
     compact=output.copy();compact.thumbnail((1280,1280),Image.Resampling.LANCZOS)
     y,x=np.indices((compact.height,compact.width));pattern=(x//20+y//20)%2

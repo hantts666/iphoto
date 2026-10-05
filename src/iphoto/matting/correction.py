@@ -12,13 +12,22 @@ from scipy.ndimage import distance_transform_edt
 
 from ..document import empty_mask, raster_mask, validate_mask
 from ..masks import encode_bitmap
-from ..matte_review import REFERENCE_HALO, inside_bounds, point_bounds, point_frame, validate_corrections
+from ..matte_review import inside_bounds, point_bounds, point_frame, validate_corrections
 from ..segmentation.service import choose_candidate
 from . import neural
 from .metadata import copy_metadata
 
-HALO = REFERENCE_HALO
 JOIN = 32
+
+
+def _groups(corrections, boxes):
+    """Overlapping edit scopes share every constraint and one alpha solve."""
+    ordered=sorted(corrections,key=lambda patch:patch['edge'])
+    if len(ordered)==2:
+        first,second=[boxes[patch['edge']-1] for patch in ordered]
+        if max(first[0],second[0])<min(first[2],second[2]) and max(first[1],second[1])<min(first[3],second[3]):
+            return [ordered]
+    return [[patch] for patch in ordered]
 
 
 def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None, context_points=False):
@@ -48,17 +57,31 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     protected=not mask['inverted'] and mask.get('semantic_target') in ('face','face_skin','body_skin')
     if hair and (protected or mask['inverted']):
         raise ValueError('人物发丝纠错不能修改皮肤或反选范围')
-    records=[];warnings=[]
-    for patch in corrections:
-        core=boxes[patch['edge']-1]
-        frame=frames[patch['edge']-1]
-        box=[max(0,core[0]-HALO),max(0,core[1]-HALO),
-             min(image.width,core[2]+HALO),min(image.height,core[3]+HALO)]
+    records=[];warnings=[];solves=[]
+    for group in _groups(corrections,boxes):
+        cores=[boxes[patch['edge']-1] for patch in group]
+        union=[min(core[0] for core in cores),min(core[1] for core in cores),
+               max(core[2] for core in cores),max(core[3] for core in cores)]
+        box=point_frame(union,image.size)
         guide=original.crop(box)
         previous=np.asarray(guide)
-        coords=np.array([[frame[0]-box[0]+p[0]/999*(frame[2]-frame[0]-1),
-                          frame[1]-box[1]+p[1]/999*(frame[3]-frame[1]-1)] for p in patch['points']],np.float32)
-        labels=np.array([p[2] for p in patch['points']],np.float32)
+        coordinates=[];roles=[];members=[]
+        scope=np.zeros(previous.shape,bool)
+        group_radius=max(patch['radius'] for patch in group)
+        band=np.full(previous.shape,group_radius,np.uint8)
+        for patch,core in zip(group,cores):
+            frame=frames[patch['edge']-1];start=len(roles)
+            for p in patch['points']:
+                coordinates.append([frame[0]-box[0]+p[0]/999*(frame[2]-frame[0]-1),
+                                    frame[1]-box[1]+p[1]/999*(frame[3]-frame[1]-1)])
+                roles.append(p[2])
+            members.append((patch,core,frame,start,len(roles)))
+            area=np.s_[core[1]-box[1]:core[3]-box[1],core[0]-box[0]:core[2]-box[0]]
+            # Each core keeps its requested uncertainty width; overlapping
+            # cores use the stricter width instead of reopening exclusions.
+            band[area]=np.where(scope[area],np.minimum(band[area],patch['radius']),patch['radius'])
+            scope[area]=True
+        coords=np.asarray(coordinates,np.float32);labels=np.asarray(roles,np.float32)
         if any(previous[round(float(y)),round(float(x))]<245 for (x,y),label in zip(coords,labels) if label==1):
             raise ValueError('局部纠错缺少可靠的不透明保留点，原范围保留')
         if protected and any(previous[round(float(y)),round(float(x))]==0 for (x,y),label in zip(coords,labels) if label):
@@ -80,14 +103,14 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         inside=distance_transform_edt(np.pad(hard,1))[1:-1,1:-1]
         outside=distance_transform_edt(np.pad(~hard,1))[1:-1,1:-1]
         trimap=np.full(hard.shape,128,np.uint8)
-        trimap[inside>patch['radius']]=255
-        trimap[outside>patch['radius']]=0
+        trimap[inside>band]=255
+        trimap[outside>band]=0
         yy,xx=np.ogrid[:hard.shape[0],:hard.shape[1]]
         for (x,y),label in zip(coords,labels):
             # An excluded background pixel can lie between fine hairs. A
             # broad negative disk would delete those neighboring strands.
-            radius=8 if label==1 else 2
-            trimap[(xx-x)**2+(yy-y)**2<=radius**2]=128 if label==2 else 255 if label else 0
+            point_radius=8 if label==1 else 2
+            trimap[(xx-x)**2+(yy-y)**2<=point_radius**2]=128 if label==2 else 255 if label else 0
         if protected:trimap[previous==0]=0
         def report(tile,tiles):
             if progress:progress(tile,tiles)
@@ -98,13 +121,12 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
                 hair_context=HairContext(image,original,progress=progress)
             global_points=[[(box[0]+float(x))/max(1,image.width-1),
                             (box[1]+float(y))/max(1,image.height-1),int(label)] for (x,y),label in zip(coords,labels)]
-            pixels,detail=hair_context.solve(image,previous,box,semantic=hard,semantic_radius=patch['radius'],points=global_points,engine=matte,progress=progress)
+            pixels,detail=hair_context.solve(image,previous,box,semantic=hard,semantic_radius=group_radius,
+                                             **({'semantic_band':band} if len(group)>1 else {}),
+                                             points=global_points,engine=matte,progress=progress)
             tiles=detail['tiles']
         else:
             pixels,tiles=neural.solve(image.crop(box),trimap,engine=matte,progress=report)
-        scope=np.zeros(hard.shape,bool)
-        sx,sy=core[0]-box[0],core[1]-box[1]
-        scope[sy:sy+core[3]-core[1],sx:sx+core[2]-core[0]]=True
         if protected:scope &= previous>0
         weight=np.clip(distance_transform_edt(np.pad(scope,1))[1:-1,1:-1]/JOIN,0,1)
         weight=weight*weight*(3-2*weight)
@@ -118,16 +140,20 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         changed=scope & (joined!=previous)
         output[box[1]:box[3],box[0]:box[2]][changed]=joined[changed]
         warnings.extend(quality['warnings'])
-        records.append({'edge':patch['edge'],'box':core,'changed_pixels':int(changed.sum()),
-                        'strand_points':int((labels==2).sum()),
-                        'context_references':int(sum(label==1 and not (core[0]<=box[0]+float(x)<core[2] and core[1]<=box[1]+float(y)<core[3]) for (x,y),label in zip(coords,labels))),
-                        'point_frame_box':frame,
-                        'tiles':tiles,'predicted_iou':quality['predicted_iou'],'timing':timing})
+        solves.append({'edges':[patch['edge'] for patch in group],'box':box,'tiles':tiles,'changed_pixels':int(changed.sum())})
+        for member,(patch,core,frame,start,end) in enumerate(members):
+            local=changed[core[1]-box[1]:core[3]-box[1],core[0]-box[0]:core[2]-box[0]]
+            records.append({'edge':patch['edge'],'box':core,'changed_pixels':int(local.sum()),
+                            'strand_points':int((labels[start:end]==2).sum()),
+                            'context_references':int(sum(label==1 and not (core[0]<=box[0]+float(x)<core[2] and core[1]<=box[1]+float(y)<core[3]) for (x,y),label in zip(coords[start:end],labels[start:end]))),
+                            'point_frame_box':frame,'solve_group':len(solves),
+                            'tiles':tiles if member==0 else 0,'predicted_iou':quality['predicted_iou'],'timing':timing})
     if not any(record['changed_pixels'] for record in records):
         raise ValueError('局部纠错没有产生有效改变，原范围保留')
     result=copy_metadata(mask, empty_mask())
     result.update(label=mask['label'],bitmap=encode_bitmap(Image.fromarray(output),sampling='alpha',preserve_resolution=True))
     if matte.fallback:warnings.append(matte.fallback)
     return validate_mask(result),{'backend':'SAM2.1 Small + MODNet + BiSeNet + ViTMatte-S' if hair else 'SAM2.1 Small + ViTMatte-S',
-                                 'hair_matting':hair,'provider':matte.provider,'corrections':records,
+                                 'hair_matting':hair,'provider':matte.provider,'corrections':records,'solver_groups':solves,
+                                 'tiles':sum(solve['tiles'] for solve in solves),'changed_pixels':sum(solve['changed_pixels'] for solve in solves),
                                  'elapsed_ms':round((perf_counter()-started)*1000,1),'warnings':warnings}

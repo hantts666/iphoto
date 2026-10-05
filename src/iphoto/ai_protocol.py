@@ -17,6 +17,7 @@ from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT,
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
 from .photo_strategy import DEVELOP_PROMPT, REVIEW_PROMPT as PHOTO_REVIEW_PROMPT, REVIEW_SCHEMA as PHOTO_REVIEW_SCHEMA
 from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
+from .matte_points import PROMPT as MATTE_POINTS_PROMPT, SCHEMA as MATTE_POINTS_SCHEMA
 from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT, RESTORATION_PROMPT, RESELECTION_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
@@ -242,6 +243,7 @@ def build_payload(
                     "auto": AUTO_PROMPT,
                     "photo_review": PHOTO_REVIEW_PROMPT,
                     "matte_review": MATTE_REVIEW_PROMPT,
+                    "matte_points": MATTE_POINTS_PROMPT,
                     "selection": SELECTION_PROMPT,
                     "regions": REGION_PROMPT,
                     "repair": REPAIR_SPOTS_PROMPT,
@@ -264,7 +266,7 @@ def build_payload(
         ],
         "stream": False,
     }
-    if mode in ("photo_review", "matte_review"):
+    if mode in ("photo_review", "matte_review", "matte_points"):
         payload["messages"][1]["content"] = payload["messages"][1]["content"][:1]
         for item in review_images:
             payload["messages"][1]["content"].extend([{"type": "text", "text": item["label"]},
@@ -315,6 +317,7 @@ def build_payload(
                         "auto": AUTO_SCHEMA,
                         "photo_review": PHOTO_REVIEW_SCHEMA,
                         "matte_review": MATTE_REVIEW_SCHEMA,
+                        "matte_points": MATTE_POINTS_SCHEMA,
                         "selection": SELECTION_SCHEMA,
                         "regions": REGION_SCHEMA,
                         "repair": REPAIR_SPOTS_SCHEMA,
@@ -342,7 +345,7 @@ def build_payload(
         )
         if settings.provider in {"qwen", "qianwen", "qianwen_token_plan"}:
             payload["enable_thinking"] = False
-            if mode=='matte_review' and settings.model.startswith('qwen3.8-max'):
+            if mode in ('matte_review','matte_points') and settings.model.startswith('qwen3.8-max'):
                 # Validated on the actual endpoint: a small reasoning budget
                 # improves aligned visual comparisons without the unbounded
                 # medium-effort timeout. Qwen JSON mode and thinking do not

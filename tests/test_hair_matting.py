@@ -96,6 +96,21 @@ def test_semantic_exclusion_cannot_be_reopened_by_partial_person_alpha():
         context.solve(image,previous,box,semantic=hard,semantic_radius=True,engine=Matte())
 
 
+def test_joint_hair_uncertainty_map_preserves_each_core_exclusion_width():
+    image,mask,portrait,_=fixture();original=raster_mask(mask,image.size);box=(240,200,720,650)
+    context=HairContext(image,original,portrait=portrait,parser=Parser())
+    previous=np.asarray(original.crop(box));hard=previous>127
+    band=np.full(previous.shape,40,np.uint8);band[:200]=24;snapshot=band.copy()
+    pixels,_=context.solve(image,previous,box,semantic=hard,semantic_radius=40,semantic_band=band,engine=Matte())
+    assert pixels[160,265]==0 and 0<pixels[230,265]<255
+    assert np.array_equal(band,snapshot)
+    for invalid in (band.astype(float),band[:20],np.full(band.shape,0,np.uint8)):
+        with pytest.raises(ValueError,match='宽度图无效'):
+            context.solve(image,previous,box,semantic=hard,semantic_band=invalid,engine=Matte())
+    with pytest.raises(ValueError,match='宽度图无效'):
+        context.solve(image,previous,box,semantic_band=band,engine=Matte())
+
+
 def test_strand_identity_can_recover_missing_alpha_without_becoming_opaque():
     image,mask,portrait,_=fixture();photo=image.tobytes();snapshot=deepcopy(mask)
     original=raster_mask(mask,image.size);box=(240,200,720,650)
@@ -196,7 +211,7 @@ def test_strand_capability_and_correction_roles_survive_the_controller_boundary(
     image,mask,_,_=fixture();calls=[];plans=[]
     state={'token':'same','hair':hair,'revision':0,'mask':mask,'result':{'mask':mask},'bound':False}
     pending={'text':'核对头发'}
-    editor=SimpleNamespace(_layers=[{'id':'original'}],_candidate=deepcopy(mask),_cursor=0,_generation=0,
+    editor=SimpleNamespace(_layers=[{'id':'original'}],_candidate=deepcopy(mask),_cursor=0,_generation=0,_sha='photo',
                            _request=lambda op,**data:calls.append((op,data)),
                            ai=SimpleNamespace(plan=lambda *args:plans.append(args)),
                            changed=SimpleNamespace(emit=lambda:None),_notify=lambda *args:calls.append(('error',args)))
@@ -218,9 +233,16 @@ def test_strand_capability_and_correction_roles_survive_the_controller_boundary(
     patch={'edge':1,'radius':24,'points':[[700,800,1],[470,470,0],[320,640,2]]}
     channel_auto.reviewed(editor,{'status':'revise','summary':'补细丝','corrections':[patch]})
     if hair:
-        assert calls[0][0]=='matte' and calls[0][1]['hair'] is True
-        assert calls[0][1]['context_points'] is True
-        assert calls[0][1]['corrections']==[patch] and state['revision']==1
+        assert calls[0][0]=='matte_point_evidence' and state['revision']==0
+        assert calls[0][1]['context_points'] is True and calls[0][1]['corrections']==[patch]
+        evidence={'images':[{'label':'参照原片','path':'source.png'}],
+                  'point_bounds':result['point_bounds'],'windows':[]}
+        channel_auto.points_ready(editor,evidence,{'token':'same'},0)
+        assert plans[1][5]=='matte_points' and plans[1][6]['corrections']==[patch]
+        assert state['revision']==0
+        channel_auto.points_reviewed(editor,{'status':'keep','summary':'细丝身份可见','corrections':[]})
+        assert calls[1][0]=='matte' and calls[1][1]['hair'] is True
+        assert calls[1][1]['corrections']==[patch] and state['revision']==1
     else:
         assert calls[0][0]=='error' and state['revision']==0
     assert snapshot==(editor._layers,editor._candidate,editor._cursor)

@@ -49,7 +49,7 @@ class HairContext:
         if selected.sum() < 64 or (selected & (labels==17)).sum()/selected.sum() < .5:
             raise ValueError('当前范围不能可靠确认为头发，请使用通用细化或重新定位头发')
 
-    def solve(self, image, previous, box, *, semantic=None, semantic_radius=32, points=None, engine=None, progress=None):
+    def solve(self, image, previous, box, *, semantic=None, semantic_radius=32, semantic_band=None, points=None, engine=None, progress=None):
         points=validate_points(points or [],allow_strands=semantic is not None)
         if (max(box[0],self.box[0])>=min(box[2],self.box[2])
                 or max(box[1],self.box[1])>=min(box[3],self.box[3])):
@@ -63,6 +63,10 @@ class HairContext:
         trimap[cv2.erode((coarse>250).astype(np.uint8),kernel)>0] = 255
         trimap[cv2.erode((coarse<2).astype(np.uint8),kernel)>0] = 0
         prior = np.asarray(previous)
+        if semantic_band is not None and (semantic is None or not isinstance(semantic_band,np.ndarray)
+                or semantic_band.dtype!=np.uint8 or semantic_band.shape!=prior.shape
+                or not ((semantic_band>=12)&(semantic_band<=48)).all()):
+            raise ValueError('发丝纠错边缘宽度图无效，原范围保留')
         anchors = {}
         yy,xx = np.ogrid[:prior.shape[0],:prior.shape[1]]
         for x,y,label in points:
@@ -99,7 +103,7 @@ class HairContext:
             if type(semantic_radius) is not int or not 12<=semantic_radius<=48:
                 raise ValueError('发丝纠错边缘宽度无效，原范围保留')
             outside = cv2.distanceTransform((~target).astype(np.uint8),cv2.DIST_L2,5)
-            trimap[outside>semantic_radius] = 0
+            trimap[outside>(semantic_radius if semantic_band is None else semantic_band)] = 0
         for (y,x),label in anchors.items():
             if label==1 and parent[y,x]<128:
                 raise ValueError('保留点不能确认为不透明头发，原范围保留')

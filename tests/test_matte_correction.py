@@ -219,3 +219,46 @@ def test_context_edit_points_cannot_cross_core_boundary_or_load_models(monkeypat
     with pytest.raises(ValueError,match='修改范围外|过近裁片边界'):
         correct(image,mask,[{'edge':1,'radius':24,'points':points}],boxes,matte=Matte(),hair=True,context_points=True)
     assert mask==snapshot
+
+
+def test_overlapping_corrections_share_constraints_and_ignore_input_order():
+    image,mask,_=scene();boxes=[[350,350,750,750],[450,400,850,800]]
+    patches=[correction_plan()['corrections'][0],{'edge':2,'radius':48,'points':[[200,300,1],[750,425,0]]}]
+    before=np.asarray(raster_mask(mask,image.size));snapshot=deepcopy(mask);outputs=[]
+    class SharedSemantic(Semantic):
+        calls=0
+        def predict_with_prior(self,image,coords,labels,guide):
+            self.calls+=1
+            assert labels.tolist()==[1,0,1,0]
+            return super().predict_with_prior(image,coords,labels,guide)
+    for ordered in (patches,list(reversed(patches))):
+        model=SharedSemantic();result,quality=correct(image,mask,ordered,boxes,semantic=model,matte=Matte())
+        pixels=np.asarray(raster_mask(result,image.size));outputs.append(pixels)
+        assert model.calls==1 and quality['solver_groups'][0]['edges']==[1,2]
+        assert len(quality['solver_groups'])==1 and quality['changed_pixels']==int((pixels!=before).sum())
+        assert sum(record['tiles'] for record in quality['corrections'])==quality['tiles']
+        outside=np.ones(before.shape,bool)
+        for x0,y0,x1,y1 in boxes:outside[y0:y1,x0:x1]=False
+        assert np.array_equal(pixels[outside],before[outside])
+        # Includes untouched corners inside the group's rectangular bounding
+        # box: context union is never substituted for the actual edit union.
+        assert pixels[370,820]==before[370,820] and pixels[790,370]==before[790,370]
+    assert np.array_equal(*outputs) and mask==snapshot
+
+
+def test_overlapping_hair_cores_keep_individual_uncertainty_widths():
+    image,mask,_=scene();boxes=[[350,350,750,750],[450,400,850,800]]
+    patches=[{**correction_plan()['corrections'][0],'radius':12},
+             {'edge':2,'radius':48,'points':[[200,300,1],[750,425,0]]}]
+    class Hair:
+        calls=0
+        def solve(self,image,previous,box,*,semantic,semantic_radius,semantic_band,points,**kwargs):
+            self.calls+=1
+            assert semantic_radius==48 and semantic_band.dtype==np.uint8 and semantic_band.shape==previous.shape
+            for (x,y),expected in (((400,400),12),((500,500),12),((800,700),48)):
+                assert semantic_band[y-box[1],x-box[0]]==expected
+            assert [p[2] for p in points]==[1,0,1,0]
+            return np.where(semantic,255,0).astype(np.uint8),{'tiles':1}
+    hair=Hair();result,quality=correct(image,mask,patches,boxes,semantic=Semantic(),matte=Matte(),hair=True,hair_context=hair)
+    assert hair.calls==1 and quality['tiles']==1 and quality['corrections'][1]['tiles']==0
+    assert result['color_recovery'] is True

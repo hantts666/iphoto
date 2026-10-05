@@ -462,7 +462,7 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
-            if op in ("matte_candidate", "generative_crop", "photo_candidate", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply") and active.get("cancelled"):
+            if op in ("matte_candidate", "matte_point_evidence", "generative_crop", "photo_candidate", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply") and active.get("cancelled"):
                 self.changed.emit()
                 self._pump()
                 continue
@@ -648,6 +648,10 @@ def _read(self):
                 if not active.get('cancelled'):
                     from .channel_auto import review_ready
                     review_ready(self,response['result'],active['context'],response['generation'])
+            elif op == 'matte_point_evidence':
+                if not active.get('cancelled'):
+                    from .channel_auto import points_ready
+                    points_ready(self,response['result'],active['context'],response['generation'])
             elif op == "photo_candidate":
                 from .photo_strategy import ready
                 ready(self, response['result'], active['context'], response['generation'])

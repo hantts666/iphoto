@@ -214,6 +214,30 @@ def test_context_coordinates_require_hair_capability_and_keep_edit_points_inside
     with pytest.raises(ValueError,match='不透明参照'):parse_review(completion(wrong),context)
 
 
+def test_verified_strand_quality_window_matches_original_and_actual_alpha_output(tmp_path):
+    from iphoto.document import render_layers
+    from iphoto.cutout import compose_cutout
+    from iphoto.matte_review import point_frame,point_window
+    source=Image.new('RGB',(1000,900),(80,110,70));original=source.tobytes()
+    a=np.zeros((900,1000),np.uint8);a[150:800,150:900]=255;a[250:600,500:800]=35
+    mask={**empty_mask(),'bitmap':encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)}
+    layer=new_layer('已有调整',True);layer['recipe']=Recipe(exposure=.5).to_dict()
+    core=[350,200,862,712];patch={'edge':1,'radius':36,'points':[[200,500,1],[750,700,0],[600,400,2]]}
+    result=render_review(source,[layer],mask,tmp_path,5,[core],target_context=True,detail_points=[patch])
+    frame=point_frame(core,source.size);box,_=point_window(source.size,frame,patch['points'][-1]);size=(512,512)
+    item=next(item for item in result['review_images'] if '发丝参照T3局部质量' in item['label'])
+    panel=Image.open(item['path']);assert panel.size==(1024,1072) and len(result['review_images'])==6
+    assert panel.crop((0,24,512,536)).tobytes()==source.crop(box).resize(size,Image.Resampling.NEAREST).tobytes()
+    expected_alpha=Image.fromarray(a).crop(box).convert('RGB').resize(size,Image.Resampling.NEAREST)
+    assert panel.crop((512,24,1024,536)).tobytes()==expected_alpha.tobytes()
+    composed=compose_cutout(render_layers(source,[layer]),Image.fromarray(a))
+    white=Image.alpha_composite(Image.new('RGBA',(256,256),'white'),composed.crop(box)).convert('RGB').resize(size,Image.Resampling.NEAREST)
+    assert panel.crop((0,560,512,1072)).tobytes()==white.tobytes()
+    assert source.tobytes()==original
+    with pytest.raises(ValueError,match='缺少头发上下文'):
+        render_review(source,[layer],mask,tmp_path,6,[core],detail_points=[patch])
+
+
 @pytest.mark.parametrize('invert',[False,True])
 def test_visual_exclusion_references_can_reach_wrong_opaque_foreground(invert):
     # The coarse model calls a whole light/dark cloth patch foreground. An
