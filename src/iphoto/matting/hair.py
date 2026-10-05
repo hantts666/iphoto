@@ -50,7 +50,7 @@ class HairContext:
             raise ValueError('当前范围不能可靠确认为头发，请使用通用细化或重新定位头发')
 
     def solve(self, image, previous, box, *, semantic=None, semantic_radius=32, semantic_band=None, points=None, engine=None, progress=None):
-        points=validate_points(points or [],allow_strands=semantic is not None)
+        points=validate_points(points or [],allow_strands=semantic is not None,max_points=8 if semantic is not None else 6)
         if (max(box[0],self.box[0])>=min(box[2],self.box[2])
                 or max(box[1],self.box[1])>=min(box[3],self.box[3])):
             raise ValueError('笔触超出头发定位上下文，请在目标附近分次修边')

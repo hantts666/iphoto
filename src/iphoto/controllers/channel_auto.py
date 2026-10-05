@@ -133,6 +133,7 @@ def review_ready(e, result, context, generation):
                                    'correction_method':'hair' if state.get('hair') else 'semantic',
                                    'visual_exclusions':bool(state.get('hair')),
                                    'strand_points':bool(state.get('hair')),
+                                   'point_budget':8 if state.get('hair') else 6,
                                    'context_points':state['context_points'],
                                    'point_bounds':state['point_bounds'],
                                    'previous_check':state.get('previous_check',''),
@@ -208,6 +209,8 @@ def _correct(e, state, corrections):
     e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'
     e._request('matte',method='correction',mask=state['result']['mask'],
                corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'],
+               **({'source_point_proposal':deepcopy(state['point_corrections'])}
+                  if state.get('point_check') and 'strand_candidates' in state.get('point_workspace',{}) else {}),
                hair=bool(state.get('hair')),context_points=state.get('context_points',False))
 
 
@@ -219,6 +222,7 @@ def points_ready(e, result, context, generation):
         if not state.get('points_pending') or state['revision']:return
         state['points_pending']=False;state['points_reviewing']=True
         state['point_workspace']={'correction_method':'hair','revision':0,'edge_count':len(state['review_boxes']),
+                                  'point_budget':8,
                                   'corrections':deepcopy(state['point_corrections']),
                                   'context_points':state.get('context_points',False),'point_bounds':result['point_bounds'],
                                   'keep_candidates':state['keep_candidates'],'windows':result['windows']}

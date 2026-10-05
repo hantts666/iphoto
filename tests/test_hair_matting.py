@@ -111,6 +111,24 @@ def test_joint_hair_uncertainty_map_preserves_each_core_exclusion_width():
         context.solve(image,previous,box,semantic_band=band,engine=Matte())
 
 
+def test_eight_reviewed_hair_points_reach_both_alpha_passes_with_roles_preserved():
+    image,mask,portrait,_=fixture();original=raster_mask(mask,image.size);box=(240,200,720,650)
+    context=HairContext(image,original,portrait=portrait,parser=Parser())
+    points=[[x/999,y/899,role] for x,y,role in ((400,300,1),(650,300,0),(650,360,0),(505,330,2),
+                                               (400,500,1),(650,500,0),(650,560,0),(505,490,2))]
+    previous=np.asarray(original.crop(box));photo=image.tobytes();snapshot=deepcopy(mask)
+    pixels,detail=context.solve(image,previous,box,semantic=previous>127,semantic_radius=40,points=points,engine=Matte())
+    for x,y,role in ((400,300,1),(650,300,0),(505,330,2),(400,500,1),(650,500,0),(505,490,2)):
+        value=int(pixels[y-box[1],x-box[0]])
+        assert value==255 if role==1 else value==0 if role==0 else 0<value<255
+    assert detail['outer_tiles']>0 and detail['split_tiles']>0
+    with pytest.raises(ValueError,match='最多 6'):
+        context.solve(image,previous,box,points=points,engine=Matte())
+    with pytest.raises(ValueError,match='最多 8'):
+        context.solve(image,previous,box,semantic=previous>127,points=points+[[.6,.6,0]],engine=Matte())
+    assert image.tobytes()==photo and mask==snapshot
+
+
 def test_strand_identity_can_recover_missing_alpha_without_becoming_opaque():
     image,mask,portrait,_=fixture();photo=image.tobytes();snapshot=deepcopy(mask)
     original=raster_mask(mask,image.size);box=(240,200,720,650)

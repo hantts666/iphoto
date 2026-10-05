@@ -81,7 +81,7 @@ class PreciseSAM:
             raise ValueError("精细提示点输入无效，原范围保留")
         # Validate point numbers independently; box corners are model tokens.
         validate_points([[float(x)/max(1, image.width-1), float(y)/max(1, image.height-1), int(label)]
-                         for (x, y), label in zip(coords, labels) if label in (0, 1)])
+                         for (x, y), label in zip(coords, labels) if label in (0, 1)],max_points=8)
         started = perf_counter()
         key = (image.size, sha256(image.tobytes()).digest())
         cached = key == self._key

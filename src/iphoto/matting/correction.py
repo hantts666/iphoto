@@ -1,8 +1,8 @@
 """Vision points correct semantic constraints; native matting solves coverage.
 
-Only the reviewed crop interiors may change. Both model predictions and the
-joined result must satisfy the points; the controller reviews the actual
-composition again before it can publish the mask.
+Only the reviewed crop interiors may change. Semantic predictions must satisfy
+opaque/excluded references; verified wisps remain optical unknowns. Joined
+alpha must satisfy all roles, then the controller reviews the actual cutout.
 """
 from time import perf_counter
 
@@ -30,7 +30,7 @@ def _groups(corrections, boxes):
     return [[patch] for patch in ordered]
 
 
-def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None, context_points=False):
+def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None, context_points=False, source_point_proposal=None):
     started=perf_counter()
     if type(hair) is not bool:
         raise ValueError('局部发丝纠错方法无效')
@@ -46,6 +46,12 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     frames=[point_frame(core,image.size) if context_points else core for core in boxes]
     bounds={str(index):point_bounds(core,frame) for index,(core,frame) in enumerate(zip(boxes,frames),1)} if context_points else None
     validate_corrections(corrections,len(boxes),strand_points=hair,bounds=bounds)
+    verified=set()
+    if source_point_proposal is not None:
+        if not hair:
+            raise ValueError('原片发丝依据只能用于人物发丝纠错，原范围保留')
+        from ..matte_points import verified_strands
+        verified=verified_strands(image,corrections,source_point_proposal,boxes,context_points=context_points)
     if context_points:
         for patch in corrections:
             core=boxes[patch['edge']-1];frame=frames[patch['edge']-1]
@@ -65,7 +71,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         box=point_frame(union,image.size)
         guide=original.crop(box)
         previous=np.asarray(guide)
-        coordinates=[];roles=[];members=[]
+        coordinates=[];roles=[];members=[];optical=[]
         scope=np.zeros(previous.shape,bool)
         group_radius=max(patch['radius'] for patch in group)
         band=np.full(previous.shape,group_radius,np.uint8)
@@ -75,6 +81,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
                 coordinates.append([frame[0]-box[0]+p[0]/999*(frame[2]-frame[0]-1),
                                     frame[1]-box[1]+p[1]/999*(frame[3]-frame[1]-1)])
                 roles.append(p[2])
+                optical.append(p[2]==2 and (patch['edge'],*p[:2]) in verified)
             members.append((patch,core,frame,start,len(roles)))
             area=np.s_[core[1]-box[1]:core[3]-box[1],core[0]-box[0]:core[2]-box[0]]
             # Each core keeps its requested uncertainty width; overlapping
@@ -94,10 +101,13 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         # opaque foreground override the new explicit negative points.
         model_guide=guide.point(lambda value:max(64,min(191,value)))
         # Label 2 belongs to our hair contract, not SAM's box-corner tokens.
-        # It must be an included semantic point, without claiming opaque alpha.
+        # Source-verified wisps can be missed by a binary semantic mask. They
+        # still prompt SAM, but physical alpha, nonhair protection and the
+        # independent final cutout check decide whether they can be retained.
         semantic_labels=np.where(labels==2,1,labels).astype(np.float32)
         logits,scores,timing=semantic.predict_with_prior(image.crop(box),coords,semantic_labels,model_guide)
-        hard,quality=choose_candidate(logits,scores,coords,semantic_labels,guide)
+        required=~np.asarray(optical,dtype=bool)
+        hard,quality=choose_candidate(logits,scores,coords[required],semantic_labels[required],guide)
         if quality['predicted_iou']<.75:
             raise ValueError('局部纠错模型信心不足，原范围保留')
         inside=distance_transform_edt(np.pad(hard,1))[1:-1,1:-1]
@@ -145,6 +155,9 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
             local=changed[core[1]-box[1]:core[3]-box[1],core[0]-box[0]:core[2]-box[0]]
             records.append({'edge':patch['edge'],'box':core,'changed_pixels':int(local.sum()),
                             'strand_points':int((labels[start:end]==2).sum()),
+                            'source_verified_strands':sum(optical[start:end]),
+                            'semantic_unknown_strands':int(sum(known and not hard[round(float(y)),round(float(x))]
+                                                               for (x,y),known in zip(coords[start:end],optical[start:end]))),
                             'context_references':int(sum(label==1 and not (core[0]<=box[0]+float(x)<core[2] and core[1]<=box[1]+float(y)<core[3]) for (x,y),label in zip(coords[start:end],labels[start:end]))),
                             'point_frame_box':frame,'solve_group':len(solves),
                             'tiles':tiles if member==0 else 0,'predicted_iou':quality['predicted_iou'],'timing':timing})

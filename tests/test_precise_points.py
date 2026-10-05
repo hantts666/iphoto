@@ -149,6 +149,19 @@ def test_corrupt_neural_output_is_rejected(failure):
         model.predict_with_prior(Image.new('RGB', (12, 10)), np.array([[3, 3]]), np.array([1]), Image.new('L', (12, 10)))
 
 
+def test_local_dense_prior_accepts_eight_points_but_rejects_nine_before_encoding():
+    model,encodes,decodes=sessions()
+    image=Image.new('RGB',(24,20),'gray');guide=Image.new('L',image.size,128)
+    coords=np.array([[2+i*2,3+i] for i in range(8)],np.float32)
+    labels=np.array([1,0,0,1,1,0,0,1],np.float32)
+    model.predict_with_prior(image,coords,labels,guide)
+    assert len(encodes)==len(decodes)==1
+    assert decodes[0]['point_coords'].shape==(1,8,2) and decodes[0]['point_labels'].shape==(1,8)
+    with pytest.raises(ValueError,match='输入无效'):
+        model.predict_with_prior(image,np.vstack((coords,[20,15])),np.append(labels,0),guide)
+    assert len(encodes)==len(decodes)==1
+
+
 def test_unbounded_input_is_rejected_before_encoder():
     model, encodes, _ = sessions()
     with pytest.raises(ValueError, match='输入无效'):

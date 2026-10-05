@@ -58,6 +58,23 @@ def test_invalid_guidance_is_not_executed(patch):
     with pytest.raises(ValueError):parse_review(completion(plan),CONTEXT)
 
 
+def test_two_hair_regions_can_each_cover_a_keep_two_exclusions_and_a_strand():
+    first={'edge':1,'radius':32,'points':[[200,200,1],[600,300,0],[600,700,0],[400,500,2]]}
+    second={**deepcopy(first),'edge':2}
+    plan={**correction_plan(),'corrections':[first,second]}
+    context={**CONTEXT,'edge_count':2,'correction_method':'hair','strand_points':True,'point_budget':8}
+    assert parse_review(completion(plan),context)==plan
+    with pytest.raises(ValueError):parse_review(completion(plan),{**context,'strand_points':False})
+    ordinary=deepcopy(plan)
+    for patch in ordinary['corrections']:patch['points'][-1][-1]=0
+    with pytest.raises(ValueError,match='点过多'):parse_review(completion(ordinary),{**context,'strand_points':False,'point_budget':8})
+    nine=deepcopy(plan);nine['corrections'][0]['points'].append([800,800,0])
+    with pytest.raises(ValueError,match='点过多'):parse_review(completion(nine),context)
+    seven=deepcopy(plan);seven['corrections']=[first]
+    seven['corrections'][0]['points'] += [[100,800,0],[800,100,0],[800,800,0]]
+    with pytest.raises(ValueError,match='结构无效'):parse_review(completion(seven),context)
+
+
 class Semantic:
     def __init__(self,score=.96):self.score=score
     def predict_with_prior(self,image,coords,labels,guide):
@@ -166,6 +183,66 @@ def test_hair_strand_prompt_is_semantically_required_but_alpha_is_not_forced():
     with pytest.raises(ValueError,match='可靠目标'):
         correct(image,mask,patches,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,hair_context=Hair())
     assert mask==snapshot
+
+
+def test_source_verified_strand_enters_optical_estimation_without_weakening_keep_or_exclusions(tmp_path):
+    from iphoto.matte_points import render_points
+    image,mask,boxes=scene();pixels=np.array(image)
+    pixels[450:650,580:584]=[250,210,140]  # Source filament independent of the mask.
+    image=Image.fromarray(pixels);photo=image.tobytes();snapshot=deepcopy(mask)
+    proposal=deepcopy(correction_plan()['corrections']);proposal[0]['points'].append([500,600,2])
+    evidence=render_points(image,proposal,boxes,tmp_path,'source-proof')
+    assert evidence['strand_candidates']['1']
+    patches=deepcopy(proposal);patches[0]['points'][-1]=[*evidence['strand_candidates']['1'][0],2]
+    class MissedStrand(Semantic):
+        def __init__(self,bad_role=None):super().__init__();self.bad_role=bad_role
+        def predict_with_prior(self,image,coords,labels,guide):
+            assert labels.tolist()==[1,0,1]  # T is still sent as a SAM foreground prompt.
+            logits,scores,timing=super().predict_with_prior(image,coords,labels,guide)
+            x,y=coords[-1];logits[0,round(float(y)),round(float(x))]=-5
+            if self.bad_role is not None:
+                x,y=coords[self.bad_role];logits[0,round(float(y)),round(float(x))]=(-5 if self.bad_role==0 else 5)
+            return logits,scores,timing
+    class Hair:
+        def __init__(self,alpha=72):self.alpha=alpha;self.called=False
+        def solve(self,image,previous,box,*,semantic,points,**kwargs):
+            self.called=True;pixels=np.where(semantic,72,0).astype(np.uint8)
+            for x,y,label in points:
+                pixels[round(y*(image.height-1))-box[1],round(x*(image.width-1))-box[0]]=255 if label==1 else self.alpha if label==2 else 0
+            return pixels,{'tiles':0}
+    with pytest.raises(ValueError,match='可靠目标'):
+        correct(image,mask,patches,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,hair_context=Hair())
+    hair=Hair()
+    with pytest.raises(ValueError,match='可靠目标'):
+        correct(image,mask,proposal,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,
+                hair_context=Hair(),source_point_proposal=proposal)
+    result,quality=correct(image,mask,patches,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,
+                           hair_context=hair,source_point_proposal=proposal)
+    assert hair.called and quality['corrections'][0]['source_verified_strands']==1
+    assert quality['corrections'][0]['semantic_unknown_strands']==1
+    x,y=patches[0]['points'][-1][:2];box=boxes[0];native=(box[0]+round(x/999*(box[2]-box[0]-1)),box[1]+round(y/999*(box[3]-box[1]-1)))
+    assert raster_mask(result,image.size).getpixel(native)==72  # No opaque or nonzero floor.
+    old=np.asarray(raster_mask(mask,image.size));after=np.asarray(raster_mask(result,image.size))
+    outside=np.ones(old.shape,bool);outside[350:750,350:750]=False
+    assert np.array_equal(old[outside],after[outside])
+    for wrong_role in (0,1):
+        uncalled=Hair()
+        with pytest.raises(ValueError,match='可靠目标'):
+            correct(image,mask,patches,boxes,semantic=MissedStrand(wrong_role),matte=Matte(),hair=True,
+                    hair_context=uncalled,source_point_proposal=proposal)
+        assert not uncalled.called
+    with pytest.raises(ValueError,match='透明度验证'):
+        correct(image,mask,patches,boxes,semantic=MissedStrand(),matte=Matte(),hair=True,
+                hair_context=Hair(0),source_point_proposal=proposal)
+    with pytest.raises(ValueError,match='同一原片候选'):
+        correct(Image.new('RGB',image.size,'gray'),mask,patches,boxes,matte=Matte(),hair=True,
+                hair_context=Hair(),source_point_proposal=proposal)
+    wrong=deepcopy(proposal);wrong[0]['points'][0][0]+=1
+    with pytest.raises(ValueError,match='只能移动或删除'):
+        correct(image,mask,patches,boxes,matte=Matte(),hair=True,source_point_proposal=wrong)
+    with pytest.raises(ValueError,match='只能用于人物发丝'):
+        correct(image,mask,correction_plan()['corrections'],boxes,matte=Matte(),source_point_proposal=proposal)
+    assert mask==snapshot and image.tobytes()==photo
 
 
 def test_context_opaque_anchor_is_only_a_reference_and_outside_alpha_stays_exact():

@@ -64,7 +64,9 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                 wait_for(lambda:bool(captured))
                 assert editor._layers==original and editor._cursor==cursor and state['revision']==1
                 assert captured['corrections']==(expected['corrections'] if outcome=='revise' else [patch])
+                assert captured['source_point_proposal']==[patch]
                 assert 'strand_candidates' in state['point_workspace']
+                assert state['point_workspace']['point_budget']==8
                 count=len(pixel_calls)
                 channel_auto.points_reviewed(editor,{'status':'keep','summary':'重复回调','corrections':[]})
                 assert len(pixel_calls)==count and editor._layers==original

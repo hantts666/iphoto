@@ -89,6 +89,15 @@ def test_invalid_or_excessive_points_rejected(points):
         validate_points(points)
 
 
+def test_local_point_capacity_is_explicit_and_cannot_be_unbounded():
+    points=[[.2,.2,1]]*8
+    assert len(validate_points(points,max_points=8))==8
+    for limit in (7,9,True,'8'):
+        with pytest.raises(ValueError,match='容量无效'):validate_points(points,max_points=limit)
+    with pytest.raises(ValueError,match='最多 6'):validate_points(points)
+    with pytest.raises(ValueError,match='最多 8'):validate_points(points+[[.3,.3,0]],max_points=8)
+
+
 def test_prompt_budget_and_negative_only_rejection():
     photo, mask, hint = ring()
     points = [

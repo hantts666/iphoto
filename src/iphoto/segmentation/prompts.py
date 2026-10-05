@@ -4,11 +4,13 @@ import cv2
 import numpy as np
 
 
-def validate_points(points, *, allow_strands=False):
+def validate_points(points, *, allow_strands=False, max_points=6):
     if type(allow_strands) is not bool:
         raise ValueError("发丝提示点选项无效")
-    if not isinstance(points, list) or len(points) > 6:
-        raise ValueError("一次最多 6 个正/负提示点；可移除旧点后继续修正")
+    if type(max_points) is not int or max_points not in (6,8):
+        raise ValueError("提示点容量无效")
+    if not isinstance(points, list) or len(points) > max_points:
+        raise ValueError(f"一次最多 {max_points} 个正/负提示点；可移除旧点后继续修正")
     clean = []
     for point in points:
         if (
