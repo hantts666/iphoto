@@ -93,7 +93,10 @@ class HairContext:
             parent, outer_tiles = neural.solve(crop,trimap,engine=engine,progress=report('hair_outer'))
         else:
             native_points = [[int(x), int(y), int(label)] for (y,x),label in anchors.items()]
-            trimap, learned_detail = self.learned.predict(crop,native_points,progress=progress)
+            from .target_prompts import part_exclusions
+            exclusions = part_exclusions(labels, native_points)
+            trimap, learned_detail = self.learned.predict(crop,native_points,exclusions=exclusions,progress=progress)
+            learned_detail['trimap_part_exclusions'] = len(exclusions)
             if (not isinstance(trimap,np.ndarray) or trimap.dtype!=np.uint8
                     or trimap.shape!=prior.shape or not np.isin(trimap,[0,128,255]).all()):
                 raise ValueError('AI 发丝区域无效，原范围保留')
@@ -125,7 +128,7 @@ class HairContext:
                 # Preserve the model's learned uncertainty and fine foreground;
                 # the requested band still protects known opaque hair interiors.
                 trimap[(inside>width)&(prior>=245)&(labels==17)] = 255
-                learned_detail['trimap_policy']='learned_uncertainty_with_nonhair_protection'
+                learned_detail['trimap_policy']='learned_uncertainty_with_target_observations'
         for (y,x),label in anchors.items():
             if label==1 and self.learned is None and parent[y,x]<128:
                 raise ValueError('保留点不能确认为不透明头发，原范围保留')

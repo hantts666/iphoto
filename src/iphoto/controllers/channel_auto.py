@@ -124,6 +124,8 @@ def review_ready(e, result, context, generation):
         images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['review_images']]
         e._status = '4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消'
         e.changed.emit()
+        # Keep solver scores and prior verdicts on the local candidate. They
+        # are not evidence that the pixels preserve the requested fine detail.
         e.ai.plan(pending['text'], Recipe().to_dict(), [], result['images'][0]['path'], generation,
                   'matte_review', {'target':state['mask']['label'],
                                    'revision':state['revision'],'edge_count':len(result['boxes']),
@@ -136,8 +138,7 @@ def review_ready(e, result, context, generation):
                                    'point_budget':8 if state.get('hair') else 6,
                                    'context_points':state['context_points'],
                                    'point_bounds':state['point_bounds'],
-                                   'previous_check':state.get('previous_check',''),
-                                   'quality':state['result']['quality'],'review_images':images})
+                                   'review_images':images})
     except (ValueError, KeyError, OSError) as exc:
         e._notify(str(exc), True)
 

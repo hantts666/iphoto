@@ -19,8 +19,8 @@ class Learned:
         self.invalid = invalid
         self.calls = []
 
-    def predict(self, image, points, *, progress=None):
-        self.calls.append((image.size,deepcopy(points)))
+    def predict(self, image, points, *, progress=None, exclusions=None):
+        self.calls.append((image.size,deepcopy(points),deepcopy(exclusions)))
         value = np.full((image.height,image.width),255,np.uint8)
         if self.invalid == 'shape': value = value[:20]
         if self.invalid == 'dtype': value = value.astype(float)
@@ -41,7 +41,10 @@ def test_learned_uncertainty_can_recover_hair_with_zero_coarse_support():
     assert coarse[430,505]==0 and 0<pixels[230,265]<255
     assert pixels[230,160]==255 and pixels[230,450]==0
     assert pixels[230,360]==0  # Person foreground includes clothes, not hair.
-    assert learned.calls[0][1]==[[160,230,1],[450,230,0],[265,230,2]]
+    observed=learned.calls[0][1]
+    assert observed==[[160,230,1],[450,230,0],[265,230,2]]
+    assert len(learned.calls[0][2])==1 and learned.calls[0][2][0][2]==0
+    assert detail['trimap_part_exclusions']==1
     assert detail['outer_tiles']==0 and detail['trimap_backend']=='MattePro'
     assert np.array_equal(previous,before) and image.tobytes()==photo
 

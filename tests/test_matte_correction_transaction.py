@@ -37,6 +37,7 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
             if '独立抠图质量检查员' not in payload['messages'][0]['content']:
                 return completion(plan())
             context=json.loads(payload['messages'][1]['content'][0]['text'])
+            assert 'quality' not in context and 'previous_check' not in context
             if context['revision']==0 or outcome=='again':
                 edge=next(int(key) for key,points in context['keep_candidates'].items() if points)
                 keep=context['keep_candidates'][str(edge)][0]

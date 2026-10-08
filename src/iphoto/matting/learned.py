@@ -13,7 +13,7 @@ import numpy as np
 from .learned_models import MODEL_DIR, FILES, verified_path
 
 
-def prompts(points, size):
+def prompts(points, size, *, exclusions=None):
     width, height = size
     if (not isinstance(points, list) or len(points) > 8
             or any(not isinstance(p, list) or len(p) != 3
@@ -23,9 +23,17 @@ def prompts(points, size):
                    or not 0 <= p[0] <= width - 1 or not 0 <= p[1] <= height - 1
                    for p in points)):
         raise ValueError('发丝区域模型需要最多八个有效的原像素参照点')
+    exclusions = [] if exclusions is None else exclusions
+    if (not isinstance(exclusions, list) or len(exclusions) > 3
+            or any(not isinstance(p, list) or len(p) != 3 or type(p[2]) is not int or p[2] != 0
+                   or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                          or not math.isfinite(v) for v in p[:2])
+                   or not 0 <= p[0] <= width - 1 or not 0 <= p[1] <= height - 1
+                   for p in exclusions)):
+        raise ValueError('内部部位参照需要最多三个有效的原像素排除点')
     # Author's distinct unknown embedding, not a hard foreground prompt.
     entries = [[x * 1024 / width, y * 1024 / height, 4 if role == 2 else role]
-               for x, y, role in points] or [[-1, -1, -1]]
+               for x, y, role in points + exclusions] or [[-1, -1, -1]]
     coordinates = np.array([[0, 0], [1024, 1024]] + [p[:2] for p in entries],
                            np.float32)[None]
     labels = np.array([2, 3] + [p[2] for p in entries], np.int64)[None]
@@ -45,10 +53,10 @@ def native_trimap(probabilities, size):
 
 
 class LearnedTrimap:
-    def predict(self, image, points, *, progress=None):
+    def predict(self, image, points, *, progress=None, exclusions=None):
         if image.mode != 'RGB' or image.width * image.height > 1600 * 1600:
             raise ValueError('发丝区域模型需要不超过 256 万像素的局部原图')
-        coordinates, labels = prompts(points, image.size)
+        coordinates, labels = prompts(points, image.size, exclusions=exclusions)
         if progress: progress(phase='hair_uncertainty')
         from ..segmentation.runtime import prepare_runtime
         prepare_runtime()
