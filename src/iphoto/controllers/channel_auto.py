@@ -228,8 +228,10 @@ def points_ready(e, result, context, generation):
                                   'keep_candidates':state['keep_candidates'],'windows':result['windows']}
         if 'strand_candidates' in result:
             state['point_workspace']['strand_candidates']=deepcopy(result['strand_candidates'])
+        if 'strand_structures' in result:
+            state['point_workspace']['strand_structures']=deepcopy(result['strand_structures'])
         images=[{'label':item['label'],'url':image_data_url(item['path'])} for item in result['images']]
-        e._status='4/4 AI 正在放大核对发丝落点，检查是否误点背景…可取消'
+        e._status='4/4 AI 正在核对细丝走向和背景误选…可取消'
         e.changed.emit()
         e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,
                   'matte_points',{**state['point_workspace'],'review_images':images})

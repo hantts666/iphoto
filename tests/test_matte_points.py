@@ -97,12 +97,29 @@ def test_thin_source_candidates_have_no_opacity_and_respect_native_scope():
     assert propose(source,core,frame,points[:2],bounds)==[]
 
 
+@pytest.mark.parametrize('color',[(190,200,150),(80,110,190)])
+def test_misplaced_t_window_cannot_hide_a_true_structure_in_the_same_core(color):
+    from PIL import ImageDraw
+    from iphoto.matting.strand_candidates import propose
+    from iphoto.matte_review import point_window
+    source=Image.new('RGB',(900,900),(80,110,70));drawing=ImageDraw.Draw(source)
+    drawing.arc((600,400,700,520),0,340,fill=color,width=4)
+    core=[250,250,762,762];frame=point_frame(core,source.size);bounds=point_bounds(core,frame)
+    points=[[100,500,1],[700,700,0],[300,500,2]]
+    window,_=point_window(source.size,frame,points[-1]);assert window[2]<600
+    offered=propose(source,core,frame,points,bounds);assert offered and len(offered)<=16
+    native=[(frame[0]+round(x/999*703),frame[1]+round(y/999*703)) for x,y in offered]
+    assert any(x>window[2] and source.getpixel((x,y))==color for x,y in native)
+    assert all(bounds[0]<=x<=bounds[2] and bounds[1]<=y<=bounds[3] for x,y in offered)
+    assert propose(source,core,frame,points,bounds)==offered
+
+
 def test_point_evidence_is_original_rgb_with_unpainted_centers_and_bounded_context(tmp_path):
     y,x=np.indices((900,1000));source=Image.fromarray(np.stack((x%251,y%251,(x+y)%251),axis=-1).astype(np.uint8))
     original=source.tobytes();core=[250,200,762,712];frame=point_frame(core,source.size)
     patch={'edge':1,'radius':36,'points':[[100,500,1],[700,700,0],[600,250,2]]};snapshot=deepcopy(patch)
     result=render_points(source,[patch],[core],tmp_path,1,context_points=True)
-    assert len(result['images'])==2 and result['point_bounds']=={'1':point_bounds(core,frame)}
+    assert len(result['images'])==2+(len(result['strand_candidates']['1'])+7)//8+bool(result['strand_candidates']['1']) and result['point_bounds']=={'1':point_bounds(core,frame)}
     native=Image.open(result['images'][0]['path']);zoom=Image.open(result['images'][1]['path'])
     assert native.size==(704,704) and zoom.size==(512,512)
     window=result['windows'][0];assert window['coordinate']==[600,250] and window['source_box'][2]-window['source_box'][0]==256
@@ -123,6 +140,73 @@ def test_point_evidence_is_original_rgb_with_unpainted_centers_and_bounded_conte
     for boxes in ([[250,200,763,712]],[[250,200,1001,712]],[[250.,200,762,712]]):
         with pytest.raises(ValueError):render_points(source,[patch],boxes,tmp_path,2,context_points=True)
     with pytest.raises(ValueError):render_points(source,[patch],[core],tmp_path,2,context_points='true')
+
+
+def test_channel_structure_evidence_keeps_native_geometry_and_original_center():
+    from PIL import ImageDraw
+    from iphoto.matting.strand_structures import render_structures
+    source=Image.new('RGB',(900,900),(80,110,70));drawing=ImageDraw.Draw(source)
+    # A known curved filament and a long stripe intentionally clipped by the
+    # native core. Both are merely features; the latter could be clothing.
+    drawing.arc((450,380,570,520),20,340,fill=(190,200,150),width=4)
+    drawing.line((350,200,350,800),fill=(10,20,10),width=4)
+    core=[250,250,762,762];frame=point_frame(core,source.size);original=source.tobytes()
+    locations=[(550,500),(350,460)]
+    assert source.getpixel(locations[0])==(190,200,150)
+    coordinates=[[round((x-frame[0])/703*999),round((y-frame[1])/703*999)] for x,y in locations]
+    records,sheets=render_structures(source,core,frame,coordinates);sheet=sheets[0]
+    assert sheet.size==(1024,276) and [r['coordinate'] for r in records]==coordinates
+    assert records[0]['features'] and any(f['polarity']=='bright' and not f['clipped'] for f in records[0]['features'])
+    assert records[1]['features'] and all(f['clipped'] for f in records[1]['features'])
+    for number,record in enumerate(records):
+        assert set(record)=={'candidate','coordinate','source_box','center_box','features'}
+        box=record['source_box'];assert box[2]-box[0]==256 and box[3]-box[1]==256
+        assert sheet.crop((number*512,20,number*512+256,276)).tobytes()==source.crop(box).tobytes()
+        center=source.crop(record['center_box']).resize((256,256),Image.Resampling.NEAREST)
+        assert sheets[-1].crop((number*256,20,number*256+256,276)).tobytes()==center.tobytes()
+        for feature in record['features']:
+            assert set(feature)=={'channel','polarity','threshold','source_box','pixels','clipped'}
+            assert core[0]<=feature['source_box'][0]<feature['source_box'][2]<=core[2]
+            assert core[1]<=feature['source_box'][1]<feature['source_box'][3]<=core[3]
+        x=frame[0]+round(coordinates[number][0]/999*703);y=frame[1]+round(coordinates[number][1]/999*703)
+        for dx,dy in ((-1,-1),(0,0),(1,1)):
+            assert sheet.getpixel((number*512+256+x-box[0]+dx,20+y-box[1]+dy))==source.getpixel((x+dx,y+dy))
+    assert source.tobytes()==original
+    assert render_structures(source,core,frame,[])==([],[])
+    flat=Image.new('RGB',source.size,(80,110,70))
+    records,_=render_structures(flat,core,frame,coordinates)
+    assert all(r['features']==[] for r in records)
+
+
+def test_native_structure_sheet_does_not_change_existing_candidate_identity(tmp_path):
+    from PIL import ImageDraw
+    from iphoto.matting.strand_candidates import propose
+    source=Image.new('RGB',(900,900),(80,110,70));drawing=ImageDraw.Draw(source)
+    drawing.arc((390,380,630,610),0,340,fill=(190,200,150),width=4)
+    core=[250,250,762,762];frame=point_frame(core,source.size);bounds=point_bounds(core,frame)
+    patch={'edge':1,'radius':36,'points':[[100,500,1],[750,730,0],[500,500,2]]}
+    expected=propose(source,core,frame,patch['points'],bounds);assert expected
+    result=render_points(source,[patch],[core],tmp_path,1,context_points=True)
+    assert result['strand_candidates']=={'1':expected}
+    assert [r['coordinate'] for r in result['strand_structures']['1']]==expected
+    sheet=Image.open(result['images'][-1]['path']);assert sheet.width==1024 and sheet.height<=1104
+    assert len(result['images'])==3+(len(expected)+7)//8
+    # C numbering and native Source registration must survive a sheet break;
+    # an otherwise plausible tile attached to the wrong C could misdirect AI.
+    for index,record in enumerate(result['strand_structures']['1']):
+        sheet=Image.open(result['images'][2+index//8]['path'])
+        x=index%2*512;y=(index%8)//2*276+20;box=record['source_box']
+        assert sheet.crop((x,y,x+box[2]-box[0],y+box[3]-box[1])).tobytes()==source.crop(box).tobytes()
+        centers=Image.open(result['images'][-1]['path']);x=index%4*256;y=index//4*276+20
+        original=source.crop(record['center_box']);size=(original.width*4,original.height*4)
+        assert centers.crop((x,y,x+size[0],y+size[1])).tobytes()==original.resize(size,Image.Resampling.NEAREST).tobytes()
+    # Extra evidence stays within the existing preflight request; it grants
+    # no permission for new coordinates or foreground opacity.
+    context={**workspace(),'corrections':[patch],'point_bounds':{'1':bounds},
+             'strand_candidates':result['strand_candidates'],'strand_structures':result['strand_structures']}
+    revised=deepcopy(context['corrections']);revised[0]['points'][-1]=[expected[0][0]+1,expected[0][1],2]
+    with pytest.raises(ValueError,match='同一原片候选'):
+        parse_points(completion({'status':'revise','summary':'偏移到图中附近坐标','corrections':revised}),context)
 
 
 @pytest.mark.parametrize('provider',['openai','qwen'])

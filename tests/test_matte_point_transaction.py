@@ -38,7 +38,8 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
         def server(payload):
             context=json.loads(payload['messages'][1]['content'][0]['text'])
             if context['mode']=='matte_points':
-                assert len([v for v in payload['messages'][1]['content'] if v['type']=='image_url'])==2
+                assert len([v for v in payload['messages'][1]['content'] if v['type']=='image_url'])==2+(len(context['strand_candidates']['1'])+7)//8+bool(context['strand_candidates']['1'])
+                assert [r['coordinate'] for r in context['strand_structures']['1']]==context['strand_candidates']['1']
                 if outcome in ('cancel','stale'):gate.wait(6)
                 corrections=deepcopy(context['corrections'])
                 if outcome=='revise':
@@ -66,6 +67,7 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                 assert captured['corrections']==(expected['corrections'] if outcome=='revise' else [patch])
                 assert captured['source_point_proposal']==[patch]
                 assert 'strand_candidates' in state['point_workspace']
+                assert 'strand_structures' in state['point_workspace']
                 assert state['point_workspace']['point_budget']==8
                 count=len(pixel_calls)
                 channel_auto.points_reviewed(editor,{'status':'keep','summary':'重复回调','corrections':[]})
