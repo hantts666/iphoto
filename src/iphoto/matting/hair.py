@@ -22,7 +22,8 @@ MAX_CONTEXT = 8_000_000
 
 
 class HairContext:
-    def __init__(self, image, original, *, portrait=None, parser=None, progress=None):
+    def __init__(self, image, original, *, portrait=None, parser=None, progress=None, learned=None):
+        self.learned = learned
         bounds = original.getbbox()
         if bounds is None or original.getextrema() == (255,255):
             raise ValueError('请先定位人物头发，再涂抹需要修正的发丝边缘')
@@ -87,35 +88,57 @@ class HairContext:
         def report(phase):
             if progress: progress(phase=phase)
             return lambda tile,tiles: progress(tile,tiles,phase=phase) if progress else None
-        parent, outer_tiles = neural.solve(crop,trimap,engine=engine,progress=report('hair_outer'))
+        learned_detail = {}
+        if self.learned is None:
+            parent, outer_tiles = neural.solve(crop,trimap,engine=engine,progress=report('hair_outer'))
+        else:
+            native_points = [[int(x), int(y), int(label)] for (y,x),label in anchors.items()]
+            trimap, learned_detail = self.learned.predict(crop,native_points,progress=progress)
+            if (not isinstance(trimap,np.ndarray) or trimap.dtype!=np.uint8
+                    or trimap.shape!=prior.shape or not np.isin(trimap,[0,128,255]).all()):
+                raise ValueError('AI 发丝区域无效，原范围保留')
+            trimap = trimap.copy()
+            parent, outer_tiles = coarse, 0
         target = (prior>127) if semantic is None else np.asarray(semantic,dtype=bool)
         hard = (target & (labels==17)).astype(np.uint8)
         inside = cv2.distanceTransform(np.pad(hard,1),cv2.DIST_L2,5)[1:-1,1:-1]
-        trimap = np.full(prior.shape,128,np.uint8)
-        trimap[(inside>32)&(parent>250)] = 255
+        if self.learned is None:
+            trimap = np.full(prior.shape,128,np.uint8)
+            trimap[(inside>32)&(parent>250)] = 255
         nonhair = np.isin(labels,tuple(range(1,17))+(18,)).astype(np.uint8)
         protected = cv2.erode(nonhair,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(33,33)))>0
-        trimap[protected | (parent==0) | ((labels==0)&(parent>245))] = 0
-        # A reviewed semantic correction must also exclude false transparent
-        # background. Its native uncertainty band retains nearby wisps; the
-        # portrait model cannot reopen an explicitly excluded region outside it.
+        if self.learned is not None: protected = nonhair>0
+        trimap[protected | ((labels==0)&(parent>245))] = 0
+        if self.learned is None: trimap[parent==0] = 0
+        # The original strategy bounds uncertainty by semantic distance.
+        # Learned uncertainty replaces that binary boundary, not explicit N
+        # observations or head-part protection. Both keep exact edit scopes.
         if semantic is not None:
             if type(semantic_radius) is not int or not 12<=semantic_radius<=48:
                 raise ValueError('发丝纠错边缘宽度无效，原范围保留')
-            outside = cv2.distanceTransform((~target).astype(np.uint8),cv2.DIST_L2,5)
-            trimap[outside>(semantic_radius if semantic_band is None else semantic_band)] = 0
+            width = semantic_radius if semantic_band is None else semantic_band
+            if self.learned is None:
+                outside = cv2.distanceTransform((~target).astype(np.uint8),cv2.DIST_L2,5)
+                trimap[outside>width] = 0
+            else:
+                # A binary semantic boundary is not a background observation.
+                # Preserve the model's learned uncertainty and fine foreground;
+                # the requested band still protects known opaque hair interiors.
+                trimap[(inside>width)&(prior>=245)&(labels==17)] = 255
+                learned_detail['trimap_policy']='learned_uncertainty_with_nonhair_protection'
         for (y,x),label in anchors.items():
-            if label==1 and parent[y,x]<128:
+            if label==1 and self.learned is None and parent[y,x]<128:
                 raise ValueError('保留点不能确认为不透明头发，原范围保留')
             radius = 8 if label==1 else 2
             trimap[(xx-x)**2+(yy-y)**2<=radius**2] = 128 if label==2 else 255 if label else 0
         if (trimap==255).sum()<16 or (trimap==0).sum()<16:
             raise ValueError('附近缺少可靠的头发或背景，请保留部分内部参照')
         pixels, split_tiles = neural.solve(crop,trimap,engine=engine,progress=report('hair_split'))
-        pixels = np.minimum(pixels,parent)
+        if self.learned is None: pixels = np.minimum(pixels,parent)
+        else: pixels[protected] = 0
         for (y,x),label in anchors.items():
             if label!=2:pixels[y,x] = 255 if label else 0
-        return pixels, {'outer_tiles':outer_tiles,'split_tiles':split_tiles,
+        return pixels, {**learned_detail,'outer_tiles':outer_tiles,'split_tiles':split_tiles,
                         'unknown_pixels':int((trimap==128).sum()),'tiles':outer_tiles+split_tiles}
 
 

@@ -44,9 +44,15 @@ def main():
                     mask,quality=refine_edges(source.image,mask,progress=channel_progress)
             elif method=='correction':
                 from .correction import correct
+                learned = None
+                if request.get('hair',False):
+                    from .learned_models import available as learned_available
+                    if learned_available():
+                        from .learned import LearnedTrimap
+                        learned = LearnedTrimap()
                 mask,quality=correct(source.image,mask,request['corrections'],request['review_boxes'],progress=channel_progress,
                                      hair=request.get('hair',False),context_points=request.get('context_points',False),
-                                     source_point_proposal=request.get('source_point_proposal'))
+                                     source_point_proposal=request.get('source_point_proposal'),learned=learned)
             else:
                 mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress)
         elif method == "neural":

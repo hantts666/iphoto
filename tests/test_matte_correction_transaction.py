@@ -16,7 +16,7 @@ from test_editor import settled
 from test_matte_correction import scene
 
 
-@pytest.mark.parametrize('outcome',['accept','reject','cancel','stale','failure','again'])
+@pytest.mark.parametrize('outcome',['accept','reject','cancel','stale','failure','again','invalid_final'])
 def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_path,monkeypatch,outcome):
     image,mask,_=scene();path=tmp_path/'hair.png';image.save(path)
     monkeypatch.setattr('iphoto.segmentation.precise_sam.available',lambda:True)
@@ -43,6 +43,9 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
                 exclude=context['exclude_candidates'][str(edge)][0]
                 return completion({'status':'revise','summary':'局部背景误选',
                                    'corrections':[{'edge':edge,'radius':24,'points':[[*keep,1],[*exclude,0]]}]})
+            if outcome=='invalid_final':
+                return {'choices':[{'finish_reason':'stop','message':{
+                    'content':'复查仍有卷曲细丝缺失，需再补选；本次未返回结构化判断。'}}]}
             return completion({'status':'accept' if outcome=='accept' else 'reject',
                                'summary':'第二次检查实际输出','corrections':[]})
         with mock_api(server) as (endpoint,requests):
@@ -70,5 +73,5 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
         else:
             assert editor._layers==original and editor._cursor==cursor
         assert editor._candidate is None and not editor.aiChannelPreparing
-        assert len(requests)==(4 if outcome=='again' else 3 if outcome in ('accept','reject') else 2)
+        assert len(requests)==(3 if outcome in ('accept','reject','again','invalid_final') else 2)
     finally:editor.close()

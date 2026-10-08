@@ -2,12 +2,11 @@
 
 Research command only. Writes diagnostic crops, alpha and composites to the
 chosen output directory; does not apply a selection or modify an editor project.
-Model exports remain optional local data, outside the application model registry.
+Uses the same audited exports and prompt contract as AI hair correction.
 """
 import argparse
 from hashlib import sha256
 import json
-import math
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -18,63 +17,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-FILES = {
-    'encoder': ('mattepro-encoder.onnx', 855337074,
-                '225dcbbaafc6cc0683cb0e1a0e2307da0353270d91f95a4473ea361792d09b83'),
-    'decoder': ('mattepro-decoder.onnx', 17694526,
-                'b9156bc68139f50e6913623aee6fef18ee75916df5bccc763084567505c55439'),
-}
-
-
-def verified_path(directory, kind):
-    name, size, digest = FILES[kind]
-    path = directory / name
-    if not path.is_file() or path.stat().st_size != size:
-        raise ValueError('Learned trimap export missing or incomplete: ' + name)
-    hasher = sha256()
-    with path.open('rb') as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b''):
-            hasher.update(block)
-    if hasher.hexdigest() != digest:
-        raise ValueError('Unverified learned trimap export: ' + name)
-    return path
-
-
-def prompts(points, size):
-    """Native crop coordinates: 0 background, 1 foreground, 2 unknown identity.
-
-    Unknown prompts use the author's distinct embedding 4. They are not hard
-    foreground anchors. Preserve the number of tokens; duplicated padding
-    embeddings would change attention and the predicted uncertainty region.
-    """
-    width, height = size
-    if (not isinstance(points, list) or len(points) > 8
-            or any(not isinstance(p, list) or len(p) != 3
-                   or any(isinstance(v, bool) or not isinstance(v, (int, float))
-                          or not math.isfinite(v) for v in p[:2])
-                   or type(p[2]) is not int or p[2] not in (0, 1, 2)
-                   or not 0 <= p[0] <= width - 1 or not 0 <= p[1] <= height - 1
-                   for p in points)):
-        raise ValueError('At most eight native foreground/background/unknown points required')
-    entries = [[x * 1024 / width, y * 1024 / height, 4 if role == 2 else role]
-               for x, y, role in points] or [[-1, -1, -1]]
-    coordinates = np.array([[0, 0], [1024, 1024]] + [p[:2] for p in entries],
-                           np.float32)[None]
-    labels = np.array([2, 3] + [p[2] for p in entries], np.int64)[None]
-    return coordinates, labels
-
-
-def native_trimap(probabilities, size):
-    """Upsample class probabilities before deciding classes, as the author does."""
-    if (not isinstance(probabilities, np.ndarray) or probabilities.dtype != np.float32
-            or probabilities.shape != (1, 3, 256, 256)
-            or not np.isfinite(probabilities).all()
-            or probabilities.min() < -1e-6 or probabilities.max() > 1 + 1e-6
-            or np.max(np.abs(probabilities.sum(axis=1) - 1)) > 1e-4):
-        raise ValueError('Invalid learned trimap class probabilities')
-    scaled = cv2.resize(probabilities[0].transpose(1, 2, 0), size,
-                        interpolation=cv2.INTER_LINEAR)
-    return np.minimum(scaled.argmax(axis=2) * 128, 255).astype(np.uint8)
+from iphoto.matting.learned_models import FILES, verified_path
+from iphoto.matting.learned import prompts, native_trimap
 
 
 def main():

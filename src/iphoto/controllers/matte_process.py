@@ -106,6 +106,7 @@ def _progress(self, active, progress):
                    'hair_partition':'AI 正在区分头发、帽子、皮肤与衣物…可取消',
                    'hair_outer':'AI 正在恢复原像素发丝外缘',
                    'hair_split':'AI 正在排除非头发内容并细化透明度'}
+    hair_phases['hair_uncertainty']='AI 正在识别细丝与待判断的透明区域…可取消'
     phase = progress.get('phase')
     if phase=='hair_region' and active.get('method')=='hair':
         region,regions=progress.get('region'),progress.get('regions')

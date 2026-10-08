@@ -30,7 +30,7 @@ def _groups(corrections, boxes):
     return [[patch] for patch in ordered]
 
 
-def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None, context_points=False, source_point_proposal=None):
+def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progress=None, hair=False, hair_context=None, context_points=False, source_point_proposal=None, learned=None):
     started=perf_counter()
     if type(hair) is not bool:
         raise ValueError('局部发丝纠错方法无效')
@@ -128,7 +128,7 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         if hair:
             if hair_context is None:
                 from .hair import HairContext
-                hair_context=HairContext(image,original,progress=progress)
+                hair_context=HairContext(image,original,progress=progress,learned=learned)
             global_points=[[(box[0]+float(x))/max(1,image.width-1),
                             (box[1]+float(y))/max(1,image.height-1),int(label)] for (x,y),label in zip(coords,labels)]
             pixels,detail=hair_context.solve(image,previous,box,semantic=hard,semantic_radius=group_radius,
@@ -150,7 +150,8 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
         changed=scope & (joined!=previous)
         output[box[1]:box[3],box[0]:box[2]][changed]=joined[changed]
         warnings.extend(quality['warnings'])
-        solves.append({'edges':[patch['edge'] for patch in group],'box':box,'tiles':tiles,'changed_pixels':int(changed.sum())})
+        solves.append({'edges':[patch['edge'] for patch in group],'box':box,'tiles':tiles,'changed_pixels':int(changed.sum()),
+                       **({key:value for key,value in detail.items() if key.startswith('trimap_')} if hair else {})})
         for member,(patch,core,frame,start,end) in enumerate(members):
             local=changed[core[1]-box[1]:core[3]-box[1],core[0]-box[0]:core[2]-box[0]]
             records.append({'edge':patch['edge'],'box':core,'changed_pixels':int(local.sum()),
@@ -166,7 +167,9 @@ def correct(image, mask, corrections, boxes, *, semantic=None, matte=None, progr
     result=copy_metadata(mask, empty_mask())
     result.update(label=mask['label'],bitmap=encode_bitmap(Image.fromarray(output),sampling='alpha',preserve_resolution=True))
     if matte.fallback:warnings.append(matte.fallback)
-    return validate_mask(result),{'backend':'SAM2.1 Small + MODNet + BiSeNet + ViTMatte-S' if hair else 'SAM2.1 Small + ViTMatte-S',
+    learned_used=any(solve.get('trimap_backend') for solve in solves)
+    return validate_mask(result),{'backend':('SAM2.1 Small + MattePro + MODNet + BiSeNet + ViTMatte-S' if learned_used else 'SAM2.1 Small + MODNet + BiSeNet + ViTMatte-S') if hair else 'SAM2.1 Small + ViTMatte-S',
+                                 'learned_trimap':learned_used,
                                  'hair_matting':hair,'provider':matte.provider,'corrections':records,'solver_groups':solves,
                                  'tiles':sum(solve['tiles'] for solve in solves),'changed_pixels':sum(solve['changed_pixels'] for solve in solves),
                                  'elapsed_ms':round((perf_counter()-started)*1000,1),'warnings':warnings}

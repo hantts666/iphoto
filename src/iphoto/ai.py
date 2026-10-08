@@ -492,6 +492,11 @@ class AIController(QObject):
             self.changed.emit()
 
     def _retry_invalid_result(self, context, reason):
+        # A second visual opinion on an unchanged final cutout is not a
+        # format repair. Do not turn an invalid final verdict into acceptance
+        # by asking the reviewer to judge the same pixels again.
+        if context['mode']=='matte_review' and context['workspace'].get('revision')==1:
+            return False
         if (
             context["testing"]
             or context["mode"] not in {"matte_points", "matte_review", "photo_review", "auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate", "mask_restore_validate", "mask_reselect_validate"}

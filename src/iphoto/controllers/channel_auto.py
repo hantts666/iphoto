@@ -190,6 +190,8 @@ def reviewed(e, review):
             detail += ' · AI 已按实际效果纠错并复查'
             if quality['correction'].get('hair_matting'):
                 detail += ' · 人像外缘与头发分区'
+            if quality['correction'].get('learned_trimap'):
+                detail += ' · AI 细丝区域预测'
         if quality['warnings']:
             detail += ' · ' + '；'.join(quality['warnings'])
         e._selection_quality = detail
