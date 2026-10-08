@@ -1,4 +1,4 @@
-"""Fixed native tiles with a bounded ONNX session, RGB and an explicit trimap.
+"""Native windows with a bounded ONNX session, RGB and an explicit trimap.
 
 This model estimates alpha; it cannot infer missing semantic constraints.
 Only the unknown pixels are changed. Photo data is never modified.
@@ -12,6 +12,7 @@ from PIL import Image
 from ..segmentation.runtime import prepare_runtime
 from .models import verified_path
 from .metadata import copy_metadata
+from .windows import context_box
 
 TILE = 512
 STRIDE = 384
@@ -81,7 +82,9 @@ def backend():
 def solve(image, trimap, *, engine=None, progress=None):
     """0/128/255 constraints; tiles are original pixels, never resized.
 
-    Halo context is retained from the original image. Padding occurs only
+    Windows missing a reliable known class can move within the 640px budget
+    while retaining every unknown core pixel. All context is original pixels.
+    Padding occurs only
     outside the image and matches the official processor's zero padding.
     Final core pixels never come from this padding.
     """
@@ -113,15 +116,18 @@ def solve(image, trimap, *, engine=None, progress=None):
         if perf_counter() - started > 180:
             raise ValueError("细节细化超时，原选区保留；请缩小范围")
         x1, y1 = min(x + TILE, image.width), min(y + TILE, image.height)
-        left, top = max(0, x-HALO), max(0, y-HALO)
-        right, bottom = min(image.width, x1+HALO), min(image.height, y1+HALO)
+        active = unknown[y:y1, x:x1]
+        rows, columns = np.nonzero(active)
+        unknown_box = (x+int(columns.min()), y+int(rows.min()),
+                       x+int(columns.max())+1, y+int(rows.max())+1)
+        left, top, right, bottom = context_box(trimap, (x, y, x1, y1), unknown_box,
+                                              limit=INPUT, halo=HALO)
         height, width = bottom-top, right-left
         pixels = np.zeros((1, 4, INPUT, INPUT), np.float32)
         rgb = np.asarray(image.crop((left, top, right, bottom)).convert("RGB"), np.float32)
         pixels[0, :3, :height, :width] = (rgb / 127.5 - 1).transpose(2, 0, 1)
         pixels[0, 3, :height, :width] = trimap[top:bottom, left:right] / 255
-        alpha = engine.predict(pixels)[y-top:y1-top, x-left:x1-left]
-        active = unknown[y:y1, x:x1]
+        alpha = engine.predict(pixels)
         wx,wy = np.ones(x1-x,np.float32),np.ones(y1-y,np.float32)
         if x>0:
             wx[:min(overlap,len(wx))] *= ramp[:min(overlap,len(wx))]
@@ -131,11 +137,12 @@ def solve(image, trimap, *, engine=None, progress=None):
             wy[:min(overlap,len(wy))] *= ramp[:min(overlap,len(wy))]
         if y1<image.height:
             wy[-overlap:] *= ramp[::-1]
-        weights = wy[:,None]*wx[None,:]
-        rows,columns = np.nonzero(active)
+        weights = wy[rows]*wx[columns]
         positions = np.searchsorted(indices,(rows+y)*image.width+columns+x)
-        total[positions] += alpha[active]*weights[active]
-        mass[positions] += weights[active]
+        # A moved window may omit known core pixels. Gather only the unknown
+        # source coordinates; slicing the whole core could wrap negative offsets.
+        total[positions] += alpha[rows+y-top, columns+x-left]*weights
+        mass[positions] += weights
         if progress is not None:
             progress(index,len(cores))
     output.ravel()[indices] = np.rint(total/np.maximum(mass,1e-8)*255).astype(np.uint8)
