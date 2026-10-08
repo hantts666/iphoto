@@ -16,7 +16,7 @@ from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
 from .photo_strategy import DEVELOP_PROMPT, REVIEW_PROMPT as PHOTO_REVIEW_PROMPT, REVIEW_SCHEMA as PHOTO_REVIEW_SCHEMA
-from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
+from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, FINAL_PROMPT as MATTE_FINAL_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
 from .matte_points import PROMPT as MATTE_POINTS_PROMPT, SCHEMA as MATTE_POINTS_SCHEMA
 from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT, RESTORATION_PROMPT, RESELECTION_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
@@ -204,6 +204,14 @@ def build_payload(
     selection_image = context.pop("selection_image", None)
     selection_overlay = context.pop("selection_overlay", None)
     context.pop("_validation_feedback", None)
+    final_matte_review = (mode == 'matte_review' and type(context.get('revision')) is int
+                          and context['revision'] == 1 and context.get('correction_available') is False)
+    if final_matte_review:
+        # Final inspection has no point-planning task. The parser still keeps
+        # its original workspace and forbids a second correction.
+        context = {key: value for key, value in context.items() if key in (
+            'request', 'mode', 'target', 'revision', 'correction_available',
+            'edge_count', 'correction_method', 'strand_detail_count')}
     if selection_image is None:
         context.pop("mask_image_note", None)
     if mode in ("selection", "scene", "regions", "repair"):
@@ -242,7 +250,7 @@ def build_payload(
                 "content": {
                     "auto": AUTO_PROMPT,
                     "photo_review": PHOTO_REVIEW_PROMPT,
-                    "matte_review": MATTE_REVIEW_PROMPT,
+                    "matte_review": MATTE_FINAL_PROMPT if final_matte_review else MATTE_REVIEW_PROMPT,
                     "matte_points": MATTE_POINTS_PROMPT,
                     "selection": SELECTION_PROMPT,
                     "regions": REGION_PROMPT,

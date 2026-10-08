@@ -195,6 +195,7 @@ def test_context_anchors_reach_opaque_hair_without_expanding_reviewed_pixels(tmp
     native=Image.open(next(item['path'] for item in result['images'] if '-source-0' in item['path']))
     assert native.tobytes()==source.crop(core).tobytes() and native.size==(512,512)
     assert len(result['review_images'])==5 and (source.tobytes(),mask)==before
+    assert result['strand_detail_count']==0
 
 
 def test_context_coordinates_require_hair_capability_and_keep_edit_points_inside():
@@ -214,7 +215,7 @@ def test_context_coordinates_require_hair_capability_and_keep_edit_points_inside
     with pytest.raises(ValueError,match='不透明参照'):parse_review(completion(wrong),context)
 
 
-def test_verified_strand_quality_window_matches_original_and_actual_alpha_output(tmp_path):
+def test_verified_strand_quality_window_matches_original_and_actual_alpha_output(tmp_path,monkeypatch):
     from iphoto.document import render_layers
     from iphoto.cutout import compose_cutout
     from iphoto.matte_review import point_frame,point_window
@@ -227,12 +228,30 @@ def test_verified_strand_quality_window_matches_original_and_actual_alpha_output
     frame=point_frame(core,source.size);box,_=point_window(source.size,frame,patch['points'][-1]);size=(512,512)
     item=next(item for item in result['review_images'] if '发丝参照T3局部质量' in item['label'])
     panel=Image.open(item['path']);assert panel.size==(1024,1072) and len(result['review_images'])==6
+    assert result['strand_detail_count']==1
     assert panel.crop((0,24,512,536)).tobytes()==source.crop(box).resize(size,Image.Resampling.NEAREST).tobytes()
     expected_alpha=Image.fromarray(a).crop(box).convert('RGB').resize(size,Image.Resampling.NEAREST)
     assert panel.crop((512,24,1024,536)).tobytes()==expected_alpha.tobytes()
     composed=compose_cutout(render_layers(source,[layer]),Image.fromarray(a))
     white=Image.alpha_composite(Image.new('RGBA',(256,256),'white'),composed.crop(box)).convert('RGB').resize(size,Image.Resampling.NEAREST)
     assert panel.crop((0,560,512,1072)).tobytes()==white.tobytes()
+    monkeypatch.setattr('iphoto.matte_review.keep_candidates',lambda *args:pytest.fail('最终复查不应重新找P'))
+    monkeypatch.setattr('iphoto.matte_review.exclude_candidates',lambda *args:pytest.fail('最终复查不应重新找N'))
+    final=render_review(source,[layer],mask,tmp_path,7,[core],target_context=True,detail_points=[patch],final_review=True)
+    assert len(final['review_images'])==5
+    assert '发丝参照T3局部质量' in final['review_images'][2]['label']
+    assert '四格质量对照' in final['review_images'][3]['label']
+    assert final['review_images'][-1]['label']=='候选整体紫色棋盘格'
+    assert all('定位图（' not in entry['label'] for entry in final['review_images'])
+    for entry in final['review_images']:
+        original_entry=(result['review_images'][1] if '上下文' in entry['label'] else
+                        next(v for v in result['review_images'] if v['label']==entry['label']))
+        assert Image.open(entry['path']).tobytes()==Image.open(original_entry['path']).tobytes()
+    assert final['boxes']==result['boxes'] and final['point_bounds']==result['point_bounds']
+    assert final['keep_candidates']=={'1':[]} and final['exclude_candidates']=={'1':[]}
+    assert all('-locate-' not in entry['path'] for entry in final['images'])
+    with pytest.raises(ValueError,match='最终检查选项无效'):
+        render_review(source,[layer],mask,tmp_path,8,[core],final_review=1)
     assert source.tobytes()==original
     with pytest.raises(ValueError,match='缺少头发上下文'):
         render_review(source,[layer],mask,tmp_path,6,[core],detail_points=[patch])
@@ -271,3 +290,45 @@ def test_tested_qwen_review_has_bounded_reasoning_without_incompatible_json_mode
     assert ordinary['enable_thinking'] is False and 'thinking_budget' not in ordinary and 'response_format' in ordinary
     older=AISettings.validated('qwen','https://example.com/v1','qwen-vl-max')
     assert build_payload(older,'修图',Recipe().to_dict(),[],'unused','matte_review',{})['enable_thinking'] is False
+
+
+@pytest.mark.parametrize('provider',['qwen','qianwen','qianwen_token_plan'])
+def test_final_source_detail_review_is_focused_with_the_existing_bounded_budget(provider):
+    url=('https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
+         if provider=='qianwen_token_plan' else 'https://example.com/v1')
+    settings=AISettings.validated(provider,url,'qwen3.8-max')
+    context={'correction_method':'hair','context_points':True,'strand_detail_count':1,
+             'revision':1,'correction_available':False,'target':'头发','keep_candidates':{'1':[[500,500]]},
+             'point_bounds':{'1':[200,200,800,800]},'point_budget':8,'previous_check':'不能借用旧结论'}
+    body=build_payload(settings,'核对原片细丝',Recipe().to_dict(),[],'unused','matte_review',context)
+    assert body['enable_thinking'] is True and body['thinking_budget']==512
+    assert body['max_tokens']==4096
+    assert 'response_format' not in body and 'reasoning_effort' not in body
+    assert body['messages'][1]['content'][0]['type']=='text'
+    sent=json.loads(body['messages'][1]['content'][0]['text'])
+    assert sent=={'request':'核对原片细丝','mode':'matte_review','target':'头发',
+                  'revision':1,'correction_available':False,'correction_method':'hair','strand_detail_count':1}
+    assert '不能再提供取点或工具计划' in body['messages'][0]['content']
+
+
+@pytest.mark.parametrize('change',[{'revision':0,'correction_available':True},{'revision':True},
+    {'revision':'1'},{'revision':1.,'correction_available':False},{'correction_available':0},
+    {'correction_available':True}])
+def test_only_actual_final_review_removes_point_planning_instructions(change):
+    settings=AISettings.validated('openai','https://example.com/v1','vision')
+    context={'revision':1,'correction_available':False,'keep_candidates':{'1':[[500,500]]},**change}
+    body=build_payload(settings,'复查',Recipe().to_dict(),[],'unused','matte_review',context)
+    assert 'keep_candidates' in json.loads(body['messages'][1]['content'][0]['text'])
+    assert '不能再提供取点或工具计划' not in body['messages'][0]['content']
+
+
+@pytest.mark.parametrize('change',[{'strand_detail_count':0},{'strand_detail_count':True},
+    {'strand_detail_count':-1},{'strand_detail_count':5},{'strand_detail_count':'1'},
+    {'strand_detail_count':None},{'context_points':False},{'context_points':1},
+    {'correction_method':'semantic'}])
+def test_missing_or_invalid_source_detail_does_not_increase_remote_reasoning_cost(change):
+    settings=AISettings.validated('qwen','https://example.com/v1','qwen3.8-max')
+    context={'correction_method':'hair','context_points':True,'strand_detail_count':1,**change}
+    for mode in ('matte_review','matte_points'):
+        body=build_payload(settings,'核对',Recipe().to_dict(),[],'unused',mode,context)
+        assert body['thinking_budget']==512 and body['max_tokens']==4096

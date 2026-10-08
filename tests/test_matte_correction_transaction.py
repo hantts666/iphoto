@@ -34,16 +34,19 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
         editor._layer()['mask']=deepcopy(mask);editor._load_layer();editor._commit()
         original=deepcopy(editor._layers);cursor=editor._cursor
         def server(payload):
-            if '独立抠图质量检查员' not in payload['messages'][0]['content']:
-                return completion(plan())
             context=json.loads(payload['messages'][1]['content'][0]['text'])
+            if context.get('mode')!='matte_review':
+                return completion(plan())
             assert 'quality' not in context and 'previous_check' not in context
-            if context['revision']==0 or outcome=='again':
+            if context['revision']==0:
                 edge=next(int(key) for key,points in context['keep_candidates'].items() if points)
                 keep=context['keep_candidates'][str(edge)][0]
                 exclude=context['exclude_candidates'][str(edge)][0]
                 return completion({'status':'revise','summary':'局部背景误选',
                                    'corrections':[{'edge':edge,'radius':24,'points':[[*keep,1],[*exclude,0]]}]})
+            assert 'keep_candidates' not in context and 'point_bounds' not in context
+            if outcome=='again':
+                return completion({'status':'revise','summary':'要求非法的第二次纠错','corrections':captured['corrections']})
             if outcome=='invalid_final':
                 return {'choices':[{'finish_reason':'stop','message':{
                     'content':'复查仍有卷曲细丝缺失，需再补选；本次未返回结构化判断。'}}]}

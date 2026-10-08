@@ -8,7 +8,7 @@ import pytest
 from iphoto.controllers import channel_auto
 from iphoto.matte_review import point_bounds,point_frame
 from iphoto.workspace import Editor
-from test_ai import configure,mock_api,wait_for
+from test_ai import mock_api,wait_for
 from test_editor import settled
 from test_matte_correction import scene
 from test_matte_points import completion
@@ -38,6 +38,8 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
         def server(payload):
             context=json.loads(payload['messages'][1]['content'][0]['text'])
             if context['mode']=='matte_points':
+                assert payload['thinking_budget']==512 and payload['max_tokens']==4096
+                assert 'response_format' not in payload and 'reasoning_effort' not in payload
                 assert len([v for v in payload['messages'][1]['content'] if v['type']=='image_url'])==2+(len(context['strand_candidates']['1'])+7)//8+bool(context['strand_candidates']['1'])
                 assert [r['coordinate'] for r in context['strand_structures']['1']]==context['strand_candidates']['1']
                 if outcome in ('cancel','stale'):gate.wait(6)
@@ -51,9 +53,21 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                 return completion({'status':'revise' if outcome in ('revise','malformed') else 'reject' if outcome=='reject' else 'keep',
                                    'summary':'控制身份检查结果','corrections':corrections if outcome in ('revise','malformed') else []})
             assert context['mode']=='matte_review' and context['revision']==1
+            corrected=expected.get('corrections',[patch])
+            details=sum(point[2]==2 for item in corrected for point in item['points'])
+            assert context['strand_detail_count']==details
+            assert payload['thinking_budget']==512 and payload['max_tokens']==4096
+            assert editor.ai.timer.interval()==60_000
+            assert editor.ai._reply.request().transferTimeout()==editor.ai.timer.interval()
+            if details:
+                assert '原片发丝细节复查' in editor.ai.requestProgress and '可取消' in editor.ai.requestProgress
+            assert 'keep_candidates' not in context and 'point_bounds' not in context
+            assert '不能再提供取点或工具计划' in payload['messages'][0]['content']
+            assert all('定位图（' not in value['text'] for value in payload['messages'][1]['content'][1:] if value['type']=='text')
+            assert 'response_format' not in payload and 'reasoning_effort' not in payload
             return completion({'status':'accept','summary':'控制最终实际效果检查','corrections':[]})
         with mock_api(server,status=400 if outcome=='failure' else 200) as (endpoint,requests):
-            configure(editor.ai,endpoint)
+            assert editor.ai.save('qwen',endpoint,'qwen3.8-max','sk-test-only-not-a-real-key',False,True)
             channel_auto.reviewed(editor,{'status':'revise','summary':'控制首次效果检查','corrections':[patch]})
             assert state['revision']==0 and editor._layers==original and editor._cursor==cursor
             if outcome in ('cancel','stale'):

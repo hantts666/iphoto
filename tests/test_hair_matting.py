@@ -239,6 +239,7 @@ def test_strand_capability_and_correction_roles_survive_the_controller_boundary(
     monkeypatch.setattr(channel_auto,'image_data_url',lambda path:'image')
     result={'boxes':[[100,100,612,612]],'images':[{'path':'source.png'}],
             'context_points':True,'point_bounds':{'1':[195,195,805,805]},
+            'strand_detail_count':1,
             'review_images':[{'label':'原片','path':'source.png'}],
             'keep_candidates':{'1':[[700,800]]},'exclude_candidates':{'1':[[470,470]]}}
     state['result']['quality']={}
@@ -247,6 +248,8 @@ def test_strand_capability_and_correction_roles_survive_the_controller_boundary(
     assert plans[0][6]['context_points'] is hair
     assert plans[0][6]['point_bounds']==(result['point_bounds'] if hair else None)
     assert plans[0][6]['correction_method']==('hair' if hair else 'semantic')
+    assert plans[0][6]['strand_detail_count']==(1 if hair else 0)
+    assert ('卷曲' in editor._status) is hair
     editor._pending_request={'channel_auto':state}
     patch={'edge':1,'radius':24,'points':[[700,800,1],[470,470,0],[320,640,2]]}
     channel_auto.reviewed(editor,{'status':'revise','summary':'补细丝','corrections':[patch]})

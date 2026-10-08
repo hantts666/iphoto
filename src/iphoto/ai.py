@@ -106,6 +106,11 @@ class AIController(QObject):
                     'mask_restore_validate': '核对新增五官覆盖',
                     'mask_reselect_validate': '核对完整五官与范围变化',
                     "repair": "检查局部瑕疵"}.get(self._context["mode"], "AI 修图")
+            details = self._context['workspace'].get('strand_detail_count')
+            if (self._context['mode']=='matte_review'
+                    and self._context['workspace'].get('correction_method')=='hair'
+                    and type(details) is int and 1<=details<=4):
+                task = '4/4 原片发丝细节复查'
             phase = task + ("：正在接收 AI 回复" if self._context["body"] else "：请求已发送，等待 AI 回应")
         return f"{phase} · 已等待 {elapsed} 秒 · 可取消"
 

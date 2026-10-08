@@ -101,6 +101,7 @@ def complete(e, result, token):
         e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
         e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
                    target_context=bool(state.get('hair')),
+                   final_review=bool(state['revision']),
                    **({'detail_points':state['corrections']} if state['revision'] and state.get('corrections') and state.get('hair') else {}),
                    **({'review_boxes':state['review_boxes']} if state['revision'] else {}),
                    context={'token':token})
@@ -119,10 +120,13 @@ def review_ready(e, result, context, generation):
         state['context_points'] = bool(state.get('hair')) and result.get('context_points') is True
         state['point_bounds'] = deepcopy(result.get('point_bounds')) if state['context_points'] else None
         state['keep_candidates'] = deepcopy(result['keep_candidates'])
+        strand_details = result.get('strand_detail_count',0) if state['context_points'] else 0
         from ..segmentation.precise_sam import available
         state['correction_available'] = available() and bool(result['boxes']) and not state['revision']
         images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['review_images']]
         e._status = '4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消'
+        if type(strand_details) is int and 1<=strand_details<=4:
+            e._status = '4/4 AI 正在细查原片发丝的卷曲、分叉、灰雾和漏选…可取消'
         e.changed.emit()
         # Keep solver scores and prior verdicts on the local candidate. They
         # are not evidence that the pixels preserve the requested fine detail.
@@ -137,6 +141,7 @@ def review_ready(e, result, context, generation):
                                    'strand_points':bool(state.get('hair')),
                                    'point_budget':8 if state.get('hair') else 6,
                                    'context_points':state['context_points'],
+                                   'strand_detail_count':strand_details,
                                    'point_bounds':state['point_bounds'],
                                    'review_images':images})
     except (ValueError, KeyError, OSError) as exc:
