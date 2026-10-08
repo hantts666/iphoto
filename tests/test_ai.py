@@ -12,7 +12,6 @@ from uuid import uuid4
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtTest import QTest
 
@@ -151,6 +150,35 @@ def test_thumbnail_strips_metadata_and_limits_size(tmp_path):
     with Image.open(BytesIO(encoded)) as thumb:
         assert max(thumb.size) == 1280
         assert not thumb.getexif()
+
+
+def test_lossless_detail_transport_keeps_single_pixel_channels_and_alpha(tmp_path):
+    from PIL.PngImagePlugin import PngInfo
+    source=Image.new('RGBA',(256,29),(62,65,10,255))
+    # One-pixel lines and all alpha byte levels must survive the wire container.
+    for y in range(29):
+        source.putpixel((18,y),(94,90,43,255))
+    for x in range(256):
+        source.putpixel((x,14),(105,87,39,x))
+    metadata=PngInfo();metadata.add_text('author','private-name');metadata.add_text('path','private-path')
+    path=tmp_path/'private-detail.png';source.save(path,pnginfo=metadata)
+    encoded=image_data_url(path,lossless=True)
+    assert encoded.startswith('data:image/png;base64,')
+    raw=base64.b64decode(encoded.split(',',1)[1])
+    assert b'private-name' not in raw and b'private-path' not in raw
+    background=Image.new('RGBA',source.size,'white');background.alpha_composite(source)
+    with Image.open(BytesIO(raw)) as decoded:
+        assert decoded.size==source.size and not decoded.info and not decoded.getexif()
+        assert decoded.tobytes()==background.convert('RGB').tobytes()
+
+
+def test_lossless_detail_transport_does_not_silently_rescale_large_evidence(tmp_path):
+    path=tmp_path/'detail.png';Image.new('RGB',(1281,700)).save(path)
+    with pytest.raises(ValueError,match='原像素细节图超过1280px'):
+        image_data_url(path,lossless=True)
+    for invalid in (1,None,'true'):
+        with pytest.raises(ValueError,match='细节传输选项无效'):
+            image_data_url(path,lossless=invalid)
 
 
 def test_plan_validation_manual_lock_and_unsupported():

@@ -166,13 +166,19 @@ selection.ops 中的坐标是 0 到 1 的比例，左上角为原点；inverted 
 )
 
 
-def image_data_url(path=None, crop=None):
+def image_data_url(path=None, crop=None, *, lossless=False):
+    if type(lossless) is not bool:
+        raise ValueError('图像细节传输选项无效')
     if path:
         with Image.open(path) as original:
             picture = ImageOps.exif_transpose(original).convert("RGBA")
         if crop is not None:
             picture = picture.crop(crop_pixels(crop, picture.size))
-        picture.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
+        if lossless:
+            if max(picture.size) > 1280:
+                raise ValueError('原像素细节图超过1280px，请分区域检查')
+        else:
+            picture.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
         background = Image.new("RGBA", picture.size, "white")
         background.alpha_composite(picture)
         picture = background.convert("RGB")
@@ -181,9 +187,15 @@ def image_data_url(path=None, crop=None):
         draw = ImageDraw.Draw(picture)
         draw.rectangle((0, 0, 127, 255), fill=(60, 110, 170))
     output = BytesIO()
-    # A fresh JPEG contains no EXIF, GPS, filesystem name, or source metadata.
-    picture.save(output, format="JPEG", quality=85, exif=b"")
-    return "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode(
+    # Fresh containers carry no source metadata. Native matte evidence needs
+    # exact RGB/alpha samples: JPEG chroma pooling changes fine channel detail.
+    picture.info.clear()
+    if lossless:
+        picture.save(output, format='PNG', compress_level=3)
+    else:
+        picture.save(output, format="JPEG", quality=85, exif=b"")
+    mime = 'png' if lossless else 'jpeg'
+    return f"data:image/{mime};base64," + base64.b64encode(output.getvalue()).decode(
         "ascii"
     )
 

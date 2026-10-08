@@ -115,7 +115,7 @@ def render_points(source, corrections, boxes, directory, identity, *, context_po
     images=[];windows=[];candidates={};structures={}
     def save(picture,label,suffix):
         picture.info.clear();path=directory/f'matte-points-{identity}-{suffix}.png'
-        picture.save(path,compress_level=3);images.append({'label':label,'path':str(path)})
+        picture.save(path,compress_level=3);images.append({'label':label,'path':str(path),'lossless':True})
     def mark(draw,x,y,color):
         draw.ellipse((x-10,y-10,x+10,y+10),outline=color,width=2)
         for dx,dy in ((-1,0),(1,0),(0,-1),(0,1)):

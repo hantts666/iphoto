@@ -37,6 +37,11 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                                  'layer_snapshot':deepcopy(editor._layers),'channel_auto':state}
         def server(payload):
             context=json.loads(payload['messages'][1]['content'][0]['text'])
+            content=payload['messages'][1]['content'][1:]
+            for label,picture in zip(content[::2],content[1::2]):
+                url=picture['image_url']['url']
+                native=(context['mode']=='matte_points' or '质量对照' in label['text'] or '定位图（' in label['text'])
+                assert url.startswith('data:image/png;base64,' if native else 'data:image/jpeg;base64,')
             if context['mode']=='matte_points':
                 assert payload['thinking_budget']==512 and payload['max_tokens']==4096
                 assert 'response_format' not in payload and 'reasoning_effort' not in payload

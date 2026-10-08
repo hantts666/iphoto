@@ -247,6 +247,7 @@ def test_verified_strand_quality_window_matches_original_and_actual_alpha_output
         original_entry=(result['review_images'][1] if '上下文' in entry['label'] else
                         next(v for v in result['review_images'] if v['label']==entry['label']))
         assert Image.open(entry['path']).tobytes()==Image.open(original_entry['path']).tobytes()
+        assert entry['lossless']==('质量对照' in entry['label'])
     assert final['boxes']==result['boxes'] and final['point_bounds']==result['point_bounds']
     assert final['keep_candidates']=={'1':[]} and final['exclude_candidates']=={'1':[]}
     assert all('-locate-' not in entry['path'] for entry in final['images'])

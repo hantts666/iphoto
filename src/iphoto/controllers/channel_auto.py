@@ -123,7 +123,8 @@ def review_ready(e, result, context, generation):
         strand_details = result.get('strand_detail_count',0) if state['context_points'] else 0
         from ..segmentation.precise_sam import available
         state['correction_available'] = available() and bool(result['boxes']) and not state['revision']
-        images = [{'label':item['label'],'url':image_data_url(item['path'])} for item in result['review_images']]
+        images = [{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
+                  for item in result['review_images']]
         e._status = '4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消'
         if type(strand_details) is int and 1<=strand_details<=4:
             e._status = '4/4 AI 正在细查原片发丝的卷曲、分叉、灰雾和漏选…可取消'
@@ -238,7 +239,8 @@ def points_ready(e, result, context, generation):
             state['point_workspace']['strand_candidates']=deepcopy(result['strand_candidates'])
         if 'strand_structures' in result:
             state['point_workspace']['strand_structures']=deepcopy(result['strand_structures'])
-        images=[{'label':item['label'],'url':image_data_url(item['path'])} for item in result['images']]
+        images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
+                for item in result['images']]
         e._status='4/4 AI 正在核对细丝走向和背景误选…可取消'
         e.changed.emit()
         e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,

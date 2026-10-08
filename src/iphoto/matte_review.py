@@ -306,11 +306,11 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
     images=[]
     anchors={};bounds={};frames=[]
     exclusions={}
-    def save(image,label,suffix,review=False):
+    def save(image,label,suffix,review=False,lossless=False):
         image=image.convert('RGB');image.info.clear()
         path=directory/f'matte-check-{identity}-{suffix}.png'
         image.save(path,compress_level=3)
-        images.append({'label':label,'path':str(path),'review':review})
+        images.append({'label':label,'path':str(path),'review':review,'lossless':lossless})
     save(preview(source,1280),'原照片整体','source',True)
     context_image=None
     if target_context:
@@ -364,7 +364,7 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
                 draw.ellipse((x-8,y-8,x+8,y+8),outline=color,width=2)
                 draw.text((x+10,y-6),prefix+str(number),fill=color,stroke_width=1,stroke_fill='black')
         locating_label='全部纠错坐标相对此图0到999；蓝框内为四格Source及修改范围；蓝框外P仅作参照' if target_context else '坐标网格与候选保留点；实际细节看原照片'
-        save(locating,f'边缘{index+1}定位图（{locating_label}）','locate-'+str(index),True)
+        save(locating,f'边缘{index+1}定位图（{locating_label}）','locate-'+str(index),True,True)
     for background,label in (('white','白底'),('black','黑底')):
         composed=Image.alpha_composite(Image.new('RGBA',source.size,background),output)
         save(preview(composed,1280),'候选整体'+label,background)
@@ -382,7 +382,7 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
             x=(position%2)*width;y=(position//2)*(height+24)
             draw.text((x+6,y+6),label,fill='white')
             panel.paste(picture.convert('RGB'),(x,y+24))
-        save(panel,f'边缘{index+1}原像素四格质量对照（左上原片/右上透明度/左下白底/右下紫棋盘格）','panel-'+str(index),True)
+        save(panel,f'边缘{index+1}原像素四格质量对照（左上原片/右上透明度/左下白底/右下紫棋盘格）','panel-'+str(index),True,True)
     for patch in detail_points or []:
         frame=point_frame(boxes[patch['edge']-1],source.size)
         for number,point in enumerate(patch['points'],1):
@@ -398,7 +398,7 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
                 x=position%2*width*2;y=position//2*(height*2+24)
                 draw.text((x+6,y+6),label,fill='white')
                 panel.paste(picture.convert('RGB').resize((width*2,height*2),Image.Resampling.NEAREST),(x,y+24))
-            save(panel,f'边缘{patch["edge"]}发丝参照T{number}局部质量对照（原像素放大2倍；左上原片/右上透明度/左下白底/右下紫棋盘格；须核对卷曲、分叉及末端实际延续）',f'strand-panel-{patch["edge"]}-{number}',True)
+            save(panel,f'边缘{patch["edge"]}发丝参照T{number}局部质量对照（原像素放大2倍；左上原片/右上透明度/左下白底/右下紫棋盘格；须核对卷曲、分叉及末端实际延续）',f'strand-panel-{patch["edge"]}-{number}',True,True)
     # Whole composition without another full-size RGBA background allocation.
     compact=output.copy();compact.thumbnail((1280,1280),Image.Resampling.LANCZOS)
     y,x=np.indices((compact.height,compact.width));pattern=(x//20+y//20)%2
