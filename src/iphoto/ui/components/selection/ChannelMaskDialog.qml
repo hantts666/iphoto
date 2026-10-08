@@ -44,7 +44,7 @@ Dialog {
                 enabled: !root.editor.busy && !root.channel.loading && root.channel.previewUrl.length>0
                 onActivated: root.channel.setView(currentValue)
             }
-            Caption { text: root.config.ai===true ? "通道草图 · AI 细化效果在应用后查看" : "通道草图 · 应用后按原图计算"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
+            Caption { text: root.config.ai===true ? "原像素通道草图 · AI 细化在应用时执行" : root.config.color===true ? "原像素通道草图 · 应用时恢复前景颜色" : "原像素通道透明度预览"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
         }
         Caption { Layout.fillWidth: true; text: root.channel.note; wrapMode: Text.Wrap }
         RowLayout {

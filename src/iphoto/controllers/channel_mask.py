@@ -101,6 +101,7 @@ class ChannelMaskController(QObject):
         self._loading = False
         self._note = ('从整张照片建立范围：选择通道，调黑白场和灰度；白色保留、黑色移除、灰色半透明。'
                       if self._options.get('whole') else f"推荐 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else ''))
+        self._note += ' 预览按原像素通道计算后缩小显示。'
         if result.get('focused'):self._note='当前范围局部 · '+self._note
         self.changed.emit()
 

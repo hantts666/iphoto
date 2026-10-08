@@ -58,6 +58,7 @@ def main():
     current_overlay = previous_mask_key = None
     current_crop_assets = set()
     composition_cache = LayerPreviewCache()
+    channel_reference_cache = {}
     handlers = {}
 
     def register(name):
@@ -121,6 +122,7 @@ def main():
         # Commit only after decoding, project verification and preview writing succeed.
         source, proxy = next_source, next_proxy
         current_crop_assets = set()
+        channel_reference_cache.clear()
         composition_cache.clear()
         RASTER_CACHE.clear()
         clear_decode_cache()
@@ -336,21 +338,14 @@ def main():
     @register("channel_preview")
     def _channel_preview(request):
         nonlocal current_crop_assets
-        from .matting.channels import suggest, whole_options, preview as channel_preview
+        from PIL import Image
+        from .matting.channels import native_preview
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，通道预览未应用')
-        options = dict(request['options'])
+        alpha, options, channel, score = native_preview(source.image, request['mask'], request['options'],
+                                                       initial=bool(request.get('initial')),cache=channel_reference_cache)
+        alpha = alpha.resize(proxy.size, Image.Resampling.LANCZOS)
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))
-        if request.get('initial'):
-            from .document import raster_mask
-            whole=not request['mask'].get('semantic_target') and raster_mask(request['mask'],source.image.size).getextrema()==(255,255)
-            if whole:
-                options=whole_options()
-            else:
-                options, _ = suggest(proxy, request['mask'], radius)
-                options['radius'] = request['options']['radius']
-                options.update({k:request['options'][k] for k in ('interior','detail','color') if k in request['options']})
-        alpha, channel, score = channel_preview(proxy, request['mask'], options, radius)
         path = cache / f"channel-preview-{request['id']}.png"
         alpha.save(path, compress_level=3)
         result={'path':str(path),'channel':channel,'score':score,'options':options}

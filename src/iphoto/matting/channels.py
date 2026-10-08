@@ -1,6 +1,7 @@
 """Channel-derived alpha guided by semantic coverage and optional neural matting."""
 
 from time import perf_counter
+from copy import deepcopy
 import math
 
 import cv2
@@ -48,6 +49,19 @@ def channel_planes(image):
     return planes
 
 
+def channel_plane(image, channel):
+    """Compute the requested native plane without allocating six unused planes."""
+    if channel not in CHANNELS:
+        raise ValueError('通道抠图方法无效')
+    rgb = np.asarray(image.convert('RGB'), dtype=np.uint8)
+    if channel in CHANNELS[:3]:
+        return rgb[..., CHANNELS.index(channel)]
+    if channel == 'luminance':
+        return np.rint(rgb[...,0]*.2126 + rgb[...,1]*.7152 + rgb[...,2]*.0722).astype(np.uint8)
+    first, second = {'red_green':(0,1),'red_blue':(0,2),'green_blue':(1,2)}[channel]
+    return np.clip(rgb[...,first].astype(np.int16)-rgb[...,second]+128,0,255).astype(np.uint8)
+
+
 def _fields(image, mask, radius):
     alpha = np.asarray(raster_mask({**mask, 'feather': 0}, image.size))
     hard = (alpha > 32).astype(np.uint8)
@@ -76,10 +90,14 @@ def _fields(image, mask, radius):
 
 def suggest(image, mask, radius=32):
     _, _, _, _, metrics = _fields(image, mask, radius)
+    return _suggest(metrics, radius), metrics
+
+
+def _suggest(metrics, radius):
     best = max(metrics, key=lambda item: item['score'])
     if best['white']-best['black'] < 8:
         raise ValueError('主体和背景通道差异太小，不能可靠自动抠图；请局部修边或选择其他范围')
-    return {**{k:v for k,v in best.items() if k != 'score'}, 'gamma': 1., 'radius': radius, 'ai': True, 'interior':False}, metrics
+    return {**{k:v for k,v in best.items() if k != 'score'}, 'gamma': 1., 'radius': radius, 'ai': True, 'interior':False}
 
 
 def _curve(plane,options):
@@ -106,8 +124,33 @@ def _whole_pixels(image,mask,options):
         raise ValueError('整图通道超过3200万像素，请先选择目标区域')
     if mask.get('semantic_target') or raster_mask(mask,image.size).getextrema()!=(255,255):
         raise ValueError('整图通道只用于尚未限定目标的全选范围，局部范围请使用常规通道抠图')
-    plane=channel_planes(image)[CHANNELS.index(options['channel'])]
+    plane=channel_plane(image, options['channel'])
     return np.rint(_curve(plane,options)*255).astype(np.uint8)
+
+
+def _region(image, mask, radius):
+    original = raster_mask({**mask, 'feather': 0}, image.size)
+    bounds = original.getbbox()
+    if not bounds:
+        raise ValueError('原范围为空，通道抠图未应用')
+    box = (max(0,bounds[0]-radius*3), max(0,bounds[1]-radius*3),
+           min(image.width,bounds[2]+radius*3), min(image.height,bounds[3]+radius*3))
+    if (box[2]-box[0])*(box[3]-box[1]) > 32_000_000:
+        raise ValueError('通道处理范围过大，请分区域处理')
+    local_mask = {**empty_mask(), 'bitmap': encode_bitmap(original.crop(box), sampling='alpha', preserve_resolution=True)}
+    return original, box, image.crop(box), local_mask
+
+
+def _constraints(alpha, inside, outside, values, options, score, semantic):
+    allowed = outside <= options['radius']
+    if semantic:
+        allowed &= alpha > 0
+    opaque_core = (inside > options['radius']) & (alpha == 255)
+    known_fg = opaque_core & (values >= .98) if options['interior'] else opaque_core
+    known_bg = ~allowed | ((values < .015) & (alpha == 0))
+    if options['interior'] and score >= 4:
+        known_bg |= (values < .015) & ~known_fg
+    return allowed, known_fg, known_bg
 
 
 def estimate(image, mask, options, *, neural=None, progress=None):
@@ -123,28 +166,12 @@ def estimate(image, mask, options, *, neural=None, progress=None):
                       'tiles':0,'elapsed_ms':round((perf_counter()-started)*1000,1),
                       'unknown_pixels':0,'partial_pixels':int(((result>0)&(result<255)).sum()),'warnings':[]}
     radius = options['radius']
-    original = raster_mask({**mask, 'feather': 0}, image.size)
-    bounds = original.getbbox()
-    if not bounds:
-        raise ValueError('原范围为空，通道抠图未应用')
-    box = (max(0,bounds[0]-radius*3), max(0,bounds[1]-radius*3),
-           min(image.width,bounds[2]+radius*3), min(image.height,bounds[3]+radius*3))
-    if (box[2]-box[0])*(box[3]-box[1]) > 32_000_000:
-        raise ValueError('通道处理范围过大，请分区域处理')
-    cropped = image.crop(box)
-    local_mask = {**empty_mask(), 'bitmap': encode_bitmap(original.crop(box), sampling='alpha', preserve_resolution=True)}
+    original, box, cropped, local_mask = _region(image, mask, radius)
     alpha, inside, outside, planes, metrics = _fields(cropped, local_mask, radius)
     values, channel, score = _channel_alpha(planes, metrics, options)
-    allowed = outside <= radius
     # A face/skin mask includes protected eyes, lips, hair and clothes. Channels
     # can refine its current support but cannot bypass those semantic exclusions.
-    if mask.get('semantic_target'):
-        allowed &= alpha > 0
-    opaque_core = (inside > radius) & (alpha == 255)
-    known_fg = opaque_core & (values >= .98) if options['interior'] else opaque_core
-    known_bg = ~allowed | ((values < .015) & (alpha == 0))
-    if options['interior'] and score >= 4:
-        known_bg |= (values < .015) & ~known_fg
+    allowed, known_fg, known_bg = _constraints(alpha,inside,outside,values,options,score,bool(mask.get('semantic_target')))
     trimap = np.full(alpha.shape, 128, dtype=np.uint8)
     trimap[known_fg], trimap[known_bg] = 255, 0
     unknown = trimap == 128
@@ -214,12 +241,53 @@ def preview(image, mask, options, radius):
     options=validate_options(options)
     if options.get('whole'):
         return Image.fromarray(_whole_pixels(image,mask,options)),options['channel'],0.
-    alpha, inside, outside, planes, metrics = _fields(image, mask, radius)
-    values, channel, score = _channel_alpha(planes, metrics, validate_options(options))
-    allowed = outside <= radius
-    if mask.get('semantic_target'):
-        allowed &= alpha > 0
-    pixels = np.where(allowed, np.rint(values*255), alpha).astype(np.uint8)
-    if not options['interior']:
-        pixels[(inside > radius) & (alpha == 255)] = 255
+    fields = _fields(image, mask, radius)
+    return _preview_fields(fields, options, radius, bool(mask.get('semantic_target')))
+
+
+def _preview_fields(fields, options, radius, semantic):
+    alpha, inside, outside, planes, metrics = fields
+    values, channel, score = _channel_alpha(planes, metrics, options)
+    allowed, known_fg, known_bg = _constraints(alpha,inside,outside,values,{**options,'radius':radius},score,semantic)
+    pixels = np.rint(values*255).astype(np.uint8)
+    pixels[known_fg], pixels[known_bg] = 255, 0
+    pixels[~allowed] = alpha[~allowed]
     return Image.fromarray(pixels), channel, score
+
+
+def native_preview(image, mask, options, *, initial=False, cache=None):
+    """Derive levels and gray coverage before any display resize.
+
+    RGB resampling followed by clipping/gamma is not the displayed coverage
+    of a native channel curve. Share the application's original ROI, radius
+    and reference pixels; the worker resizes only the resulting gray image.
+    This draft does not include neural refinement or foreground recovery.
+    """
+    options = validate_options(options)
+    if initial and not mask.get('semantic_target') and raster_mask(mask,image.size).getextrema()==(255,255):
+        options = whole_options()
+    if options.get('whole'):
+        if cache is not None:
+            cache.clear()
+        return Image.fromarray(_whole_pixels(image,mask,options)), options, options['channel'], 0.
+    reuse = (cache is not None and cache.get('image') is image and cache.get('mask') == mask
+             and cache.get('radius') == options['radius'])
+    if reuse:
+        original, box, fields = cache['original'], cache['box'], cache['fields']
+    else:
+        if cache is not None:
+            cache.clear()
+        original, box, cropped, local_mask = _region(image,mask,options['radius'])
+        fields = _fields(cropped,local_mask,options['radius'])
+        # One bounded reference crop per worker; changing levels reuses native
+        # samples/distances. Larger crops are computed without retaining them.
+        if cache is not None and cropped.width*cropped.height <= 4_000_000:
+            cache.update(image=image,mask=deepcopy(mask),radius=options['radius'],
+                         original=original,box=box,fields=fields)
+    if initial:
+        flags = {key:options[key] for key in ('interior','detail','color') if key in options}
+        options = {**_suggest(fields[-1],options['radius']), **flags}
+    pixels, channel, score = _preview_fields(fields,options,options['radius'],bool(mask.get('semantic_target')))
+    output = original.copy()
+    output.paste(pixels,box[:2])
+    return output, options, channel, score
