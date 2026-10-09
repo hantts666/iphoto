@@ -16,6 +16,7 @@ from .storage import atomic_output
 from .masks import validate_bitmap, decode_bitmap
 from .layer_tree import validate_hierarchy, forest
 from .pixel_patch import validate_patch, render_patch
+from .rgba_content import replace_content
 
 MAX_LAYERS = 32
 MAX_PROJECT_BYTES = 128 * 1024 * 1024
@@ -481,7 +482,7 @@ def render_nodes(image, nodes, *, canvas_size=None, canvas_box=None):
             if group
             else render(base, Recipe.from_dict(layer["recipe"]), detail_size=full_size)
         )
-        result = adjusted if opaque_full else Image.composite(adjusted, result, mask)
+        result = adjusted if opaque_full else replace_content(adjusted, result, mask)
     return result if result is not image else image.copy()
 
 
@@ -626,7 +627,7 @@ def _validate_project(payload):
             "active_layer": layer["id"],
             "conversation": [],
         }
-    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12"):
+    if payload.get("schema_version") not in ("1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11", "1.12", "1.13"):
         raise ValueError("不支持此项目版本")
     if (
         not isinstance(payload.get("source"), str)
@@ -682,6 +683,9 @@ def _validate_project(payload):
 
 
 def project_version(layers, draft=None, regions=None):
+    content_layers = list(layers) + (regions['layers'] if regions else [])
+    if any(layer.get('pixel_patch', {}).get('compositing') == 'replace_rgba' for layer in content_layers):
+        return '1.13'
     masks = [layer['mask'] for layer in layers]
     if draft is not None:
         masks.append(draft)

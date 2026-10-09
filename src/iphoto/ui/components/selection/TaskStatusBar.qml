@@ -13,7 +13,7 @@ Rectangle {
     Layout.preferredHeight: Math.max(36, progressText.implicitHeight + 12)
     visible: root.selection.taskKind !== "none"
     color: "#30453e"
-    readonly property bool timingPixels: visible && root.selection.taskKind === "pixel"
+    readonly property bool timingPixels: visible && ["pixel", "content"].includes(root.selection.taskKind)
     property real pixelStartedAt: 0
     property int pixelElapsedSeconds: 0
     onTimingPixelsChanged: {
@@ -46,7 +46,7 @@ Rectangle {
         }
         Action {
             objectName: "cancelAiRequest"
-            text: root.selection.taskKind==="ai" ? "取消 AI 任务" : root.selection.taskKind==="matte" ? "取消边缘细化" : root.selection.taskKind==="warm" ? "取消照片准备" : root.selection.queuedPixelTask ? "取消等待中的点选" : "取消当前计算"
+            text: root.selection.taskKind==="content" ? "取消导入" : root.selection.taskKind==="ai" ? "取消 AI 任务" : root.selection.taskKind==="matte" ? "取消边缘细化" : root.selection.taskKind==="warm" ? "取消照片准备" : root.selection.queuedPixelTask ? "取消等待中的点选" : "取消当前计算"
             hint: "按 Esc 也可取消；照片和已有图层保留"
             visible: root.selection.taskCancellable
             implicitHeight: 26

@@ -4,9 +4,9 @@ from collections import OrderedDict
 from hashlib import sha256
 import json
 
-from PIL import Image
 from .document import render_nodes, raster_mask
 from .layer_tree import forest
+from .rgba_content import replace_content
 
 
 def layer_key(layer):
@@ -80,7 +80,7 @@ class LayerPreviewCache:
                         mask = mask.point(
                             [round(v * layer["opacity"]) for v in range(256)]
                         )
-                    current = Image.composite(adjusted, current, mask)
+                    current = replace_content(adjusted, current, mask)
                 else:
                     current = render_nodes(current, [node])
                 weight = current.width * current.height * len(current.getbands())

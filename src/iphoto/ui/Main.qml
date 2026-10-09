@@ -37,7 +37,7 @@ ApplicationWindow {
     property bool discardOnClose: false
     property bool editingText: activeFocusItem !== null && typeof activeFocusItem.undo === "function" && !activeFocusItem.readOnly
     property bool textFocus: activeFocusItem !== null && typeof activeFocusItem.selectAll === "function"
-    property bool modalActive: cutoutToolsMenu.opened || channelMaskDialog.opened || aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
+    property bool modalActive: cutoutToolsMenu.opened || channelMaskDialog.opened || aiSettings.opened || pluginsDialog.opened || recoveryFailure.opened || importDialog.visible || foregroundDialog.visible || exportDialog.opened || sourceRelinkDialog.opened || projectSaveDialog.opened || projectDialog.visible || conversationExportDialog.opened || canvasPane.menuOpened
     property bool menuActive: fileMenu.opened || editMenu.opened || selectionMenu.opened || viewMenu.opened || extensionsMenu.opened
     property bool navigationShortcutsEnabled: editor.hasImage && !textFocus && !modalActive && !menuActive
     readonly property bool objectPreviewEnabled: editor.hasImage && !editor.busy && selection.pickedLayerId === ""
@@ -147,6 +147,7 @@ ApplicationWindow {
         }
     }
     FileDialog { id: importDialog; title: "选择照片"; currentFolder: FilePaths.directoryUrl(editor.photoBrowseDirectory); nameFilters: ["照片 (*.jpg *.jpeg *.png *.mpo)", "相机 RAW (*.cr2 *.cr3 *.nef *.nrw *.arw *.srf *.sr2 *.dng *.raf *.orf *.rw2 *.pef *.srw *.x3f)", "所有文件 (*)"]; onAccepted: editor.openImage(selectedFile.toString()) }
+    FileDialog { id: foregroundDialog; objectName: "foregroundImportDialog"; title: "导入透明前景（与整张照片对齐）"; currentFolder: FilePaths.directoryUrl(editor.photoBrowseDirectory); nameFilters: ["透明前景 (*.png)"]; onAccepted: editor.importForeground(selectedFile.toString()) }
     ProjectSaveDialog { id: projectSaveDialog; editor: editorContext }
     ExportDialog { id: exportDialog; editor: editorContext }
     SourceRelinkDialog { id: sourceRelinkDialog; editor: editorContext }
@@ -155,6 +156,7 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu { id: fileMenu; title: "文件"
             MenuItem { text: "打开照片…    Ctrl+O"; enabled: !editor.busy && !editor.savingProject; onTriggered: importDialog.open() }
+            MenuItem { objectName: "foregroundImportMenuAction"; text: "导入透明前景…"; enabled: editor.hasImage && !editor.busy && !editor.hasSelectionDraft && !editor.hasRegionDraft; onTriggered: foregroundDialog.open() }
             MenuItem { text: "打开项目…"; enabled: !editor.busy && !editor.savingProject; onTriggered: projectDialog.open() }
             MenuItem { objectName: "saveProjectMenuAction"; text: "保存项目    Ctrl+S"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: saveProject() }
             MenuItem { objectName: "saveAsProjectMenuAction"; text: "项目另存为…"; enabled: editor.hasImage && !editor.busy && !editor.savingProject; onTriggered: { if (commitPendingText()) projectSaveDialog.start() } }

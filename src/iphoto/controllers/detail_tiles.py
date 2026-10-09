@@ -77,7 +77,7 @@ def request(self):
     )
     needs_mask = (
         self.selection.showMask and self._mask_view != "adjustment"
-        and ("bitmap" in mask or bool(mask["ops"]) or mask["feather"] > 0
+        and (self._mask_view in ('white', 'black') or "bitmap" in mask or bool(mask["ops"]) or mask["feather"] > 0
              or mask.get("edge_shift", 0) != 0)
     )
     current = self._detail_box

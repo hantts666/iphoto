@@ -131,12 +131,23 @@ Rectangle {
                 visible: hasFrame && displayedPhoto === editor.originalUrl && !root.holdingOriginal && !root.originalFallback
                     && (root.detailCoversViewport && (!editor.detailFailed || frameCurrent)
                         || previewLoader.item !== null && displayedGeneration === previewLoader.item.displayedGeneration && frameCurrent)
+                PhotoTransparency {
+                    originX: photo.x+detailImage.x; originY: photo.y+detailImage.y
+                    viewportWidth: surface.width; viewportHeight: surface.height
+                }
             }
             Item {
                 visible: workspace.compare || root.holdingOriginal || root.originalFallback
                 width: root.holdingOriginal || root.originalFallback ? photo.width : photo.width*workspace.split
                 height: photo.height; clip: true
-                Image { objectName: "originalPhotoImage"; width: photo.width; height: photo.height; source: editor.originalUrl; fillMode: Image.Stretch }
+                Image {
+                    objectName: "originalPhotoImage"; width: photo.width; height: photo.height
+                    source: editor.originalUrl; fillMode: Image.Stretch
+                    PhotoTransparency {
+                        originX: photo.x; originY: photo.y
+                        viewportWidth: surface.width; viewportHeight: surface.height
+                    }
+                }
                 ViewportDetailImage {
                     id: originalDetail; objectName: "originalDetailImage"
                     editor: root.editor; sourceFrame: true
@@ -144,6 +155,10 @@ Rectangle {
                     width: displayedRect[2] * photo.width; height: displayedRect[3] * photo.height
                     source: editor.detailOriginalUrl
                     visible: root.originalDetailReady
+                    PhotoTransparency {
+                        originX: photo.x+originalDetail.x; originY: photo.y+originalDetail.y
+                        viewportWidth: surface.width; viewportHeight: surface.height
+                    }
                 }
             }
             Image {

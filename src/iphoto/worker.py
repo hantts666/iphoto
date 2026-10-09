@@ -510,8 +510,16 @@ def main():
         if patch['canvas_size'] != reference['canvas_size'] or patch['box'] != reference['box']:
             raise ValueError('生成精修范围已变化，照片未改变')
         image, alignment = align_generated(reference['image'], _decode(patch['png']), reference['allowed'])
-        return {'patch':encode_patch(image,reference['canvas_size'],reference['box']),
+        return {'patch':encode_patch(image,reference['canvas_size'],reference['box'],
+                                   preserve_alpha=patch.get('compositing') == 'replace_rgba'),
                 'alignment':alignment,'reference_id':reference['id']}
+
+    @register('foreground_import')
+    def _foreground_import(request):
+        from .foreground_content import read_foreground
+        if request.get('expected_sha256') != source.digest:
+            raise ValueError('照片已变化，透明前景未导入')
+        return read_foreground(request['path'], source.image.size)
 
     @register("photo_candidate")
     def _photo_candidate(request):

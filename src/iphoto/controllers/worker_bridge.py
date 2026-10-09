@@ -462,7 +462,7 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
-            if op in ("matte_candidate", "matte_point_evidence", "generative_crop", "generative_align", "photo_candidate", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply") and active.get("cancelled"):
+            if op in ("matte_candidate", "matte_point_evidence", "generative_crop", "generative_align", "photo_candidate", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply", "foreground_import") and active.get("cancelled"):
                 self.changed.emit()
                 self._pump()
                 continue
@@ -651,6 +651,9 @@ def _read(self):
             elif op == 'generative_align':
                 from .photo_strategy import aligned
                 aligned(self, response['result'], active['context'], response['generation'])
+            elif op == 'foreground_import':
+                from .foreground_content import ready
+                ready(self, response['result'], active['context'], response['generation'])
             elif op == 'matte_candidate':
                 if not active.get('cancelled'):
                     from .channel_auto import review_ready

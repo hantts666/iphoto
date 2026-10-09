@@ -611,6 +611,9 @@ class SelectionController(QObject):
 
     @Property(str, notify=changed)
     def taskKind(self):
+        content_jobs = ([self._editor._active] if self._editor._active else []) + list(self._editor._queue)
+        if any(job['op'] == 'foreground_import' and not job.get('cancelled') for job in content_jobs):
+            return 'content'
         if getattr(self._editor, "_matte_active", None) or getattr(self._editor, "_matte_pending", None):
             return "matte"
         active = self._editor._pixel_active or self._editor._active
@@ -657,12 +660,15 @@ class SelectionController(QObject):
 
     @Property(bool, notify=changed)
     def taskCancellable(self):
-        return self.taskKind in ("pixel", "matte", "ai", "warm")
+        return self.taskKind in ("pixel", "matte", "ai", "warm", "content")
 
     @Slot()
     def cancelTask(self):
         kind = self.taskKind
         editor = self._editor
+        if kind == 'content':
+            from .foreground_content import cancel
+            return cancel(editor)
         if (getattr(editor, '_pending_request', None) or {}).get('channel_auto'):
             from .channel_auto import cancel as cancel_channel
             return cancel_channel(editor)

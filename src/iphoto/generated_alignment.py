@@ -14,7 +14,7 @@ MAX_PIXELS = 2048 * 2048
 
 
 def align_generated(reference, generated, allowed):
-    if (reference.mode != 'RGB' or generated.mode != 'RGB' or allowed.mode != 'L'
+    if (reference.mode not in ('RGB', 'RGBA') or generated.mode not in ('RGB', 'RGBA') or allowed.mode != 'L'
             or allowed.size != reference.size or max(reference.size) > 1280
             or min(reference.size) < 64 or generated.width * generated.height > MAX_PIXELS
             or min(generated.size) < 64
@@ -34,14 +34,17 @@ def align_generated(reference, generated, allowed):
     if np.all(pixels == pixels[0, 0]):
         return generated.copy(), {'status': 'uniform_pixels', 'inliers': 0}
     stable = cv2.dilate(permitted.astype(np.uint8), np.ones((15, 15), np.uint8)) == 0
+    if reference.mode == 'RGBA':
+        stable &= np.asarray(reference.getchannel('A')) > 240
     if np.count_nonzero(stable) < reference.width * reference.height * .08:
         raise ValueError('范围外的定位参照不足，请保留周围内容后再精修；照片未改变')
     normalized = generated.resize(reference.size, Image.Resampling.LANCZOS)
     detector = cv2.SIFT_create(nfeatures=6000)
     reference_points, reference_features = detector.detectAndCompute(
-        cv2.cvtColor(np.asarray(reference), cv2.COLOR_RGB2GRAY), stable.astype(np.uint8)*255)
+        cv2.cvtColor(np.asarray(reference.convert('RGB')), cv2.COLOR_RGB2GRAY), stable.astype(np.uint8)*255)
     generated_points, generated_features = detector.detectAndCompute(
-        cv2.cvtColor(np.asarray(normalized), cv2.COLOR_RGB2GRAY), None)
+        cv2.cvtColor(np.asarray(normalized.convert('RGB')), cv2.COLOR_RGB2GRAY),
+        np.uint8(np.asarray(normalized.getchannel('A')) > 240) * 255 if generated.mode == 'RGBA' else None)
     if reference_features is None or generated_features is None:
         raise ValueError('无法核对生成图与原图的位置，照片未改变')
     matcher = cv2.BFMatcher()
@@ -82,11 +85,19 @@ def align_generated(reference, generated, allowed):
     target = np.asarray(allowed.resize(generated.size, Image.Resampling.NEAREST)) > 0
     if np.any(coverage[target] < .999):
         raise ValueError('校正后的生成图未覆盖完整选区，照片未改变')
-    moved = cv2.warpAffine(pixels, transform, generated.size, flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    if generated.mode == 'RGBA':
+        rgba = pixels.astype(np.float32)
+        rgba[..., :3] *= rgba[..., 3:] / 255
+        moved = cv2.warpAffine(rgba, transform, generated.size, flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        moved[..., :3] /= np.maximum(moved[..., 3:] / 255, 1e-8)
+        moved = np.rint(np.clip(moved, 0, 255)).astype(np.uint8)
+    else:
+        moved = cv2.warpAffine(pixels, transform, generated.size, flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     # Missing border pixels occur only outside the allowed range. Keep their
     # reference pixels instead of storing an artificial black border.
-    original = np.asarray(reference.resize(generated.size, Image.Resampling.LANCZOS))
+    original = np.asarray(reference.convert(generated.mode).resize(generated.size, Image.Resampling.LANCZOS))
     moved[coverage < .999] = original[coverage < .999]
     return Image.fromarray(moved), {'status': 'aligned', 'matches': len(matches),
         'inliers': count, 'inlier_ratio': round(ratio, 4), 'scale': round(scale, 6),

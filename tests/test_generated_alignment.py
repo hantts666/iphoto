@@ -70,7 +70,7 @@ def test_authorized_whole_frame_replacement_has_no_local_compositing_boundary():
 
 
 @pytest.mark.parametrize('case', ['no_context', 'featureless_reference', 'new_content', 'localized_references',
-                                 'large_scale', 'missing_coverage', 'wrong_aspect', 'rgba'])
+                                 'large_scale', 'missing_coverage', 'wrong_aspect', 'invalid_mode'])
 def test_unproven_or_uncovered_geometry_is_rejected(case):
     original, allowed = reference(), selection()
     generated = displaced(original)
@@ -94,8 +94,8 @@ def test_unproven_or_uncovered_geometry_is_rejected(case):
         ImageDraw.Draw(allowed).rectangle((600, 150, 639, 380), fill=255)
     elif case == 'wrong_aspect':
         generated = generated.resize((640, 490))
-    elif case == 'rgba':
-        generated = generated.convert('RGBA')
+    elif case == 'invalid_mode':
+        generated = generated.convert('L')
     before = deepcopy([original.tobytes(), generated.tobytes(), allowed.tobytes()])
     with pytest.raises(ValueError, match='照片未改变'):
         align_generated(original, generated, allowed)
