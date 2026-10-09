@@ -89,24 +89,38 @@ def complete(e, result, token):
                                       'warnings':previous['warnings']+result['quality']['warnings'],
                                       'elapsed_ms':round(previous['elapsed_ms']+result['quality']['elapsed_ms'],1)}}
         elif result['quality'].get('edge_refinement'):
+            state['channel_result']=deepcopy(state['result'])
             previous=state['result']['quality']
             result={**result,'quality':{**previous,'hair_refinement':deepcopy(result['quality']),
                                       'warnings':previous['warnings']+result['quality']['warnings'],
                                       'elapsed_ms':round(previous['elapsed_ms']+result['quality']['elapsed_ms'],1)}}
         state['result'] = deepcopy(result)
-        staged = deepcopy(e._layers)
-        if state['bound']:
-            target = state['target_id'] or e._selected
-            next(layer for layer in staged if layer['id']==target)['mask'] = mask
-        e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
-        e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
-                   target_context=bool(state.get('hair')),
-                   final_review=bool(state['revision']),
-                   **({'detail_points':state['corrections']} if state['revision'] and state.get('corrections') and state.get('hair') else {}),
-                   **({'review_boxes':state['review_boxes']} if state['revision'] else {}),
-                   context={'token':token})
+        if state.get('channel_result') and not state['revision']:
+            state['alternatives']={'channel':state.pop('channel_result'),'hair':deepcopy(result)}
+            e._status='4/4 正在准备通道与 AI 两份独立抠图，比较相同原图边缘…可取消'
+            e._request('matte_candidate',layers=deepcopy(e._layers),expected_sha256=e._sha,
+                       comparison_masks={key:value['mask'] for key,value in state['alternatives'].items()},
+                       comparison_target=(state['target_id'] or e._selected) if state['bound'] else None,
+                       context={'token':token})
+            return
+        _prepare_review(e,state,token)
     except (ValueError, KeyError, StopIteration) as exc:
         e._notify(str(exc), True)
+
+
+def _prepare_review(e,state,token):
+    mask=validate_mask(state['result']['mask'])
+    staged = deepcopy(e._layers)
+    if state['bound']:
+        target = state['target_id'] or e._selected
+        next(layer for layer in staged if layer['id']==target)['mask'] = mask
+    e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
+    e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
+               target_context=bool(state.get('hair')),
+               final_review=bool(state['revision']),
+               **({'detail_points':state['corrections']} if state['revision'] and state.get('corrections') and state.get('hair') else {}),
+               **({'review_boxes':state['review_boxes']} if state['revision'] else {}),
+               context={'token':token})
 
 
 def review_ready(e, result, context, generation):
@@ -116,6 +130,18 @@ def review_ready(e, result, context, generation):
             return
         pending, state = current
         state['reviewing'] = True
+        if result.get('comparison_candidates'):
+            if not state.get('alternatives') or state['revision']:
+                raise ValueError('抠图比较已过期，原范围保留')
+            state['comparing']=True
+            images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
+                    for item in result['review_images']]
+            e._status='4/4 AI 正在比较通道与头发细化的断丝、灰雾和误选…可取消'
+            e.changed.emit()
+            e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,
+                      'matte_review',{'target':state['mask']['label'],'comparison_candidates':result['comparison_candidates'],
+                                      'edge_count':len(result['boxes']),'review_images':images})
+            return
         state['review_boxes'] = deepcopy(result['boxes'])
         state['context_points'] = bool(state.get('hair')) and result.get('context_points') is True
         state['point_bounds'] = deepcopy(result.get('point_bounds')) if state['context_points'] else None
@@ -159,6 +185,18 @@ def reviewed(e, review):
             return
         pending,state = current
         state['reviewing'] = False
+        if state.pop('comparing',False):
+            from ..matte_compare import CANDIDATES
+            if review['status']=='select' and review.get('candidate') in CANDIDATES:
+                alternatives=state.pop('alternatives')
+                state['result']=deepcopy(alternatives[review['candidate']])
+                state['result']['quality']['candidate_comparison']={'selected':review['candidate'],'summary':review['summary']}
+                _prepare_review(e,state,state['token'])
+                return
+            e._pending_request=None
+            e._message('assistant','通道与 AI 候选均未选用，原范围保留。\n'+review['summary'],
+                       state='unsupported',origin=pending)
+            return e._notify('通道与 AI 候选未通过比较，原范围保留')
         if review['status']=='revise':
             from ..matte_review import validate_corrections
             if state['revision'] or not state.get('correction_available'):
@@ -193,6 +231,8 @@ def reviewed(e, review):
             detail += ' · 透明输出去背景串色'
         if quality.get('hair_refinement'):
             detail += ' · 人像外缘与头发分区'
+        if quality.get('candidate_comparison'):
+            detail += ' · 已比较两份实际抠图，选用'+('通道候选' if quality['candidate_comparison']['selected']=='channel' else '头发细化候选')
         if quality.get('correction'):
             detail += ' · AI 已按实际效果纠错并复查'
             if quality['correction'].get('hair_matting'):

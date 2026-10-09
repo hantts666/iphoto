@@ -107,7 +107,9 @@ class AIController(QObject):
                     'mask_reselect_validate': '核对完整五官与范围变化',
                     "repair": "检查局部瑕疵"}.get(self._context["mode"], "AI 修图")
             details = self._context['workspace'].get('strand_detail_count')
-            if (self._context['mode']=='matte_review'
+            if self._context['mode']=='matte_review' and self._context['workspace'].get('comparison_candidates'):
+                task = '4/4 比较通道与 AI 候选'
+            elif (self._context['mode']=='matte_review'
                     and self._context['workspace'].get('correction_method')=='hair'
                     and type(details) is int and 1<=details<=4):
                 task = '4/4 原片发丝细节复查'
@@ -351,7 +353,9 @@ class AIController(QObject):
                 "regions": "AI 正在规划分区图层…",
                 "auto": "AI 正在判断调整范围并规划图层…",
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
-                "matte_review":"4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消",
+                "matte_review":("4/4 AI 正在比较通道与头发细化的断丝、灰雾和误选…可取消"
+                                if (workspace or {}).get('comparison_candidates') else
+                                "4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消"),
                 "matte_points":"4/4 AI 正在放大核对发丝落点，检查是否误点背景…可取消",
                 "mask_points": "AI 正在对照原图与蒙版，定位误选范围…",
                 "mask_review": "AI 正在复查修正结果，检查残留误选…",

@@ -217,7 +217,9 @@ def test_hair_strategy_runs_native_model_before_review_without_publishing(monkey
     native={'mask':mask,'quality':{'edge_refinement':True,'warnings':[],'elapsed_ms':3}}
     channel_auto.complete(editor,native,'same')
     assert calls[1][0]=='matte_candidate'
-    assert calls[1][1]['target_context'] is True
+    assert set(calls[1][1]['comparison_masks'])=={'channel','hair'}
+    assert calls[1][1]['comparison_masks']['channel']==initial['mask']
+    assert calls[1][1]['comparison_masks']['hair']==native['mask']
     assert state['result']['quality']['hair_refinement']['edge_refinement']
     assert state['result']['quality']['elapsed_ms']==13
     assert snapshot==(editor._layers,editor._candidate,editor._cursor)
@@ -236,7 +238,7 @@ def test_strand_capability_and_correction_roles_survive_the_controller_boundary(
     snapshot=deepcopy((editor._layers,editor._candidate,editor._cursor))
     monkeypatch.setattr(channel_auto,'_current',lambda *args:(pending,state))
     monkeypatch.setattr('iphoto.segmentation.precise_sam.available',lambda:True)
-    monkeypatch.setattr(channel_auto,'image_data_url',lambda path:'image')
+    monkeypatch.setattr(channel_auto,'image_data_url',lambda path,**kwargs:'image')
     result={'boxes':[[100,100,612,612]],'images':[{'path':'source.png'}],
             'context_points':True,'point_bounds':{'1':[195,195,805,805]},
             'strand_detail_count':1,

@@ -115,6 +115,9 @@ def validate_corrections(corrections, edge_count, *, strand_points=False, bounds
 
 
 def parse_review(data, workspace=None):
+    if 'comparison_candidates' in (workspace or {}):
+        from .matte_compare import parse_compare
+        return parse_compare(data,workspace)
     try:
         choice=data['choices'][0]
         if choice.get('finish_reason')!='stop' or choice['message'].get('refusal'):

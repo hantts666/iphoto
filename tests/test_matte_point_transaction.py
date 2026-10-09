@@ -43,8 +43,12 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                 native=(context['mode']=='matte_points' or '质量对照' in label['text'] or '定位图（' in label['text'])
                 assert url.startswith('data:image/png;base64,' if native else 'data:image/jpeg;base64,')
             if context['mode']=='matte_points':
-                assert payload['thinking_budget']==512 and payload['max_tokens']==4096
-                assert 'response_format' not in payload and 'reasoning_effort' not in payload
+                if '上次回复未通过程序校验' in payload['messages'][0]['content']:
+                    assert payload['enable_thinking'] is False and 'thinking_budget' not in payload
+                    assert payload['response_format']=={'type':'json_object'}
+                else:
+                    assert payload['thinking_budget']==512 and 'response_format' not in payload
+                assert payload['max_tokens']==4096 and 'reasoning_effort' not in payload
                 assert len([v for v in payload['messages'][1]['content'] if v['type']=='image_url'])==2+(len(context['strand_candidates']['1'])+7)//8+bool(context['strand_candidates']['1'])
                 assert [r['coordinate'] for r in context['strand_structures']['1']]==context['strand_candidates']['1']
                 if outcome in ('cancel','stale'):gate.wait(6)
