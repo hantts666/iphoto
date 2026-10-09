@@ -634,6 +634,10 @@ def _read(self):
                 elif context.get("purpose") != "warm":
                     self._status = "本次像素选区已取消或过期，原选区保留"
                     self._notify("本次像素选区已取消或过期，未改变当前选区")
+            elif op == 'channel_evidence':
+                if not active.get('cancelled'):
+                    from .channel_auto import tune_ready
+                    tune_ready(self,response['result'],active['context'],response['generation'])
             elif op == 'channel_preview':
                 if not active.get('cancelled'):
                     if active['context'].get('channel_auto'):

@@ -154,18 +154,20 @@ def test_real_comparison_workers_choose_exact_pixels_and_commit_once(qt_app,ai_s
     finally:editor.close()
 
 
-def test_full_window_conversation_keeps_the_chosen_channel_result(canvas,tmp_path,monkeypatch):  # noqa: F811
+@pytest.mark.parametrize('tune_status',['keep','propose'])
+def test_full_window_conversation_keeps_the_chosen_channel_result(canvas,tmp_path,monkeypatch,tune_status):  # noqa: F811
     from test_channel_matting import plan
     ui=canvas;source,seed,masks=candidates();path=tmp_path/'source.png';source.save(path)
     ui.e.openImage(str(path));wait_for(lambda:ui.e.hasImage and settled(ui.e))
     ui.e._layer()['mask']=deepcopy(seed);ui.e._layer()['recipe']=Recipe(exposure=.35).to_dict()
     ui.e._load_layer();ui.e._commit();before=deepcopy(ui.e._layers);cursor=ui.e._cursor
-    actual_request=ui.e._request
+    actual_request=ui.e._request;channel_options=[]
     # Controlled solver outputs isolate UI/transaction behavior; real process
     # rendering, native evidence, networking and final mask publication run.
     def request(op,**data):
         if op=='matte' and data.get('method') in ('channel','hair'):
             key='channel' if data['method']=='channel' else 'hair'
+            if key=='channel':channel_options.append(deepcopy(data['channel_options']))
             quality={'warnings':[],'elapsed_ms':1.,'channel':'red_green'}
             if key=='hair':quality['edge_refinement']=True
             QTimer.singleShot(0,lambda:channel_auto.complete(ui.e,{'mask':masks[key],'quality':quality},data['auto_token']))
@@ -176,6 +178,9 @@ def test_full_window_conversation_keeps_the_chosen_channel_result(canvas,tmp_pat
     ui.e.ai.progressChanged.connect(lambda:progress.append(ui.e.ai.requestProgress))
     def server(payload):
         system=payload['messages'][0]['content']
+        if '通道参数操作员' in system:
+            return completion({'status':tune_status,'options':None if tune_status=='keep' else {
+                'channel':'blue','black':35,'white':210,'gamma':1.4,'invert':False},'summary':'控制通道参数操作'})
         if '抠图候选比较员' in system:
             return completion({'status':'select','candidate':'channel','summary':'控制选择通道'})
         if '独立抠图质量检查员' in system:
@@ -187,8 +192,11 @@ def test_full_window_conversation_keeps_the_chosen_channel_result(canvas,tmp_pat
         ui.w.setProperty('chatOpen',True)
         ui.click('descriptionInput');ui.type('refine hair with channels');ui.click('applyDescriptionButton')
         wait_for(lambda:not ui.e.busy and settled(ui.e),seconds=25)
-    assert len(requests)==3 and ui.e._layers[-1]['mask']==masks['channel']
+    assert len(requests)==4 and ui.e._layers[-1]['mask']==masks['channel']
     assert ui.e._cursor==cursor+1 and ui.e._layers[-1]['recipe']==before[-1]['recipe']
+    assert len(channel_options)==1 and channel_options[0]['radius']==32
+    if tune_status=='propose':assert channel_options[0]['channel']=='blue' and channel_options[0]['gamma']==1.4
     assert any('比较通道与 AI 候选' in value and '可取消' in value for value in progress)
+    assert any('比较原像素通道参数' in value and '可取消' in value for value in progress)
     ui.click('undoButton');wait_for(lambda:settled(ui.e))
     assert ui.e._layers==before

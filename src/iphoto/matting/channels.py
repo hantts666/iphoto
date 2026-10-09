@@ -270,20 +270,7 @@ def native_preview(image, mask, options, *, initial=False, cache=None):
         if cache is not None:
             cache.clear()
         return Image.fromarray(_whole_pixels(image,mask,options)), options, options['channel'], 0.
-    reuse = (cache is not None and cache.get('image') is image and cache.get('mask') == mask
-             and cache.get('radius') == options['radius'])
-    if reuse:
-        original, box, fields = cache['original'], cache['box'], cache['fields']
-    else:
-        if cache is not None:
-            cache.clear()
-        original, box, cropped, local_mask = _region(image,mask,options['radius'])
-        fields = _fields(cropped,local_mask,options['radius'])
-        # One bounded reference crop per worker; changing levels reuses native
-        # samples/distances. Larger crops are computed without retaining them.
-        if cache is not None and cropped.width*cropped.height <= 4_000_000:
-            cache.update(image=image,mask=deepcopy(mask),radius=options['radius'],
-                         original=original,box=box,fields=fields)
+    original, box, fields = native_reference(image,mask,options['radius'],cache=cache)
     if initial:
         flags = {key:options[key] for key in ('interior','detail','color') if key in options}
         options = {**_suggest(fields[-1],options['radius']), **flags}
@@ -291,3 +278,22 @@ def native_preview(image, mask, options, *, initial=False, cache=None):
     output = original.copy()
     output.paste(pixels,box[:2])
     return output, options, channel, score
+
+
+def native_reference(image, mask, radius, *, cache=None):
+    """Share one bounded native reference between preview and AI evidence."""
+    reuse = (cache is not None and cache.get('image') is image and cache.get('mask') == mask
+             and cache.get('radius') == radius)
+    if reuse:
+        original, box, fields = cache['original'], cache['box'], cache['fields']
+    else:
+        if cache is not None:
+            cache.clear()
+        original, box, cropped, local_mask = _region(image,mask,radius)
+        fields = _fields(cropped,local_mask,radius)
+        # One bounded reference crop per worker; changing levels reuses native
+        # samples/distances. Larger crops are computed without retaining them.
+        if cache is not None and cropped.width*cropped.height <= 4_000_000:
+            cache.update(image=image,mask=deepcopy(mask),radius=radius,
+                         original=original,box=box,fields=fields)
+    return original, box, fields

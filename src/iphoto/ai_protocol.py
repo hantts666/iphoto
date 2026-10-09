@@ -19,6 +19,7 @@ from .photo_strategy import DEVELOP_PROMPT, REVIEW_PROMPT as PHOTO_REVIEW_PROMPT
 from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, FINAL_PROMPT as MATTE_FINAL_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
 from .matte_compare import PROMPT as MATTE_COMPARE_PROMPT, SCHEMA as MATTE_COMPARE_SCHEMA
 from .matte_points import PROMPT as MATTE_POINTS_PROMPT, SCHEMA as MATTE_POINTS_SCHEMA
+from .channel_advisor import PROMPT as CHANNEL_TUNE_PROMPT, SCHEMA as CHANNEL_TUNE_SCHEMA
 from .ai_mask_review import REVIEW_SCHEMA, REVIEW_PROMPT, VERIFICATION_SCHEMA, VERIFICATION_PROMPT, RESTORATION_PROMPT, RESELECTION_PROMPT
 from .segmentation.grounding import COORDINATE_PROMPT
 from .ai_tasks import (
@@ -266,6 +267,7 @@ def build_payload(
                     "photo_review": PHOTO_REVIEW_PROMPT,
                     "matte_review": MATTE_COMPARE_PROMPT if compare_mattes else MATTE_FINAL_PROMPT if final_matte_review else MATTE_REVIEW_PROMPT,
                     "matte_points": MATTE_POINTS_PROMPT,
+                    "channel_tune": CHANNEL_TUNE_PROMPT,
                     "selection": SELECTION_PROMPT,
                     "regions": REGION_PROMPT,
                     "repair": REPAIR_SPOTS_PROMPT,
@@ -288,7 +290,7 @@ def build_payload(
         ],
         "stream": False,
     }
-    if mode in ("photo_review", "matte_review", "matte_points"):
+    if mode in ("photo_review", "matte_review", "matte_points", "channel_tune"):
         payload["messages"][1]["content"] = payload["messages"][1]["content"][:1]
         for item in review_images:
             payload["messages"][1]["content"].extend([{"type": "text", "text": item["label"]},
@@ -340,6 +342,7 @@ def build_payload(
                         "photo_review": PHOTO_REVIEW_SCHEMA,
                         "matte_review": MATTE_COMPARE_SCHEMA if compare_mattes else MATTE_REVIEW_SCHEMA,
                         "matte_points": MATTE_POINTS_SCHEMA,
+                        "channel_tune": CHANNEL_TUNE_SCHEMA,
                         "selection": SELECTION_SCHEMA,
                         "regions": REGION_SCHEMA,
                         "repair": REPAIR_SPOTS_SCHEMA,

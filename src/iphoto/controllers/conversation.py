@@ -560,6 +560,9 @@ def _cloud_plan(self, result, generation):
     if result.get('mode') == 'matte_points' and pending.get('channel_auto'):
         from .channel_auto import points_reviewed
         return points_reviewed(self,result)
+    if result.get('mode') == 'channel_tune' and pending.get('channel_auto'):
+        from .channel_auto import tuned
+        return tuned(self,result)
     if result.get('mode') == 'auto' and result.get('action') == 'channel_mask':
         from .channel_auto import begin as begin_channel
         result = begin_channel(self, result)

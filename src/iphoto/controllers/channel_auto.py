@@ -5,7 +5,8 @@ from uuid import uuid4
 from ..document import validate_mask
 from ..ai_protocol import image_data_url
 from ..engine import Recipe
-from ..matting.channels import CHANNEL_NAMES
+from ..channel_advisor import CONTROLS, validate_tune
+from ..matting.channels import CHANNEL_NAMES, validate_options
 from . import pixel_selections
 
 
@@ -64,10 +65,58 @@ def ready(e, result, context, generation):
             return
         _, state = current
         options = {**result['options'],'interior':state['interior'],'detail':True,'color':True}
-        e._status = '3/4 正在结合通道与 AI 细化原图透明边缘…可取消'
-        e._request('matte',method='channel',mask=state['mask'],channel_options=options,auto_token=state['token'])
+        state['options']=validate_options(options)
+        if state.get('hair') and not state.get('tune_attempted'):
+            state['tune_attempted']=True
+            state['tune_preparing']=True
+            e._status='2/4 正在准备原像素通道与采样参照，交给AI选择参数…可取消'
+            e._request('channel_evidence',mask=state['mask'],options=options,expected_sha256=e._sha,
+                       context={'token':state['token']})
+            return
+        _extract(e,state)
     except (ValueError, KeyError) as exc:
         e._notify(str(exc), True)
+
+
+def _extract(e,state):
+    e._status='3/4 正在结合通道与 AI 细化原图透明边缘…可取消'
+    e._request('matte',method='channel',mask=state['mask'],channel_options=state['options'],auto_token=state['token'])
+
+
+def tune_ready(e,result,context,generation):
+    try:
+        current=_current(e,context['token'])
+        if current is None or generation!=e._generation:return
+        pending,state=current
+        if not state.pop('tune_preparing',False):return
+        if result['options']!=state['options']:
+            raise ValueError('通道参照参数已变化，原范围保留')
+        state['tuning']=True
+        images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=item['lossless'])}
+                for item in result['images']]
+        e._status='2/4 AI正在查看原像素通道，选择黑白场与灰度参数…可取消'
+        e.changed.emit()
+        e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,
+                  'channel_tune',{'target':state['mask']['label'],'options':state['options'],
+                                  'current_options':{key:state['options'][key] for key in CONTROLS},
+                                  'channel_suggestions':result['channel_suggestions'],'review_images':images})
+    except (ValueError,KeyError,OSError) as exc:e._notify(str(exc),True)
+
+
+def tuned(e,result):
+    try:
+        state=(e._pending_request or {}).get('channel_auto')
+        if not state or not state.get('tuning'):return
+        current=_current(e,state['token'])
+        if current is None:return
+        _,state=current
+        state['tuning']=False
+        suggestion=validate_tune({key:result[key] for key in ('status','options','summary')},state['options'])
+        if result['status']=='propose':
+            state['options']=validate_options({**state['options'],**result['options']})
+        state['channel_tuning']=deepcopy(suggestion)
+        _extract(e,state)
+    except (ValueError,KeyError) as exc:e._notify(str(exc),True)
 
 
 def complete(e, result, token):
@@ -77,6 +126,8 @@ def complete(e, result, token):
             return
         pending, state = current
         mask = validate_mask(result['mask'])
+        if state.get('channel_tuning') and not state.get('result'):
+            result={**result,'quality':{**result['quality'],'channel_tuning':deepcopy(state['channel_tuning'])}}
         if state.get('hair') and not state.get('hair_prepared'):
             state['hair_prepared']=True
             state['result']=deepcopy(result)
@@ -229,6 +280,8 @@ def reviewed(e, review):
             detail += ' · 原像素细纹理'
         if quality.get('color_recovery'):
             detail += ' · 透明输出去背景串色'
+        if quality.get('channel_tuning',{}).get('status')=='propose':
+            detail += ' · AI 已依据原像素通道设置黑白场与灰度'
         if quality.get('hair_refinement'):
             detail += ' · 人像外缘与头发分区'
         if quality.get('candidate_comparison'):

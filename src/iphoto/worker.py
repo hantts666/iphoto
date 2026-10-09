@@ -363,6 +363,17 @@ def main():
         assets.extend(current_crop_assets)
         return result
 
+    @register('channel_evidence')
+    def _channel_evidence(request):
+        nonlocal current_crop_assets
+        from .channel_advisor import render_evidence
+        if request.get('expected_sha256')!=source.digest:
+            raise ValueError('照片已变化，AI通道参照未应用')
+        result=render_evidence(source.image,request['mask'],request['options'],cache,request['id'],cache=channel_reference_cache)
+        current_crop_assets={Path(item['path']) for item in result['images']}
+        assets.extend(current_crop_assets)
+        return result
+
     @register('matte_candidate')
     def _matte_candidate(request):
         nonlocal current_crop_assets
