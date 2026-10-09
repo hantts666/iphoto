@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from ..document import validate_mask
+from ..document import validate_mask, raster_mask
 from ..engine import load_source
 from .service import refine_alpha
 
@@ -74,6 +74,11 @@ def main():
                                        points=request.get("points", []), progress=progress)
         else:
             mask, quality = refine_alpha(source.image, mask, request["radius"])
+        if 'scope_limit' in request:
+            from .scope import restrict
+            mask=restrict(mask,request['scope_limit'],source.image.size)
+            quality={**quality,'scope_limited':True,
+                     'partial_pixels':sum(raster_mask(mask,source.image.size).histogram()[1:255])}
         response = {
             "id": request["id"], "op": "matte",
             "generation": request["generation"], "ok": True,

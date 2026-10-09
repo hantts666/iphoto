@@ -234,9 +234,10 @@ def select_hint(self, hint, summary="", anchor=None, *, detail_grounded=False, o
 
 
 def select_regions(self, regions, summary, auto_apply=False, *, detail_ids=None, seed_items=None, origin=None):
-    if len(self._layers) + len(regions) > MAX_LAYERS:
-        return self._notify("分区方案超过图层上限，未应用", True)
     origin = deepcopy(origin or self._pending_request or {})
+    filtering = auto_apply and bool(origin.get('channel_auto',{}).get('scope_limit'))
+    if len(self._layers) + len(regions) > MAX_LAYERS and not filtering:
+        return self._notify("分区方案超过图层上限，未应用", True)
     if auto_apply:
         origin["layer_name"] = "局部分层"
     return start(

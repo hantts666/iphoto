@@ -346,6 +346,17 @@ def main():
         from .matting.channels import native_preview
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，通道预览未应用')
+        scoped_mask = None
+        scope_limit = None
+        if 'scope_limit' in request:
+            from .matting.scope import restrict
+            if not request.get('initial') or request.get('result_mask') is not None:
+                raise ValueError('目标范围过滤只用于初始通道参照')
+            scope_limit=request['scope_limit']
+            if 'scope_extent' in request:
+                scope_limit=restrict(request['scope_extent'],scope_limit,source.image.size)
+            scoped_mask = restrict(request['mask'],scope_limit,source.image.size)
+            request = {**request,'mask':scoped_mask}
         actual = request.get('result_mask') is not None
         if actual:
             from .matting.channels import validate_options
@@ -374,12 +385,15 @@ def main():
             current_crop_assets = created | channel_draft_assets
             assets.extend(created)
             return {'path': views['alpha'], 'views': views, 'options': options,
-                    'channel': channel, 'score': score, **info}
+                    'channel': channel, 'score': score, **info,
+                    **({'mask':scoped_mask,'scope_limit':scope_limit} if scoped_mask is not None else {})}
         alpha = alpha.resize(proxy.size, Image.Resampling.LANCZOS)
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))
         path = cache / f"channel-preview-{request['id']}.png"
         alpha.save(path, compress_level=3)
         result={'path':str(path),'channel':channel,'score':score,'options':options}
+        if scoped_mask is not None:
+            result.update(mask=scoped_mask,scope_limit=scope_limit)
         current_crop_assets = {path}
         if request.get('display_preview') is True:
             from .matting.channel_view import previews

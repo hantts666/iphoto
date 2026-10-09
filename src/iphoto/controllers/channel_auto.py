@@ -37,6 +37,13 @@ def begin(e, result):
             return {**result, 'action':'layers'}
         if state['bound'] and (e._layer().get('heal') or e._layer().get('inpaint') or e._layer().get('pixel_patch')):
             raise ValueError('内容图层不能直接替换作用范围，请使用独立选区')
+        if result.get('regions'):
+            state['scope_limit']=deepcopy(e._candidate or e._layer()['mask'])
+            state['scope_extent']=deepcopy(result['regions'][0]['mask'])
+            e._status='1/4 正在原范围内识别要保留的对象，排除其他对象…可取消'
+            if not pixel_selections.select_regions(e,result['regions'],result['summary'],auto_apply=True):
+                raise ValueError('目标识别未能启动，原范围保留')
+            return
         prepare(e, e._candidate or e._layer()['mask'], state['token'])
     except (ValueError, KeyError) as exc:
         e._notify(str(exc), True)
@@ -53,6 +60,8 @@ def prepare(e, mask, token):
         options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,
                    'ai':True,'interior':state['interior'],'detail':False,'color':True}
         e._request('channel_preview',mask=state['mask'],options=options,initial=True,expected_sha256=e._sha,
+                   **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}),
+                   **({'scope_extent':state['scope_extent']} if state.get('scope_extent') else {}),
                    context={'channel_auto':True,'token':token})
     except (ValueError, KeyError) as exc:
         e._notify(str(exc), True)
@@ -64,6 +73,9 @@ def ready(e, result, context, generation):
         if current is None or generation != e._generation:
             return
         _, state = current
+        if state.get('scope_limit'):
+            state['mask']=validate_mask(result['mask'])
+            state['scope_limit']=validate_mask(result['scope_limit'])
         # Do not silently replace the model's continuous alpha with hard-trimap
         # color propagation. Native photo truth checks show lost fine coverage.
         options = {**result['options'],'interior':state['interior'],'detail':False,'color':True}
@@ -82,7 +94,8 @@ def ready(e, result, context, generation):
 
 def _extract(e,state):
     e._status='3/4 正在结合通道与 AI 细化原图透明边缘…可取消'
-    e._request('matte',method='channel',mask=state['mask'],channel_options=state['options'],auto_token=state['token'])
+    e._request('matte',method='channel',mask=state['mask'],channel_options=state['options'],auto_token=state['token'],
+               **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}))
 
 
 def tune_ready(e,result,context,generation):
@@ -134,7 +147,8 @@ def complete(e, result, token):
             state['hair_prepared']=True
             state['result']=deepcopy(result)
             e._status='3/4 正在结合人物外缘与头发分区处理原像素边缘…可取消'
-            e._request('matte',method='hair',mask=mask,auto_token=state['token'])
+            e._request('matte',method='hair',mask=mask,auto_token=state['token'],
+                       **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}))
             return
         if state['revision']:
             previous=state['result']['quality']
@@ -302,6 +316,8 @@ def reviewed(e, review):
             detail += ' · 原像素细纹理'
         if quality.get('color_recovery'):
             detail += ' · 透明输出去背景串色'
+        if quality.get('scope_limited'):
+            detail += ' · 已在原范围内筛选指定对象'
         if quality.get('channel_tuning',{}).get('status')=='propose':
             detail += ' · AI 已依据原像素通道设置黑白场与灰度'
         if quality.get('hair_refinement'):
@@ -319,7 +335,7 @@ def reviewed(e, review):
         if quality['warnings']:
             detail += ' · ' + '；'.join(quality['warnings'])
         e._selection_quality = detail
-        e._message('assistant',detail + '\n效果核对：'+review['summary'] + ('\n已更新原层范围，颜色和强度保留；可一步撤销。' if state['bound']
+        e._message('assistant',detail + '\nAI 复查意见：'+review['summary'] + ('\n已更新原层范围，颜色和强度保留；可一步撤销。' if state['bound']
                    else '\n范围已准备好，可以直接调整或继续修边。') + '\n可切换白底或黑底检查，透明 PNG 使用相同的前景颜色恢复；仍请检查细丝、孔洞与透明内部。',
                    state='applied' if state['bound'] else 'draft',origin=pending)
         e._notify('通道与 AI 透明度处理已完成；可撤销或检查边缘')
@@ -335,6 +351,7 @@ def _correct(e, state, corrections):
     e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'
     e._request('matte',method='correction',mask=state['result']['mask'],
                corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'],
+               **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}),
                **({'source_point_proposal':deepcopy(state['point_corrections'])}
                   if state.get('point_check') and 'strand_candidates' in state.get('point_workspace',{}) else {}),
                hair=bool(state.get('hair')),context_points=state.get('context_points',False))

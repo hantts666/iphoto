@@ -77,7 +77,7 @@ AUTO_SCHEMA = {
 AUTO_PROMPT = (
     """你是 iPhoto 的修图助手，依据用户要求和照片返回一个可执行的 JSON 动作。你可以直接调整当前图层，也可以自己规划局部区域、生成独立调整层。不要要求用户先手动选择或建层，除非目标无法可靠定位。
 action=adjust：只修改当前图层已有范围且 current_display_enabled=true 时使用，scope=current_layer，recipe 给当前图层全部参数的最终值，regions=[]；锁定参数保持原值，未要求改变的参数沿用 current_recipe。只有 current_scope=whole_image 时才可使用 scope=whole_image，局部图层不能执行全图修改。current_display_enabled=false 时不能用 adjust 声称照片已变化；用户有意修改隐藏层参数时用 update_layers 保存，并说明效果暂不可见。
-current_scope=selection 表示用户已经选择或修正了范围，第二张蒙版图片的白色是允许修改的范围。此时允许 action=adjust、scope=current_selection，或明确修正当前五官误选时使用下述refine_mask（也可answer/unsupported、scope=none）。直接使用此范围，不得重新识别、返回 regions、扩大到全图或修改其他层。selection_output=new_layer 时程序自动建立独立可见层，current_recipe 是新层的初始零值，不继承原层参数和锁定；max_new_layers=0 时不能调整。selection_output=replace_mask 时程序将当前范围和参数一起保存到 selection_layer_id 对应的已有层，锁定参数保持原值，其他参数沿用 current_recipe；效果不可见时说明原因，不声称已经修好。recipe 给全部参数最终值，regions=[]、layer_edits=[]、group=null、repairs=[]。范围已准备好，无需用户再建层或确认；回答建议不消耗范围。此模式暂不执行范围之外的修复、编组或其他层修改，不能悄悄丢弃当前范围。
+current_scope=selection 表示用户已经选择或修正了范围，第二张蒙版图片的白色是允许修改的范围。此时允许 action=adjust、scope=current_selection，或明确修正当前五官误选时使用下述refine_mask（也可answer/unsupported、scope=none）。直接使用此范围，不得扩大到全图或修改其他层。普通调整不得重新识别或返回regions；仅下述channel_mask按用户明确要求排除非目标时，可在现有范围内重新识别对象，范围上限保持。selection_output=new_layer 时程序自动建立独立可见层，current_recipe 是新层的初始零值，不继承原层参数和锁定；max_new_layers=0 时不能调整。selection_output=replace_mask 时程序将当前范围和参数一起保存到 selection_layer_id 对应的已有层，锁定参数保持原值，其他参数沿用 current_recipe；效果不可见时说明原因，不声称已经修好。recipe 给全部参数最终值，regions=[]、layer_edits=[]、group=null、repairs=[]。范围已准备好，无需用户再建层或确认；回答建议不消耗范围。此模式暂不执行范围之外的修复、编组或其他层修改，不能悄悄丢弃当前范围。
 action=update_layers、scope=existing_layers：用户点名已有图层、要求减轻/加强已有面部或手臂效果，或要隐藏/显示/调整图层不透明度时，修改 existing_layers 中对应的调整层，无需用户先切换。layer_edits 给1～4个对象，每个有 layer_id（精确使用清单中的id）、recipe、visible、opacity。要调参数时 recipe 给该层全部参数最终绝对值；以该层已有配方为基础，仅改要求涉及的参数，锁定值保持该层原值。recipe=null 表示配方完全不变。visible=true/false 表示显示/隐藏自身，null 表示保持；opacity=0～1 是绝对不透明度（50%写为0.5），null 表示保持。至少一项不是null。例如只隐藏已有层时 recipe=null、visible=false、opacity=null，不能把磨皮强度归零来假装隐藏；显示时保留原强度，父组隐藏时不能声称照片已显示该效果。不要新建图层叠加已有磨皮，不要用当前全图层配方覆盖面部层。顶层 recipe 保持 current_recipe，regions=[]。不能修改不存在的图层，不能通过此动作改蒙版、删除或重排图层；组的参数必须为null，只允许显示状态和整体不透明度。已有层够用时不需要剩余图层位置。
 用户未要求显示/隐藏或改变不透明度时，visible/opacity 必须为null，保留原状态。用户要求整张照片提亮/调色而 current_display_enabled=false 时必须用 global；不能通过 update_layers 恢复之前隐藏的效果来替代。只有用户明确要求恢复该已有图层时才将 visible=true 或提高零不透明度。
 detected_faces中的id是完整人脸身份，display_name说明上下/左右位置。existing_layers中可选face_target提供已验证的面部皮肤关联；按face_target.id关联人脸和图层，改名、修边或移动图层后仍使用该关联，不能按层名、图层顺序或创建顺序猜上下人脸。layer_edits每项还必须给face_id：目标层有face_target时精确填写其id，没有时为null；人脸id和图层id必须匹配，程序会校验。用户继续调整整脸效果时优先update_layers并保留已有修正范围，不重新分割或建立重复层；只修鼻子等新局部范围仍按局部要求处理。同一人脸有多个关联层时，根据用户指定效果/层名或active_layer_id选择；目标仍不明确时说明需要明确哪个已有层，不任意叠加或修改多层。关联不代表效果一定可见，仍核对display与锁定参数。
@@ -130,7 +130,7 @@ AUTO_PROMPT += DEVELOP_PROMPT
 AUTO_PROMPT += """
 新增action=channel_mask：用户要求通道抠图、修发丝/细枝或薄纱透明度时，channel_mask_available=true可执行。程序结合通道灰度与原图 AI 透明度，不只返回建议；不承诺一次完美。
 自动比较RGB、亮度和红−绿/红−蓝/绿−蓝通道计算，再对实际黑白底与原像素边缘进行独立视觉复查；效果明显有问题或无法确认时保留原范围，不提前声称抠图成功。
-有当前草稿必须scope=current_selection、regions=[]，沿用现有范围；当前局部层范围匹配时scope=current_layer、regions=[]，原层参数与强度保留。否则scope=regions，regions只有一个object目标，region.recipe全部0/[]，先定位目标再提取透明度。不能用整图代替目标、不能夹带调色或生成内容。顶层recipe保持current_recipe，layer_edits=[]、group=null、repairs=[]、mask_refinement=null、strategy=null、edit_prompt=null。summary说明将执行的步骤。颜色相近或主体背景混杂时仍需局部修正，不能声称精确。
+有当前草稿必须scope=current_selection；当前局部层使用scope=current_layer，原层参数与强度保留。只要求修边、保留现有目标时regions=[]，沿用范围。用户明确要求“只保留某对象／排除选中的其他对象”，且现有范围混入这些对象时，仍用current_selection或current_layer，但regions给一个需要保留的object目标，先重新识别，再与原范围取交集，然后提取透明度。例如原范围同时包含左上枝叶、山体和云，用户只要左上枝叶，region.box和point必须定位左上枝叶，不把原蒙版白色或图层名称当作正确对象；通道参数不能独自排除同色山体。此过滤的box是范围上限，要包住该对象的完整可见细丝与末端，不包含其他独立对象；不能只框粗枝后让程序猜框外针叶。这个过滤只能减少原覆盖，不能补选或改变对象到原范围外，不新建图层。仅修发丝/薄纱透明度而未要求排除其他对象时，不可自行重新识别并缩减范围。没有当前范围时scope=regions，regions只有一个object目标，先定位再提取透明度。凡带region，region.recipe全部0/[]。不能用整图代替目标、不能夹带调色或生成内容。顶层recipe保持current_recipe，layer_edits=[]、group=null、repairs=[]、mask_refinement=null、strategy=null、edit_prompt=null。summary说明将执行的步骤。颜色相近或主体背景混杂时仍需局部修正，不能声称精确。
 人物头发抠图：hair_matting_available=true且用户目标明确为人物头发时，channel_mask的strategy使用hair_matte。程序先提取通道透明度，主动结合人像外缘透明度与头发分区处理最多四个原像素边缘区域，再复查实际输出，发现局部问题时以语义提示点纠错。不用于皮肤、帽子、普通细枝或整片薄纱。只承诺执行与复查，不提前声称干净或完整。其他目标strategy仍为null。
 """
 
@@ -518,14 +518,12 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             if strategy not in (None,'hair_matte') or strategy=='hair_matte' and (workspace or {}).get('hair_matting_available') is not True:
                 raise ValueError('人物发丝策略不可用，原范围保留')
             regions = []
-            if scope == 'regions':
+            if scope == 'regions' or plan['regions'] != []:
                 if not isinstance(plan['regions'], list) or len(plan['regions']) != 1:
                     raise ValueError('通道抠图一次只识别一个目标')
                 regions = parse_regions(completion({'status':'planned','summary':plan['summary'],'regions':plan['regions']}))['regions']
                 if any(regions[0]['recipe'].values()) or regions[0].get('mask_target') != 'object':
                     raise ValueError('通道抠图仅支持普通物体范围，不夹带调色或面部精修')
-            elif plan['regions'] != []:
-                raise ValueError('已有范围不能夹带新目标')
             return {'status':'planned','action':action,'scope':scope,'summary':recipe['summary'],'regions':regions,
                     **({'strategy':strategy} if strategy is not None else {})}
         if action == 'generate':

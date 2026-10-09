@@ -80,7 +80,8 @@ def test_native_comparison_uses_identical_boxes_and_each_actual_layer_mask(tmp_p
     result=render_comparison(source,layers,masks,tmp_path,'pair',target=layer['id'] if bound else None,boxes=[box])
     assert result['boxes']==[box] and result['comparison_candidates']==['channel','hair']
     labels=[v['label'] for v in result['review_images']]
-    assert len(labels)==6 and 'channel' in labels[2] and 'hair' in labels[3]
+    assert len(labels)==8 and 'channel' in labels[2] and 'hair' in labels[4]
+    assert '黑底' in labels[3] and '黑底' in labels[5]
     for key in ('channel','hair'):
         staged=deepcopy(layers)
         if bound:staged[-1]['mask']=masks[key]
@@ -88,6 +89,10 @@ def test_native_comparison_uses_identical_boxes_and_each_actual_layer_mask(tmp_p
         expected=Image.alpha_composite(Image.new('RGBA',source.size,'white'),
                                        compose_cutout(render_layers(source,staged),alpha)).convert('RGB')
         path=next(item['path'] for item in result['images'] if item['path'].endswith(f'pair-{key}-white-0.png'))
+        black=next(item for item in result['review_images'] if item['path'].endswith(f'pair-{key}-black-0.png'))
+        expected_black=Image.alpha_composite(Image.new('RGBA',source.size,'black'),
+                                             compose_cutout(render_layers(source,staged),alpha)).convert('RGB')
+        assert black['lossless'] and Image.open(black['path']).tobytes()==expected_black.tobytes()
         assert Image.open(path).tobytes()==expected.tobytes()
     assert (layers,masks)==before and source.tobytes()==source_bytes
     with pytest.raises(ValueError,match='已变化'):

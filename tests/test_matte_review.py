@@ -108,12 +108,15 @@ def test_review_native_crops_match_actual_export_composition(tmp_path):
     source=Image.new('RGB',(1200,900),(85,102,68));original=source.tobytes()
     mask={**empty_mask(),'bitmap':encode_bitmap(Image.fromarray(a),sampling='alpha',preserve_resolution=True)}
     result=render_review(source,[new_layer('原图',True)],mask,tmp_path,1)
-    assert 3<=len(result['images'])<=18 and 2<=len(result['review_images'])<=6
+    assert 3<=len(result['images'])<=18 and len(result['review_images'])==2+3*len(result['boxes'])
     expected=Image.alpha_composite(Image.new('RGBA',source.size,'white'),compose_cutout(source,Image.fromarray(a))).convert('RGB')
     box=result['boxes'][0]
     native=next(v for v in result['images'] if v['label']=='边缘1原像素候选白底')
     image=Image.open(native['path'])
     assert image.size==(box[2]-box[0],box[3]-box[1]) and image.tobytes()==expected.crop(box).tobytes()
+    black=next(v for v in result['review_images'] if v['label']=='边缘1原像素候选黑底')
+    expected_black=Image.alpha_composite(Image.new('RGBA',source.size,'black'),compose_cutout(source,Image.fromarray(a))).convert('RGB')
+    assert black['lossless'] and Image.open(black['path']).tobytes()==expected_black.crop(box).tobytes()
     checker=Image.open(next(v['path'] for v in result['images'] if '边缘1原像素候选紫色棋盘格' in v['label']))
     assert checker.size==image.size
     transparent=np.asarray(Image.fromarray(a).crop(box))==0
@@ -194,7 +197,7 @@ def test_context_anchors_reach_opaque_hair_without_expanding_reviewed_pixels(tmp
     assert locator.getpixel((650,650))==source.getpixel((frame[0]+650,frame[1]+650))
     native=Image.open(next(item['path'] for item in result['images'] if '-source-0' in item['path']))
     assert native.tobytes()==source.crop(core).tobytes() and native.size==(512,512)
-    assert len(result['review_images'])==5 and (source.tobytes(),mask)==before
+    assert len(result['review_images'])==6 and (source.tobytes(),mask)==before
     assert result['strand_detail_count']==0
 
 
@@ -227,7 +230,7 @@ def test_verified_strand_quality_window_matches_original_and_actual_alpha_output
     result=render_review(source,[layer],mask,tmp_path,5,[core],target_context=True,detail_points=[patch])
     frame=point_frame(core,source.size);box,_=point_window(source.size,frame,patch['points'][-1]);size=(512,512)
     item=next(item for item in result['review_images'] if '发丝参照T3局部质量' in item['label'])
-    panel=Image.open(item['path']);assert panel.size==(1024,1072) and len(result['review_images'])==6
+    panel=Image.open(item['path']);assert panel.size==(1024,1072) and len(result['review_images'])==7
     assert result['strand_detail_count']==1
     assert panel.crop((0,24,512,536)).tobytes()==source.crop(box).resize(size,Image.Resampling.NEAREST).tobytes()
     expected_alpha=Image.fromarray(a).crop(box).convert('RGB').resize(size,Image.Resampling.NEAREST)
@@ -238,7 +241,7 @@ def test_verified_strand_quality_window_matches_original_and_actual_alpha_output
     monkeypatch.setattr('iphoto.matte_review.keep_candidates',lambda *args:pytest.fail('最终复查不应重新找P'))
     monkeypatch.setattr('iphoto.matte_review.exclude_candidates',lambda *args:pytest.fail('最终复查不应重新找N'))
     final=render_review(source,[layer],mask,tmp_path,7,[core],target_context=True,detail_points=[patch],final_review=True)
-    assert len(final['review_images'])==5
+    assert len(final['review_images'])==6
     assert '发丝参照T3局部质量' in final['review_images'][2]['label']
     assert '四格质量对照' in final['review_images'][3]['label']
     assert final['review_images'][-1]['label']=='候选整体紫色棋盘格'
@@ -247,7 +250,7 @@ def test_verified_strand_quality_window_matches_original_and_actual_alpha_output
         original_entry=(result['review_images'][1] if '上下文' in entry['label'] else
                         next(v for v in result['review_images'] if v['label']==entry['label']))
         assert Image.open(entry['path']).tobytes()==Image.open(original_entry['path']).tobytes()
-        assert entry['lossless']==('质量对照' in entry['label'])
+        assert entry['lossless']==('质量对照' in entry['label'] or '原像素候选黑底' in entry['label'])
     assert final['boxes']==result['boxes'] and final['point_bounds']==result['point_bounds']
     assert final['keep_candidates']=={'1':[]} and final['exclude_candidates']=={'1':[]}
     assert all('-locate-' not in entry['path'] for entry in final['images'])
