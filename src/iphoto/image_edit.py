@@ -49,16 +49,19 @@ class ImageEditController(QObject):
             self.cancel('选区图像编辑超时，照片未改变')
         self.changed.emit()
 
-    def start(self, image_url, prompt, size, token, generation):
+    def start(self, image_url, prompt, size, token, generation, *, scope_url=None):
         try:
             if self.busy:
                 return False
             from .generation_size import validate_size
+            from .generation_scope import SCOPE_PROMPT, validate_scope_reference
             size = validate_size(size)
+            validate_scope_reference(image_url, scope_url)
             target = endpoint(self.ai.settings)
             secret = self.ai.store.resolve_key(self.ai.settings, '')
             payload = {'model': 'qwen-image-3.0-pro', 'input': {'messages': [{'role': 'user', 'content': [
-                {'image': image_url}, {'text': prompt + '\n保持输入照片的构图、比例、所有内容位置和人物身份。只按要求精修。除用户明确指定的变化外，保留五官形状、年龄、表情、衣物、场景。保留皮肤纹理和原有光影，避免面具边缘、假皮肤和过度美颜。'}]}]},
+                {'image': image_url}, {'image': scope_url},
+                {'text': prompt + SCOPE_PROMPT + '\n保持输入照片的构图、比例、所有内容位置和人物身份。只按要求精修。除用户明确指定的变化外，保留五官形状、年龄、表情、衣物、场景。保留皮肤纹理和原有光影，避免面具边缘、假皮肤和过度美颜。'}]}]},
                 'parameters': {'size': f'{size[0]}*{size[1]}', 'n': 1, 'watermark': False, 'prompt_extend': False}}
             request = QNetworkRequest(QUrl(target))
             request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')

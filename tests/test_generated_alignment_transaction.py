@@ -3,6 +3,7 @@ import base64
 from copy import deepcopy
 from io import BytesIO
 import json
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
@@ -14,6 +15,7 @@ from PySide6.QtTest import QTest
 from iphoto.controllers import photo_strategy
 from iphoto.document import raster_mask, render_layers, read_project
 from iphoto.engine import Recipe
+from iphoto.generation_scope import validate_scope_reference
 from test_ai import configure, mock_api, wait_for
 from test_editor import settled
 from test_generated_alignment import reference, displaced
@@ -30,7 +32,9 @@ def click(window, item):
 
 @pytest.mark.parametrize('case,size', [('accept',(1440,930)), ('accept',(1080,700)),
     ('reject',(1440,930)), ('cancel',(1080,700)), ('bad_reference',(1440,930)),
-    ('bad_hash',(1440,930)), ('stale',(1440,930)), ('unrelated_pixels',(1440,930))])
+    ('bad_hash',(1440,930)), ('stale',(1440,930)), ('unrelated_pixels',(1440,930)),
+    ('no_scope',(1080,700)), ('empty_scope',(1080,700)),
+    ('wrong_size_scope',(1440,930)), ('scope_file_missing',(1440,930))])
 def test_geometry_is_a_cancellable_bound_stage_before_review_and_commit(ui, monkeypatch, case, size):
     editor, window, find, warnings, tmp_path = ui
     window.resize(*size)
@@ -66,7 +70,9 @@ def test_geometry_is_a_cancellable_bound_stage_before_review_and_commit(ui, monk
         return original_plan(*values)
     monkeypatch.setattr(editor.ai,'plan',plan)
 
-    def generate(url, prompt, size, token, generation):
+    def generate(url, prompt, size, token, generation, *, scope_url):
+        validate_scope_reference(url, scope_url)
+        assert url.startswith('data:image/png;base64,')
         with Image.open(BytesIO(base64.b64decode(url.split(',',1)[1]))) as image:
             image = image.convert('RGB')
         if case == 'unrelated_pixels':
@@ -80,6 +86,20 @@ def test_geometry_is_a_cancellable_bound_stage_before_review_and_commit(ui, monk
         QTimer.singleShot(0,lambda:editor._image_edit.completed.emit(output,token,generation))
         return True
     monkeypatch.setattr(editor._image_edit,'start',generate)
+    original_ready = photo_strategy.generative_ready
+    def ready(owner, result, context, generation):
+        if case == 'no_scope':
+            result = {key:value for key,value in result.items() if key != 'scope_path'}
+        elif case == 'scope_file_missing':
+            Path(result['scope_path']).unlink()
+        elif case in ('empty_scope','wrong_size_scope'):
+            with Image.open(result['scope_path']) as scope:
+                size = scope.size
+            if case == 'wrong_size_scope':
+                size = (size[0]+1,size[1])
+            Image.new('L', size, 0 if case=='empty_scope' else 255).save(result['scope_path'])
+        return original_ready(owner,result,context,generation)
+    monkeypatch.setattr(photo_strategy,'generative_ready',ready)
     original_aligned = photo_strategy.aligned
     def aligned(owner,result,context,generation):
         alignments.append(result['alignment'])
@@ -112,7 +132,7 @@ def test_geometry_is_a_cancellable_bound_stage_before_review_and_commit(ui, monk
         QTest.keyClick(window,Qt.Key_V,Qt.ControlModifier)
         click(window,find('applyDescriptionButton'))
         wait_for(lambda:not editor.busy and settled(editor) and editor._pending_request is None,seconds=30)
-        assert stages == ['generative_align']
+        assert stages == ([] if case in ('no_scope','empty_scope','wrong_size_scope','scope_file_missing') else ['generative_align'])
         if case == 'accept':
             assert alignments[-1]['status'] == 'aligned'
             assert len(editor._layers)==len(original)+1 and editor._cursor==cursor+1

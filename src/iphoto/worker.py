@@ -486,13 +486,16 @@ def main():
         path = cache / f"generated-input-{request['id']}.png"
         reference = preview(crop,1280)
         reference.save(path,compress_level=3)
+        allowed = selection.crop(tuple(box)).resize(reference.size, Image.Resampling.NEAREST)
+        scope_path = cache / f"generated-scope-{request['id']}.png"
+        allowed.save(scope_path, compress_level=3)
         generative_reference = {'id':request['id'], 'generation':request['generation'],
                                 'source_sha256':source.digest, 'image':reference,
-                                'allowed':selection.crop(tuple(box)).resize(reference.size, Image.Resampling.NEAREST),
+                                'allowed':allowed,
                                 'canvas_size':list(source.image.size), 'box':box}
-        current_crop_assets = {path}
-        assets.append(path)
-        return {'path':str(path),'box':box,'canvas_size':list(source.image.size),
+        current_crop_assets = {path, scope_path}
+        assets.extend((path, scope_path))
+        return {'path':str(path),'scope_path':str(scope_path),'box':box,'canvas_size':list(source.image.size),
                 'output_size':generated_size,'proposed':proposed,'reference_id':request['id']}
 
     @register('generative_align')

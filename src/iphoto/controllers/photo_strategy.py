@@ -51,9 +51,9 @@ def prepare(self, proposed, origin):
         state['proposed'] = ([state['base']] if 'base' in state else []) + deepcopy(proposed)
         if state.get('generate'):
             state['preparing'] = True
-            self._status = '正在准备选区与周围光色，随后生成局部精修…可取消'
+            self._status = '正在准备照片与对应选区参考，随后生成局部精修…可取消'
             self._request('generative_crop', before=pending['layer_snapshot'], proposed=state['proposed'],
-                          soften=not bool(pending.get('selection_snapshot')),
+                          soften=True,
                           expected_sha256=self._sha, context={'token': state['token']})
             self.changed.emit()
             return
@@ -180,8 +180,9 @@ def generative_ready(self, result, context, generation):
         pending, state = current
         state.update(proposed=result['proposed'], box=result['box'], preparing=False,
                      canvas_size=result['canvas_size'], reference_id=result['reference_id'])
-        self._image_edit.start(image_data_url(result['path']), state['direction'], result['output_size'],
-                               state['token'], generation)
+        self._image_edit.start(image_data_url(result['path'], lossless=True), state['direction'], result['output_size'],
+                               state['token'], generation,
+                               scope_url=image_data_url(result['scope_path'], lossless=True))
     except (ValueError, KeyError, OSError) as exc:
         self._notify(str(exc), True)
 

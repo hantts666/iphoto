@@ -147,7 +147,8 @@ def test_real_worker_review_before_atomic_commit(qt_app, ai_store, tmp_path, ver
         editor.close()
 
 
-def test_generated_pixels_commit_only_after_review_and_keep_selection_outside_exact(qt_app,ai_store,tmp_path,monkeypatch):
+@pytest.mark.parametrize('semantic', [None, 'face_skin'])
+def test_generated_pixels_commit_only_after_review_and_keep_selection_outside_exact(qt_app,ai_store,tmp_path,monkeypatch,semantic):
     from PySide6.QtCore import QTimer
     from iphoto.document import render_layers
     image=Image.new('RGB',(320,240),(78,105,125));path=tmp_path/'selected.png';image.save(path)
@@ -166,7 +167,9 @@ def test_generated_pixels_commit_only_after_review_and_keep_selection_outside_ex
         if arguments[5]=='auto':arguments[6]={**arguments[6],'image_edit_available':True}
         return original_plan(*arguments)
     monkeypatch.setattr(editor.ai,'plan',plan)
-    def generated(_url,_prompt,size,token,generation):
+    def generated(_url,_prompt,size,token,generation, *, scope_url):
+        from iphoto.generation_scope import validate_scope_reference
+        validate_scope_reference(_url, scope_url)
         QTimer.singleShot(0,lambda:editor._image_edit.completed.emit(Image.new('RGB',tuple(size),(160,120,185)),token,generation))
         return True
     monkeypatch.setattr(editor._image_edit,'start',generated)
@@ -174,11 +177,19 @@ def test_generated_pixels_commit_only_after_review_and_keep_selection_outside_ex
         with mock_api(answer) as (url,requests):
             configure(editor.ai,url);editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
             editor.drawDraft('rect','replace',[[.3,.2],[.7,.8]],.025);wait_for(lambda:settled(editor))
+            if semantic:
+                editor._set_candidate({**editor._candidate,'semantic_target':semantic})
+                wait_for(lambda:settled(editor))
             mask=deepcopy(editor._candidate);original=deepcopy(editor._layers);cursor=editor._cursor
             assert editor.sendMessage('直接生成选区内的淡紫色','auto')
             wait_for(lambda:not editor.busy and settled(editor) and editor._pending_request is None,seconds=25)
             assert len(editor._layers)==2 and editor._cursor==cursor+1 and not editor.hasSelectionDraft
-            assert editor._layers[-1]['mask']==mask and 'pixel_patch' in editor._layers[-1]
+            effect_mask=soften_effect_mask(mask,image.size)
+            assert editor._layers[-1]['mask']==effect_mask and 'pixel_patch' in editor._layers[-1]
+            effect_alpha=np.asarray(raster_mask(effect_mask,image.size))
+            if semantic:
+                assert np.any((effect_alpha>0)&(effect_alpha<255))
+                assert np.all(effect_alpha<=np.asarray(raster_mask(mask,image.size)))
             before=np.asarray(image);after=np.asarray(render_layers(image,editor._layers));alpha=np.asarray(raster_mask(mask,image.size))
             assert np.array_equal(after[alpha==0],before[alpha==0]) and np.any(after[alpha>0]!=before[alpha>0])
             project=tmp_path/'pixels.iphoto';editor.saveProject(str(project));wait_for(lambda:not editor.savingProject)
