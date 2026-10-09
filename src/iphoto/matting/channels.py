@@ -182,14 +182,13 @@ def estimate(image, mask, options, *, neural=None, progress=None):
             from .neural import solve
             neural = solve
         refined, tiles = neural(cropped, trimap, progress=progress)
-        # Reliable channel contrast carries real subpixel brightness. The AI
-        # resolves spatial ambiguity; avoid treating every gray hair as opaque.
-        weight = min(.8, max(0., (score-1.5)/8))
-        channel_pixels = np.rint(values*255).astype(np.uint8)
-        mixed = np.rint(refined*(1-weight) + channel_pixels*weight).astype(np.uint8)
-        ambiguous_bg = (alpha == 0) & (channel_pixels > 245) & (refined < 12)
-        mixed[ambiguous_bg] = 0
-        result = np.where(unknown, mixed, refined).astype(np.uint8)
+        # Channel contrast is not confidence in per-pixel coverage. Foreground
+        # colour and background light vary along a strand; mixing brightness
+        # into alpha cuts faint hairs and introduces opaque background patches.
+        # Channels supply the known regions above. Preserve the model's optical
+        # unknowns, including values below 12/255 on bright local backgrounds.
+        # Disabling AI still applies the user's native channel curve directly.
+        result = refined.copy()
         backend = '通道 + ViTMatte-S · ONNX'
     else:
         result = np.rint(values*255).astype(np.uint8)
@@ -207,7 +206,7 @@ def estimate(image, mask, options, *, neural=None, progress=None):
             progress(phase='polish')
         try:
             seed = {**empty_mask(), 'bitmap':encode_bitmap(Image.fromarray(result), sampling='alpha', preserve_resolution=True)}
-            # This alpha comes from an RGB-composition model and channel values.
+            # This alpha comes from an RGB-composition model.
             # Match that domain instead of changing its coverage with a second
             # gamma transform. Standalone physical matting keeps its linear mode.
             detailed, _ = refine_alpha(cropped, seed, 4, linear=False)

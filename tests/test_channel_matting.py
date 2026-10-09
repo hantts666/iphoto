@@ -38,7 +38,7 @@ def test_channel_and_neural_preserve_real_gray_holes_and_distant_support():
     def ai(crop, guide, progress=None):
         calls.append((crop.size,guide.copy()))
         # ROI is bbox+24px: (31,6,209,154). Truth supplies an independent
-        # oracle to isolate channel mixing from neural prediction accuracy.
+        # oracle to isolate alpha processing from neural prediction accuracy.
         expected=np.rint(truth[6:154,31:209]*255).astype(np.uint8)
         expected[guide==0]=0;expected[guide==255]=255
         return expected,1
@@ -51,6 +51,49 @@ def test_channel_and_neural_preserve_real_gray_holes_and_distant_support():
     assert result['bitmap']['width']==image.width
     manual,_=estimate(image,mask,{**options,'ai':False})
     assert np.abs(np.asarray(raster_mask(manual,image.size))/255-truth).max()<.004
+
+
+def test_channel_contrast_does_not_replace_ai_coverage_with_varying_foreground_light():
+    image,truth,mask,options=scene()
+    # The same 60% coverage can contain different foreground colours. A
+    # globally contrasting red plane is not an independent alpha measurement.
+    foreground=np.full(truth.shape,210.,np.float32)
+    foreground[35:125,110:170]=90
+    foreground[35:125,145:170]=205
+    rgb=np.rint(35*(1-truth)+foreground*truth).astype(np.uint8)
+    image=Image.fromarray(np.repeat(rgb[...,None],3,axis=2))
+    expected=np.rint(truth[6:154,31:209]*255).astype(np.uint8)
+    def oracle(crop,guide,progress=None):
+        predicted=expected.copy()
+        predicted[guide==0]=0;predicted[guide==255]=255
+        return predicted,1
+    output,quality=estimate(image,mask,options,neural=oracle)
+    assert quality['contrast_score']>4
+    actual=np.asarray(raster_mask(output,image.size))/255
+    assert np.abs(actual-truth).max()<.004
+    # The explicit channel operation remains useful, but cannot be silently
+    # treated as optical truth when its foreground colour assumptions fail.
+    manual,_=estimate(image,mask,{**options,'ai':False})
+    assert np.abs(np.asarray(raster_mask(manual,image.size))/255-truth).max()>.2
+
+
+def test_faint_ai_strand_on_bright_background_is_not_zeroed_by_channel_curve():
+    image,truth,mask,options=scene()
+    pixels=np.array(image)
+    # Coarse selection misses a low-coverage wisp on a locally bright backdrop.
+    # This is inside the allowed 8px growth band, outside the old binary mask.
+    truth[65:70,50:55]=3/255
+    pixels[65:70,50:55]=230
+    image=Image.fromarray(pixels)
+    def oracle(crop,guide,progress=None):
+        predicted=np.rint(truth[6:154,31:209]*255).astype(np.uint8)
+        predicted[guide==0]=0;predicted[guide==255]=255
+        assert (guide[59:64,19:24]==128).all()
+        return predicted,1
+    result,_=estimate(image,mask,options,neural=oracle)
+    actual=np.asarray(raster_mask(result,image.size))
+    assert (actual[65:70,50:55]==3).all()
+    assert (actual[:20]==0).all()
 
 
 def test_normal_edge_mode_keeps_opaque_core_and_semantic_exclusions():
