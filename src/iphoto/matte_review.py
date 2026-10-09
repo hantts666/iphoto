@@ -132,6 +132,8 @@ def parse_review(data, workspace=None):
                 or result['status'] not in ('accept','revise','reject','uncertain')
                 or not isinstance(result['summary'],str) or not 1<=len(result['summary'].strip())<=2000):
             raise ValueError('抠图检查结构无效，原范围保留')
+        if (workspace or {}).get('color_only') is True and (result['status']=='revise' or result.get('corrections',[])!=[]):
+            raise ValueError('前景颜色检查不能修改选区或返回纠错点，原范围保留')
         if result['status']=='revise':
             context=workspace or {}
             if context.get('revision')!=0 or context.get('correction_available') is not True:
@@ -429,7 +431,14 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
     else:
         review_images.extend(black_views)
         review_images.extend(item for item in images if '-locate-' in item['path'])
-    return {'images':images,'review_images':review_images,'boxes':[list(box) for box in boxes],
+    color_images=[]
+    if mask.get('color_recovery'):
+        from .matte_color import render_panels
+        panels=render_panels(source,output,boxes,directory,identity)
+        images.extend(panels)
+        color_images=panels
+    return {'images':images,'review_images':review_images,'color_review_images':color_images,
+            'boxes':[list(box) for box in boxes],
             'keep_candidates':anchors,'exclude_candidates':exclusions,
             'context_points':target_context,'point_boxes':frames,'point_bounds':bounds,
             'strand_detail_count':sum(point[2]==2 for patch in (detail_points or []) for point in patch['points'])}

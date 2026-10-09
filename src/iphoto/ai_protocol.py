@@ -17,6 +17,7 @@ from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT,
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
 from .photo_strategy import DEVELOP_PROMPT, REVIEW_PROMPT as PHOTO_REVIEW_PROMPT, REVIEW_SCHEMA as PHOTO_REVIEW_SCHEMA
 from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, FINAL_PROMPT as MATTE_FINAL_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
+from .matte_color import PROMPT as MATTE_COLOR_PROMPT, SCHEMA as MATTE_COLOR_SCHEMA
 from .matte_compare import (PROMPT as MATTE_COMPARE_PROMPT, SCHEMA as MATTE_COMPARE_SCHEMA,
                             REGIONAL_PROMPT as MATTE_REGIONAL_PROMPT, REGIONAL_SCHEMA as MATTE_REGIONAL_SCHEMA)
 from .matte_points import PROMPT as MATTE_POINTS_PROMPT, SCHEMA as MATTE_POINTS_SCHEMA
@@ -223,7 +224,11 @@ def build_payload(
                           and context['revision'] == 1 and context.get('correction_available') is False)
     compare_mattes = mode == 'matte_review' and 'comparison_candidates' in context
     regional_mattes = compare_mattes and context.get('regional_comparison') is True
-    if final_matte_review:
+    color_matte_review = mode == 'matte_review' and context.get('color_only') is True and not compare_mattes
+    if color_matte_review:
+        context = {key:value for key,value in context.items() if key in (
+            'request','mode','target','revision','color_only','edge_count')}
+    elif final_matte_review:
         # Final inspection has no point-planning task. The parser still keeps
         # its original workspace and forbids a second correction.
         context = {key: value for key, value in context.items() if key in (
@@ -267,7 +272,7 @@ def build_payload(
                 "content": {
                     "auto": AUTO_PROMPT,
                     "photo_review": PHOTO_REVIEW_PROMPT,
-                    "matte_review": (MATTE_REGIONAL_PROMPT if regional_mattes else MATTE_COMPARE_PROMPT) if compare_mattes else MATTE_FINAL_PROMPT if final_matte_review else MATTE_REVIEW_PROMPT,
+                    "matte_review": MATTE_COLOR_PROMPT if color_matte_review else (MATTE_REGIONAL_PROMPT if regional_mattes else MATTE_COMPARE_PROMPT) if compare_mattes else MATTE_FINAL_PROMPT if final_matte_review else MATTE_REVIEW_PROMPT,
                     "matte_points": MATTE_POINTS_PROMPT,
                     "channel_tune": CHANNEL_TUNE_PROMPT,
                     "selection": SELECTION_PROMPT,
@@ -342,7 +347,7 @@ def build_payload(
                     "schema": {
                         "auto": AUTO_SCHEMA,
                         "photo_review": PHOTO_REVIEW_SCHEMA,
-                        "matte_review": (MATTE_REGIONAL_SCHEMA if regional_mattes else MATTE_COMPARE_SCHEMA) if compare_mattes else MATTE_REVIEW_SCHEMA,
+                        "matte_review": MATTE_COLOR_SCHEMA if color_matte_review else (MATTE_REGIONAL_SCHEMA if regional_mattes else MATTE_COMPARE_SCHEMA) if compare_mattes else MATTE_REVIEW_SCHEMA,
                         "matte_points": MATTE_POINTS_SCHEMA,
                         "channel_tune": CHANNEL_TUNE_SCHEMA,
                         "selection": SELECTION_SCHEMA,

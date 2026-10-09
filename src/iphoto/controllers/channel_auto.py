@@ -213,37 +213,54 @@ def review_ready(e, result, context, generation):
                       'matte_review',{'target':state['mask']['label'],'comparison_candidates':result['comparison_candidates'],
                                       'regional_comparison':True,'edge_count':len(result['boxes']),'review_images':images})
             return
-        state['review_boxes'] = deepcopy(result['boxes'])
-        state['context_points'] = bool(state.get('hair')) and result.get('context_points') is True
-        state['point_bounds'] = deepcopy(result.get('point_bounds')) if state['context_points'] else None
-        state['keep_candidates'] = deepcopy(result['keep_candidates'])
-        strand_details = result.get('strand_detail_count',0) if state['context_points'] else 0
-        from ..segmentation.precise_sam import available
-        state['correction_available'] = available() and bool(result['boxes']) and not state['revision']
-        images = [{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
-                  for item in result['review_images']]
-        e._status = '4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消'
-        if type(strand_details) is int and 1<=strand_details<=4:
-            e._status = '4/4 AI 正在细查原片发丝的卷曲、分叉、灰雾和漏选…可取消'
-        e.changed.emit()
-        # Keep solver scores and prior verdicts on the local candidate. They
-        # are not evidence that the pixels preserve the requested fine detail.
-        e.ai.plan(pending['text'], Recipe().to_dict(), [], result['images'][0]['path'], generation,
-                  'matte_review', {'target':state['mask']['label'],
-                                   'revision':state['revision'],'edge_count':len(result['boxes']),
-                                   'keep_candidates':result['keep_candidates'],
-                                   'exclude_candidates':result['exclude_candidates'],
-                                   'correction_available':state['correction_available'],
-                                   'correction_method':'hair' if state.get('hair') else 'semantic',
-                                   'visual_exclusions':bool(state.get('hair')),
-                                   'strand_points':bool(state.get('hair')),
-                                   'point_budget':8 if state.get('hair') else 6,
-                                   'context_points':state['context_points'],
-                                   'strand_detail_count':strand_details,
-                                   'point_bounds':state['point_bounds'],
-                                   'review_images':images})
+        if result.get('color_review_images'):
+            state['color_reviewing']=True
+            state['review_evidence']=deepcopy(result)
+            images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=True)}
+                    for item in result['color_review_images']]
+            e._status='4/4 AI 正在单独核对前景颜色与黑底串色…可取消'
+            e.changed.emit()
+            e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,
+                      'matte_review',{'target':state['mask']['label'],'color_only':True,
+                                      'revision':state['revision'],'edge_count':len(result['boxes']),
+                                      'correction_available':False,'review_images':images})
+            return
+        _send_review(e,pending,state,result,generation)
     except (ValueError, KeyError, OSError) as exc:
         e._notify(str(exc), True)
+
+
+def _send_review(e,pending,state,result,generation):
+    state['reviewing']=True
+    state['review_boxes'] = deepcopy(result['boxes'])
+    state['context_points'] = bool(state.get('hair')) and result.get('context_points') is True
+    state['point_bounds'] = deepcopy(result.get('point_bounds')) if state['context_points'] else None
+    state['keep_candidates'] = deepcopy(result['keep_candidates'])
+    strand_details = result.get('strand_detail_count',0) if state['context_points'] else 0
+    from ..segmentation.precise_sam import available
+    state['correction_available'] = available() and bool(result['boxes']) and not state['revision']
+    images = [{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
+              for item in result['review_images']]
+    e._status = '4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消'
+    if type(strand_details) is int and 1<=strand_details<=4:
+        e._status = '4/4 AI 正在细查原片发丝的卷曲、分叉、灰雾和漏选…可取消'
+    e.changed.emit()
+    # Keep solver scores and prior verdicts on the local candidate. They
+    # are not evidence that the pixels preserve the requested fine detail.
+    e.ai.plan(pending['text'], Recipe().to_dict(), [], result['images'][0]['path'], generation,
+              'matte_review', {'target':state['mask']['label'],
+                               'revision':state['revision'],'edge_count':len(result['boxes']),
+                               'keep_candidates':result['keep_candidates'],
+                               'exclude_candidates':result['exclude_candidates'],
+                               'correction_available':state['correction_available'],
+                               'correction_method':'hair' if state.get('hair') else 'semantic',
+                               'visual_exclusions':bool(state.get('hair')),
+                               'strand_points':bool(state.get('hair')),
+                               'point_budget':8 if state.get('hair') else 6,
+                               'context_points':state['context_points'],
+                               'strand_detail_count':strand_details,
+                               'point_bounds':state['point_bounds'],
+                               'review_images':images})
 
 
 def reviewed(e, review):
@@ -256,6 +273,16 @@ def reviewed(e, review):
             return
         pending,state = current
         state['reviewing'] = False
+        if state.pop('color_reviewing',False):
+            evidence=state.pop('review_evidence')
+            if review['status']!='accept' or review.get('corrections',[])!=[]:
+                e._pending_request=None
+                e._message('assistant','候选抠图的前景颜色未通过检查，原范围保留。\n'+review['summary'],
+                           state='unsupported',origin=pending)
+                return e._notify('前景颜色未通过检查，原范围保留；未应用候选')
+            state['result']['quality']['color_check']={'status':'accept','summary':review['summary']}
+            _send_review(e,pending,state,evidence,state['generation'])
+            return
         if state.pop('comparing',False):
             from ..matte_compare import CANDIDATES, validate_regions
             if review['status']=='select' and review.get('candidate')=='regional':
@@ -339,7 +366,7 @@ def reviewed(e, review):
                    else '\n范围已准备好，可以直接调整或继续修边。') + '\n可切换白底或黑底检查，透明 PNG 使用相同的前景颜色恢复；仍请检查细丝、孔洞与透明内部。',
                    state='applied' if state['bound'] else 'draft',origin=pending)
         e._notify('通道与 AI 透明度处理已完成；可撤销或检查边缘')
-    except (ValueError, KeyError) as exc:
+    except (ValueError, KeyError, OSError) as exc:
         e._notify(str(exc), True)
 
 

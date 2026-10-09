@@ -37,6 +37,8 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
             context=json.loads(payload['messages'][1]['content'][0]['text'])
             if context.get('mode')!='matte_review':
                 return completion(plan())
+            if context.get('color_only'):
+                return completion({'status':'accept','summary':'受控颜色通过','corrections':[]})
             assert 'quality' not in context and 'previous_check' not in context
             if context['revision']==0:
                 edge=next(int(key) for key,points in context['keep_candidates'].items() if points)
@@ -66,6 +68,7 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
                 # completion must not cancel a newer transaction or commit it.
                 result=deepcopy(mask)
                 result['label']='已纠正的候选'
+                result['color_recovery']=True
                 channel_auto.complete(editor,{'mask':result,'quality':{'elapsed_ms':1.,'warnings':[]}},captured['auto_token'])
             wait_for(lambda:not editor.busy and settled(editor),seconds=45)
         if outcome=='accept':
@@ -77,5 +80,5 @@ def test_corrected_mask_requires_final_review_and_one_undo(qt_app,ai_store,tmp_p
         else:
             assert editor._layers==original and editor._cursor==cursor
         assert editor._candidate is None and not editor.aiChannelPreparing
-        assert len(requests)==(3 if outcome in ('accept','reject','again','invalid_final') else 2)
+        assert len(requests)==(5 if outcome in ('accept','reject','again','invalid_final') else 3)
     finally:editor.close()

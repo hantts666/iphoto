@@ -124,6 +124,8 @@ def test_filter_and_real_channels_remain_pending_until_review(qt_app,ai_store,tm
             return original(op,**data)
         monkeypatch.setattr(editor,'_request',request)
         def server(payload):
+            if '前景颜色检查员' in payload['messages'][0]['content']:
+                return completion({'status':'accept','summary':'受控颜色通过','corrections':[]})
             if '通道参数操作员' in payload['messages'][0]['content']:
                 return completion({'status':'keep','options':None,'summary':'继续检查实际透明输出'})
             if '独立抠图质量检查员' in payload['messages'][0]['content']:
@@ -153,7 +155,7 @@ def test_filter_and_real_channels_remain_pending_until_review(qt_app,ai_store,tm
         else:
             assert (editor._layers,editor._candidate,editor._cursor,editor._draft_history,editor._draft_cursor)==before
         if outcome in ('complete','reject'):
-            assert len(requests)==3 and '独立抠图质量检查员' in requests[-1][2]['messages'][0]['content']
+            assert len(requests)==4 and '独立抠图质量检查员' in requests[-1][2]['messages'][0]['content']
         assert prepared==[1] and not editor.aiChannelPreparing
     finally:editor.close()
 
