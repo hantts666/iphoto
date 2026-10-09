@@ -9,6 +9,13 @@ Dialog {
     readonly property var channel: editor.channelMask
     readonly property var config: channel.options
     readonly property bool previewReady: alphaImage.status===Image.Ready
+    property bool nativeZoom: false
+    property real viewCenterX: 0.5
+    property real viewCenterY: 0.5
+    function restorePosition() {
+        previewScroll.contentX = root.nativeZoom ? Math.max(0,Math.min(previewScroll.contentWidth-previewScroll.width,root.viewCenterX*alphaImage.width-previewScroll.width/2)) : 0
+        previewScroll.contentY = root.nativeZoom ? Math.max(0,Math.min(previewScroll.contentHeight-previewScroll.height,root.viewCenterY*alphaImage.height-previewScroll.height/2)) : 0
+    }
     objectName: "channelMaskDialog"
     anchors.centerIn: parent
     width: Math.min(670, parent.width-40)
@@ -22,6 +29,7 @@ Dialog {
         }
     }
     closePolicy: Popup.CloseOnEscape
+    onOpened: { nativeZoom = false; viewCenterX = 0.5; viewCenterY = 0.5 }
     onClosed: if(channel.opened) channel.close()
     palette.text: "#e4e8ee"; palette.windowText: "#e4e8ee"; palette.buttonText: "#e4e8ee"
     background: Rectangle { color: "#2d3137"; border.color: "#55616b"; radius: 8 }
@@ -29,8 +37,29 @@ Dialog {
         spacing: 9
         Rectangle {
             Layout.fillWidth: true; Layout.preferredHeight: root.config.whole===true ? 270 : Math.min(270,Math.max(130,root.parent.height-570)); color: "#131619"
-            Image { id: alphaImage; objectName: "channelAlphaPreview"; anchors.fill: parent; anchors.margins: 4; source: root.channel.previewUrl; fillMode: Image.PreserveAspectFit; cache: false; asynchronous: true }
-            Caption { anchors.centerIn: parent; visible: root.channel.loading || alphaImage.status===Image.Loading; text: "正在更新通道预览…" }
+            Flickable {
+                id: previewScroll; objectName: "channelPreviewScroll"; anchors.fill: parent; anchors.margins: 4; clip: true
+                contentWidth: Math.max(width, alphaImage.width); contentHeight: Math.max(height, alphaImage.height)
+                boundsBehavior: Flickable.StopAtBounds
+                onMovementEnded: {
+                    if (root.nativeZoom && alphaImage.status===Image.Ready) {
+                        root.viewCenterX = (contentX+width/2)/alphaImage.width
+                        root.viewCenterY = (contentY+height/2)/alphaImage.height
+                    }
+                }
+                Image {
+                    id: alphaImage; objectName: "channelAlphaPreview"
+                    width: root.nativeZoom && root.channel.nativeView ? implicitWidth : previewScroll.width
+                    height: root.nativeZoom && root.channel.nativeView ? implicitHeight : previewScroll.height
+                    x: Math.max(0,(previewScroll.width-width)/2); y: Math.max(0,(previewScroll.height-height)/2)
+                    source: root.channel.previewUrl; fillMode: Image.PreserveAspectFit; cache: false; asynchronous: true
+                    smooth: !root.nativeZoom
+                    onStatusChanged: if(status===Image.Ready) Qt.callLater(root.restorePosition)
+                }
+                ScrollBar.vertical: ScrollBar {}
+                ScrollBar.horizontal: ScrollBar {}
+            }
+            Caption { anchors.centerIn: parent; width: parent.width-20; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; visible: root.channel.loading || alphaImage.status===Image.Loading; text: root.editor.matteBusy ? root.editor.status : "正在更新通道预览…" }
             Caption { anchors.centerIn: parent; visible: alphaImage.status===Image.Error; text: "通道预览读取失败，请关闭后重新打开" }
         }
         RowLayout {
@@ -44,7 +73,16 @@ Dialog {
                 enabled: !root.editor.busy && !root.channel.loading && root.channel.previewUrl.length>0
                 onActivated: root.channel.setView(currentValue)
             }
-            Caption { text: root.config.ai===true ? "原像素通道草图 · AI 细化在应用时执行" : root.config.color===true ? "原像素通道草图 · 应用时恢复前景颜色" : "原像素通道透明度预览"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
+            Caption { objectName: "channelPreviewStage"; text: root.channel.showingResult ? "实际抠图效果" : root.config.ai===true || root.config.color===true ? "通道草图 · 尚未细化或去串色" : "通道透明度"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
+            Action {
+                objectName: "channelNativeZoomButton"; text: root.nativeZoom ? "适应" : "100%"; subtle: true
+                enabled: root.channel.nativeView && root.previewReady && !root.channel.loading
+                onClicked: {
+                    root.nativeZoom = !root.nativeZoom
+                    Qt.callLater(root.restorePosition)
+                }
+            }
+            Action { objectName: "channelCompareButton"; text: root.channel.showingResult ? "对照草图" : "查看实际效果"; visible: root.channel.hasResult; enabled: !root.editor.busy && !root.channel.loading; subtle:true; onClicked: root.channel.compare() }
         }
         Caption { Layout.fillWidth: true; text: root.channel.note; wrapMode: Text.Wrap }
         RowLayout {
@@ -80,12 +118,13 @@ Dialog {
         CheckBox { objectName:"channelInteriorBox"; visible:root.config.whole!==true; text:"处理内部透明与孔洞（薄纱、玻璃、细枝）"; checked:root.config.interior===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("interior",checked) }
         CheckBox { objectName:"channelDetailBox"; visible:root.config.whole!==true; text:"按原像素细化发丝纹理"; checked:root.config.detail===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("detail",checked) }
         CheckBox { objectName:"channelColorBox"; visible:root.config.whole!==true; text:"去背景串色（黑白底检查与透明 PNG）"; checked:root.config.color===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("color",checked) }
-        Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:root.config.whole===true ? "无需先选目标。整图通道适合主体与背景颜色差异明显的照片，同色背景也会选中；生成范围后可用画笔或 AI 继续修细节。" : "草图用于比较通道与黑白场，未进行 AI 细化或去背景串色。应用后自动显示实际白底效果，可放大修正边缘。" }
+        Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:root.config.whole===true ? "无需先选目标。整图通道适合主体与背景颜色差异明显的照片，同色背景也会选中；生成范围后可用画笔或 AI 继续修细节。" : "先比较通道；预览实际效果可检查 AI 细化与去串色。100%时拖动查看发丝与孔洞，使用结果后可撤销。" }
     }
     footer: RowLayout {
         spacing:8
         Action { objectName: "channelCloseButton"; text: root.editor.matteBusy ? "取消计算" : "关闭"; onClicked: { if(root.editor.matteBusy) root.editor.selection.cancelTask(); else root.close() } }
         Item { Layout.fillWidth:true }
-        Action { objectName: "channelApplyButton"; text:root.config.whole===true ? "生成选区" : "应用到当前范围"; primary:true; enabled:!root.editor.busy && !root.channel.loading && root.previewReady; onClicked:root.channel.apply() }
+        Action { objectName: "channelResultPreviewButton"; text: root.channel.hasResult ? "实际效果已就绪" : "预览实际效果"; visible: root.config.whole!==true && (root.config.ai===true || root.config.color===true); enabled: !root.editor.busy && !root.channel.loading && root.previewReady && !root.channel.hasResult; onClicked: root.channel.previewResult() }
+        Action { objectName: "channelApplyButton"; text:root.channel.hasResult ? "使用实际结果" : root.config.whole===true ? "生成选区" : "应用到当前范围"; primary:true; enabled:!root.editor.busy && !root.channel.loading && root.previewReady; onClicked:root.channel.apply() }
     }
 }

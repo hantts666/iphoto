@@ -80,6 +80,10 @@ def read(self):
                 from .channel_auto import discard
                 discard(self, active['auto_token'])
             if current and response.get("ok"):
+                if active.get('preview_only') and 'channel_token' in active:
+                    self._channel_mask.result_ready(response['result'], active)
+                    self.changed.emit()
+                    continue
                 if 'auto_token' in active:
                     from .channel_auto import complete as complete_channel
                     complete_channel(self, response['result'], active['auto_token'])
@@ -89,12 +93,18 @@ def read(self):
 
                 complete(self, response["result"], points=active.get("points", []) if active.get("method") == "neural" else None)
             elif current:
+                if active.get('preview_only') and 'channel_token' in active:
+                    self._channel_mask.failed(response.get('error', '实际效果预览失败'),
+                        {'token':active['channel_token'], 'revision':active['channel_revision']})
                 self._status = ("AI 抠图未通过像素验证，原范围保留" if active.get('method')=='correction' and 'auto_token' in active
                                 else "选区处理失败，原选区保留；可减小边缘范围后重试")
                 self._notify(response.get("error", "边缘细化失败"), True)
             self.changed.emit()
         except Exception as exc:
             self._matte_active = None
+            if active.get('preview_only') and 'channel_token' in active:
+                self._channel_mask.failed('实际效果预览失败，原范围保留',
+                    {'token':active['channel_token'], 'revision':active['channel_revision']})
             self._notify("处理边缘细化结果失败：" + str(exc), True)
 
 
@@ -177,12 +187,16 @@ def finished(self, *_):
     if not self._matte_aborting:
         read(self)
     aborted = self._matte_aborting
-    had_active = self._matte_active is not None
+    active = self._matte_active
+    had_active = active is not None
     self._matte_aborting = False
     self._matte_active = None
     self._matte_buffer = b""
     self._matte_fresh = False
     if had_active and not aborted and not self._closing:
+        if active.get('preview_only') and 'channel_token' in active:
+            self._channel_mask.failed('计算进程已退出，原范围保留；可重试',
+                {'token':active['channel_token'], 'revision':active['channel_revision']})
         self._notify("边缘细化进程已退出，原选区保留；可重试", True)
     self.changed.emit()
     pump(self)
@@ -192,6 +206,7 @@ def error(self, reason):
     if reason != QProcess.FailedToStart:
         return
     aborted = self._matte_aborting
+    active = self._matte_active or self._matte_pending
     self._matte_aborting = False
     self._matte_active = None
     if not aborted:
@@ -199,6 +214,9 @@ def error(self, reason):
     self._matte_buffer = b""
     self._matte_fresh = False
     if not aborted and not self._closing:
+        if active and active.get('preview_only') and 'channel_token' in active:
+            self._channel_mask.failed('计算进程未能启动，原范围保留；可重试',
+                {'token':active['channel_token'], 'revision':active['channel_revision']})
         self._notify("边缘细化进程未能启动，原选区保留", True)
     elif aborted:
         pump(self)

@@ -60,6 +60,7 @@ def main():
     generative_reference = None
     composition_cache = LayerPreviewCache()
     channel_reference_cache = {}
+    channel_draft_assets = set()
     handlers = {}
 
     def register(name):
@@ -125,6 +126,7 @@ def main():
         generative_reference = None
         current_crop_assets = set()
         channel_reference_cache.clear()
+        channel_draft_assets.clear()
         composition_cache.clear()
         RASTER_CACHE.clear()
         clear_decode_cache()
@@ -344,8 +346,35 @@ def main():
         from .matting.channels import native_preview
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，通道预览未应用')
-        alpha, options, channel, score = native_preview(source.image, request['mask'], request['options'],
-                                                       initial=bool(request.get('initial')),cache=channel_reference_cache)
+        actual = request.get('result_mask') is not None
+        if actual:
+            from .matting.channels import validate_options
+            from .document import raster_mask_cached
+            options = validate_options(request['options'])
+            result_mask = validate_mask(request['result_mask'])
+            alpha = raster_mask_cached(result_mask, source.image.size)
+            channel, score = options['channel'], 0.
+        else:
+            alpha, options, channel, score = native_preview(source.image, request['mask'], request['options'],
+                                                           initial=bool(request.get('initial')),cache=channel_reference_cache)
+        if request.get('native_views') is True:
+            from .matting.channel_view import native_previews
+            pictures, info = native_previews(source.image, alpha, request['mask'], options['radius'],
+                **({'layers': validate_layers(request['layers']), 'mask': result_mask} if actual else {}),
+                whole=bool(options.get('whole')))
+            views, created = {}, set()
+            for name, picture in pictures:
+                destination = cache / f"channel-native-{request['id']}-{name}.png"
+                picture.save(destination, compress_level=3)
+                views[name] = str(destination)
+                created.add(destination)
+            if not actual:
+                channel_draft_assets.clear()
+                channel_draft_assets.update(created)
+            current_crop_assets = created | channel_draft_assets
+            assets.extend(created)
+            return {'path': views['alpha'], 'views': views, 'options': options,
+                    'channel': channel, 'score': score, **info}
         alpha = alpha.resize(proxy.size, Image.Resampling.LANCZOS)
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))
         path = cache / f"channel-preview-{request['id']}.png"

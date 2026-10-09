@@ -52,7 +52,10 @@ def start(self, radius, *, method="classic"):
 
 def cancel(self):
     if self.matteBusy:
+        owned_channel = any(job and 'channel_token' in job for job in (self._matte_active, self._matte_pending))
         self._stop_matte()
+        if owned_channel:
+            self._channel_mask.cancelled()
         self._status = "已取消边缘细化；原选区保留，可继续编辑"
         self.changed.emit()
 
