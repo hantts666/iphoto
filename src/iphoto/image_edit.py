@@ -53,6 +53,8 @@ class ImageEditController(QObject):
         try:
             if self.busy:
                 return False
+            from .generation_size import validate_size
+            size = validate_size(size)
             target = endpoint(self.ai.settings)
             secret = self.ai.store.resolve_key(self.ai.settings, '')
             payload = {'model': 'qwen-image-3.0-pro', 'input': {'messages': [{'role': 'user', 'content': [

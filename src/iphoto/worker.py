@@ -481,10 +481,8 @@ def main():
         box = [max(0,x0-margin),max(0,y0-margin),min(source.image.width,x1+margin),min(source.image.height,y1+margin)]
         current = render_layers(source.image, validate_layers(request['before']))
         crop = current.crop(tuple(box))
-        scale = min(1536/max(crop.size), max(1., (512*512/(crop.width*crop.height))**.5))
-        output_size = [max(1,round(side*scale/8)*8) for side in crop.size]
-        if min(output_size) < 192 or max(output_size)/min(output_size)>8:
-            raise ValueError('选区过窄，无法稳定生成精修；请扩大上下文范围')
+        from .generation_size import output_size
+        generated_size = output_size(crop.size)
         path = cache / f"generated-input-{request['id']}.png"
         reference = preview(crop,1280)
         reference.save(path,compress_level=3)
@@ -495,7 +493,7 @@ def main():
         current_crop_assets = {path}
         assets.append(path)
         return {'path':str(path),'box':box,'canvas_size':list(source.image.size),
-                'output_size':output_size,'proposed':proposed,'reference_id':request['id']}
+                'output_size':generated_size,'proposed':proposed,'reference_id':request['id']}
 
     @register('generative_align')
     def _generative_align(request):
