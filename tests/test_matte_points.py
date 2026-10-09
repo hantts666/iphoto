@@ -38,6 +38,8 @@ def test_only_existing_strand_points_can_move_or_be_removed():
     revised=deepcopy(context['corrections']);revised[0]['points'][-1]=[398,263,2]
     result={'status':'revise','summary':'T从绿色背景移到可见发丝','corrections':revised}
     assert parse_points(completion(result),context)==result
+    with pytest.raises(ValueError,match='结构无效'):
+        parse_points(completion({**result,'status':'revised'}),context)
     dropped=deepcopy(revised);dropped[0]['points'].pop()
     assert parse_points(completion({**result,'corrections':dropped}),context)['corrections']==dropped
     for wrong in (
@@ -221,3 +223,18 @@ def test_point_payload_sends_only_labeled_evidence_once_and_its_own_contract(pro
         assert payload['response_format']['json_schema']['schema']['properties']['status']['enum']==['keep','revise','reject','uncertain']
     else:
         assert payload['enable_thinking'] is True and payload['thinking_budget']==512 and 'response_format' not in payload
+
+
+def test_point_format_retry_preserves_strict_status_and_coordinate_contract():
+    settings=AISettings.validated('qwen','https://example.com/v1','qwen3.8-max')
+    context={**workspace(),'_validation_feedback':'AI未返回有效发丝落点检查，原范围保留'}
+    payload=build_payload(settings,'细化发丝',Recipe().to_dict(),[],'unused','matte_points',context)
+    assert payload['response_format']=={'type':'json_object'} and payload['enable_thinking'] is False
+    assert 'thinking_budget' not in payload
+    prompt=payload['messages'][0]['content']
+    assert 'keep、revise、reject、uncertain' in prompt and '不写revised' in prompt
+    assert 'JSON前后不得附加' in prompt and '精确复制' in prompt
+    result={'status':'revise','summary':'格式合法仍须检查实际范围','corrections':context['corrections']}
+    assert parse_points(completion(result),context)==result
+    wrong=deepcopy(result);wrong['corrections'][0]['radius']=40
+    with pytest.raises(ValueError,match='只能移动或删除'):parse_points(completion(wrong),context)

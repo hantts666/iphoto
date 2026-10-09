@@ -117,6 +117,7 @@ def test_real_comparison_workers_choose_exact_pixels_and_commit_once(qt_app,ai_s
             if '抠图候选比较员' in payload['messages'][0]['content']:
                 return completion({'status':'reject' if outcome=='reject' else 'select',
                                    'candidate':'none' if outcome=='reject' else 'hair' if outcome=='hair' else 'channel',
+                                   'regions':[],
                                    'summary':'控制候选选择，视觉质量另行判断'})
             return completion({'status':'reject' if outcome=='reject_review' else 'accept',
                                'summary':'控制最终事务检查','corrections':[]})
@@ -182,7 +183,7 @@ def test_full_window_conversation_keeps_the_chosen_channel_result(canvas,tmp_pat
             return completion({'status':tune_status,'options':None if tune_status=='keep' else {
                 'channel':'blue','black':35,'white':210,'gamma':1.4,'invert':False},'summary':'控制通道参数操作'})
         if '抠图候选比较员' in system:
-            return completion({'status':'select','candidate':'channel','summary':'控制选择通道'})
+            return completion({'status':'select','candidate':'channel','regions':[],'summary':'控制选择通道'})
         if '独立抠图质量检查员' in system:
             return completion({'status':'accept','summary':'控制应用选中结果','corrections':[]})
         value=plan();value['strategy']='hair_matte';value['recipe']=Recipe(exposure=.35).to_dict()

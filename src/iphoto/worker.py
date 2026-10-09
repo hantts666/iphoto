@@ -380,7 +380,18 @@ def main():
         from .matte_review import render_review
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，抠图检查未应用')
-        if 'comparison_masks' in request:
+        if 'composition_regions' in request:
+            from copy import deepcopy
+            from .matte_compare import compose_regions
+            mask=compose_regions(request['comparison_masks'],request['review_boxes'],request['composition_regions'],source.image.size)
+            layers=deepcopy(request['layers']);target=request.get('comparison_target')
+            if target is not None:
+                if sum(layer.get('id')==target for layer in layers)!=1:
+                    raise ValueError('分区抠图的图层已变化，原范围保留')
+                next(layer for layer in layers if layer['id']==target)['mask']=mask
+            result=render_review(source.image,layers,mask,cache,request['id'],request['review_boxes'],target_context=True)
+            result['composed_mask']=mask
+        elif 'comparison_masks' in request:
             from .matte_compare import render_comparison
             result=render_comparison(source.image,request['layers'],request['comparison_masks'],cache,request['id'],
                                      target=request.get('comparison_target'))
