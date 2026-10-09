@@ -49,7 +49,7 @@ def prepare(e, mask, token):
             return
         _, state = current
         state['mask'] = deepcopy(mask)
-        e._status = '2/4 正在比较通道与通道计算，准备原图透明度…可取消'
+        e._status = '2/4 正在读取原片通道，准备透明边缘参照…可取消'
         options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,
                    'ai':True,'interior':state['interior'],'detail':False,'color':True}
         e._request('channel_preview',mask=state['mask'],options=options,initial=True,expected_sha256=e._sha,
@@ -68,7 +68,7 @@ def ready(e, result, context, generation):
         # color propagation. Native photo truth checks show lost fine coverage.
         options = {**result['options'],'interior':state['interior'],'detail':False,'color':True}
         state['options']=validate_options(options)
-        if state.get('hair') and not state.get('tune_attempted'):
+        if (state.get('hair') or state['interior']) and not state.get('tune_attempted'):
             state['tune_attempted']=True
             state['tune_preparing']=True
             e._status='2/4 正在准备原像素通道与采样参照，交给AI选择参数…可取消'

@@ -225,6 +225,8 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
         editor._layer()['mask']=deepcopy(mask);editor._load_layer();editor._commit()
         original=deepcopy(editor._layers);cursor=editor._cursor
         def server(payload):
+            if '通道参数操作员' in payload['messages'][0]['content']:
+                return completion({'status':'keep','options':None,'summary':'尚未确认实际抠图质量，继续计算并检查'})
             if '独立抠图质量检查员' in payload['messages'][0]['content']:
                 if outcome=='failure_review':return completion({'status':'accept'})
                 return completion({'status':'reject' if outcome=='reject_review' else 'accept','summary':'核对实际黑白底边缘'})
@@ -253,7 +255,11 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
         else:
             assert editor._layers==original and editor._candidate is None and editor._cursor==cursor
         assert not editor.aiChannelPreparing
-        assert len(requests)==(3 if outcome=='failure_review' else 2 if outcome in ('complete','reject_review','stale_review') else 1) or outcome=='cancel_review' and len(requests)<=2
+        expected=4 if outcome=='failure_review' else 3 if outcome in ('complete','reject_review','stale_review') else 2 if outcome in ('stale_matte','failure') else 1
+        assert len(requests)==expected or outcome=='cancel_review' and len(requests)<=3
+        if outcome in ('complete','reject_review','stale_review','failure_review'):
+            assert '通道参数操作员' in requests[1][2]['messages'][0]['content']
+            assert '独立抠图质量检查员' in requests[2][2]['messages'][0]['content']
     finally:editor.close()
 
 

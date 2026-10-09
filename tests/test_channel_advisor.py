@@ -122,8 +122,9 @@ def test_ai_evidence_reuses_native_preview_samples_but_invalidates_changed_scope
     assert len(calls)==4
 
 
+@pytest.mark.parametrize('target',['hair','branches','fabric'])
 @pytest.mark.parametrize('outcome',['propose','keep','uncertain','cancel','stale','failure','scope_override'])
-def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_app,ai_store,tmp_path,monkeypatch,outcome):
+def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_app,ai_store,tmp_path,monkeypatch,outcome,target):
     source,_,mask,options=scene();path=tmp_path/'original.png';source.save(path)
     editor=Editor(ai_store=ai_store)
     try:
@@ -132,9 +133,9 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
         before=deepcopy((editor._layers,editor._candidate,editor._cursor))
         token=uuid4().hex
         state={'token':token,'generation':editor._generation,'candidate':deepcopy(editor._candidate),
-               'target_id':editor._selection_target_id,'hair':True,'interior':False,'revision':0,
+               'target_id':editor._selection_target_id,'hair':target=='hair','interior':target!='hair','revision':0,
                'bound':True,'mask':deepcopy(mask)}
-        editor._pending_request={'text':'用通道和AI修头发','binding':editor._document_signature(),
+        editor._pending_request={'text':{'hair':'用通道和AI修头发','branches':'保留细枝和针叶孔洞','fabric':'保留薄纱透明内部'}[target],'binding':editor._document_signature(),
                                  'layer_id':editor._selected,'layer_snapshot':deepcopy(editor._layers),'channel_auto':state}
         original_request=editor._request;extractions=[]
         def request(op,**data):
@@ -158,7 +159,7 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
         if outcome in ('propose','keep','uncertain'):
             assert len(extractions)==1 and len(requests)==1
             actual=extractions[0]['channel_options']
-            assert actual['radius']==options['radius'] and actual['interior'] is False
+            assert actual['radius']==options['radius'] and actual['interior'] is (target!='hair')
             assert actual['ai'] and actual['color'] and actual['detail'] is False
             assert actual['gamma']==(1.4 if outcome=='propose' else options['gamma'])
             assert actual['channel']==('blue' if outcome=='propose' else options['channel'])
