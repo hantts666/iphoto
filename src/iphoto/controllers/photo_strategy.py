@@ -179,7 +179,7 @@ def generative_ready(self, result, context, generation):
             return
         pending, state = current
         state.update(proposed=result['proposed'], box=result['box'], preparing=False,
-                     canvas_size=result['canvas_size'])
+                     canvas_size=result['canvas_size'], reference_id=result['reference_id'])
         self._image_edit.start(image_data_url(result['path']), state['direction'], result['output_size'],
                                state['token'], generation)
     except (ValueError, KeyError, OSError) as exc:
@@ -192,8 +192,27 @@ def generated(self, image, token, generation):
         current = _current(self, token)
         if current is None or generation != self._generation:
             return
+        _, state = current
+        state['preparing'] = True
+        state['aligning'] = True
+        self._status = '正在核对生成图位置，校正选区内细节与原图的对应…可取消'
+        self._request('generative_align', patch=encode_patch(image, state['canvas_size'], state['box']),
+                      reference_id=state['reference_id'], expected_sha256=self._sha, context={'token':token})
+        self.changed.emit()
+    except (ValueError, KeyError, OSError) as exc:
+        self._notify(str(exc), True)
+
+
+def aligned(self, result, context, generation):
+    try:
+        current = _current(self, context['token'])
+        if current is None or generation != self._generation:
+            return
         pending, state = current
-        state['proposed'][0]['pixel_patch'] = encode_patch(image, state['canvas_size'], state['box'])
+        if not state.pop('aligning', False) or result['reference_id'] != state['reference_id']:
+            raise ValueError('生成精修的位置检查已过期，照片未改变')
+        state['alignment'] = result['alignment']
+        state['proposed'][0]['pixel_patch'] = result['patch']
         _render(self, pending, state)
     except (ValueError, KeyError, OSError) as exc:
         self._notify(str(exc), True)

@@ -57,6 +57,7 @@ def main():
     current_original = None
     current_overlay = previous_mask_key = None
     current_crop_assets = set()
+    generative_reference = None
     composition_cache = LayerPreviewCache()
     channel_reference_cache = {}
     handlers = {}
@@ -85,7 +86,7 @@ def main():
     def _open(request):
         nonlocal source, proxy, previous_key, previous_result
         nonlocal current_overlay, previous_mask_key, current_original
-        nonlocal current_crop_assets
+        nonlocal current_crop_assets, generative_reference
         next_source = load_source(request["path"])
         if (
             request.get("expected_sha256")
@@ -121,6 +122,7 @@ def main():
                 result["face_detection_warning"] = "本地人脸检测未完成，可使用文字定位或框选人脸"
         # Commit only after decoding, project verification and preview writing succeed.
         source, proxy = next_source, next_proxy
+        generative_reference = None
         current_crop_assets = set()
         channel_reference_cache.clear()
         composition_cache.clear()
@@ -414,7 +416,8 @@ def main():
 
     @register("generative_crop")
     def _generative_crop(request):
-        nonlocal current_crop_assets
+        nonlocal current_crop_assets, generative_reference
+        from PIL import Image
         from .photo_strategy import soften_effect_mask
         from .document import raster_mask
         if request.get('expected_sha256') != source.digest:
@@ -426,7 +429,8 @@ def main():
         if request.get('soften'):
             mask = soften_effect_mask(mask, source.image.size)
             proposed[0]['mask'] = mask
-        bounds = raster_mask(mask, source.image.size).getbbox()
+        selection = raster_mask(mask, source.image.size)
+        bounds = selection.getbbox()
         if not bounds:
             raise ValueError('选区为空，图像编辑未执行')
         x0,y0,x1,y1 = bounds
@@ -439,11 +443,34 @@ def main():
         if min(output_size) < 192 or max(output_size)/min(output_size)>8:
             raise ValueError('选区过窄，无法稳定生成精修；请扩大上下文范围')
         path = cache / f"generated-input-{request['id']}.png"
-        preview(crop,1280).save(path,compress_level=3)
+        reference = preview(crop,1280)
+        reference.save(path,compress_level=3)
+        generative_reference = {'id':request['id'], 'generation':request['generation'],
+                                'source_sha256':source.digest, 'image':reference,
+                                'allowed':selection.crop(tuple(box)).resize(reference.size, Image.Resampling.NEAREST),
+                                'canvas_size':list(source.image.size), 'box':box}
         current_crop_assets = {path}
         assets.append(path)
         return {'path':str(path),'box':box,'canvas_size':list(source.image.size),
-                'output_size':output_size,'proposed':proposed}
+                'output_size':output_size,'proposed':proposed,'reference_id':request['id']}
+
+    @register('generative_align')
+    def _generative_align(request):
+        nonlocal generative_reference
+        from .generated_alignment import align_generated
+        from .pixel_patch import validate_patch, _decode, encode_patch
+        reference, generative_reference = generative_reference, None
+        if (reference is None or request.get('reference_id') != reference['id']
+                or request.get('generation') != reference['generation']
+                or request.get('expected_sha256') != source.digest
+                or reference['source_sha256'] != source.digest):
+            raise ValueError('生成精修的位置参照已过期，照片未改变')
+        patch = validate_patch(request['patch'])
+        if patch['canvas_size'] != reference['canvas_size'] or patch['box'] != reference['box']:
+            raise ValueError('生成精修范围已变化，照片未改变')
+        image, alignment = align_generated(reference['image'], _decode(patch['png']), reference['allowed'])
+        return {'patch':encode_patch(image,reference['canvas_size'],reference['box']),
+                'alignment':alignment,'reference_id':reference['id']}
 
     @register("photo_candidate")
     def _photo_candidate(request):
