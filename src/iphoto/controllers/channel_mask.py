@@ -105,8 +105,10 @@ class ChannelMaskController(QObject):
         self._views, self._view = {}, 'alpha'
         self._result, self._draft_views, self._result_views = None, {}, {}
         self._show_result, self._native = False, False
+        # A second color-line solve can erase learned translucent coverage.
+        # Keep it an explicit previewable choice instead of an automatic pass.
         self._options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,'ai':True,'interior':False,
-                         'detail':True,'color':True}
+                         'detail':False,'color':True}
         self._refresh(initial=True)
 
     def _refresh(self, initial=False):

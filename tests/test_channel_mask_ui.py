@@ -23,8 +23,15 @@ def test_channel_dialog_controls_publish_only_after_apply(canvas,tmp_path):  # n
     wait_for(lambda:ui.e.channelMask.opened and not ui.e.channelMask.loading and ui.e.channelMask.previewUrl)
     wait_for(lambda:ui.find('channelMaskDialog').property('opened'))
     assert ui.e._layers==original and ui.e._candidate==before
+    assert ui.e.channelMask.options['detail'] is False
+    assert ui.find('channelDetailBox').property('checked') is False
+    assert ui.find('channelDetailBox').property('enabled') is True
+    ui.click('channelDetailBox');wait_for(lambda:not ui.e.channelMask.loading)
+    assert ui.e.channelMask.options['detail'] is True
+    assert ui.e._layers==original and ui.e._candidate==before
     ui.click('channelUseAiBox');wait_for(lambda:not ui.e.channelMask.loading)
     assert ui.e.channelMask.options['ai'] is False
+    assert ui.find('channelDetailBox').property('enabled') is False
     ui.click('channelWhiteBox');ui.key(Qt.Key_A,Qt.ControlModifier);ui.type('210');ui.key(Qt.Key_Return)
     wait_for(lambda:ui.e.channelMask.options['white']==210 and not ui.e.channelMask.loading)
     wait_for(lambda:ui.find('channelApplyButton').property('enabled'))

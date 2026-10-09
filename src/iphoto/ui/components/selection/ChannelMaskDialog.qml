@@ -116,7 +116,15 @@ Dialog {
             Caption { text: "原图 px" }
         }
         CheckBox { objectName:"channelInteriorBox"; visible:root.config.whole!==true; text:"处理内部透明与孔洞（薄纱、玻璃、细枝）"; checked:root.config.interior===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("interior",checked) }
-        CheckBox { objectName:"channelDetailBox"; visible:root.config.whole!==true; text:"按原像素细化发丝纹理"; checked:root.config.detail===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("detail",checked) }
+        CheckBox {
+            objectName:"channelDetailBox"; visible:root.config.whole!==true
+            text:"用原片颜色重算透明度（可选）"; checked:root.config.detail===true
+            enabled:!root.editor.busy && root.config.ai===true
+            hoverEnabled:true
+            ToolTip.visible:hovered
+            ToolTip.text:"会重新计算 AI 的透明边缘；请先预览，对照发丝与薄透区域后再使用。"
+            onClicked:root.channel.setOption("detail",checked)
+        }
         CheckBox { objectName:"channelColorBox"; visible:root.config.whole!==true; text:"去背景串色（黑白底检查与透明 PNG）"; checked:root.config.color===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("color",checked) }
         Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:root.config.whole===true ? "无需先选目标。整图通道适合主体与背景颜色差异明显的照片，同色背景也会选中；生成范围后可用画笔或 AI 继续修细节。" : "先比较通道；预览实际效果可检查 AI 细化与去串色。100%时拖动查看发丝与孔洞，使用结果后可撤销。" }
     }

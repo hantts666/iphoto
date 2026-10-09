@@ -199,8 +199,9 @@ def estimate(image, mask, options, *, neural=None, progress=None):
     warnings = ['通道区分较弱，请放大检查颜色相近的边缘'] if score < 2 else []
     polished = False
     if options.get('detail') and options['ai'] and score < 4 and ((result>0)&(result<255)).any():
-        # Neural alpha supplies spatial context; native color lines recover
-        # fine texture in its uncertain band. Keep the original hard constraints.
+        # Explicit opt-in: color lines replace continuous learned coverage and
+        # can lose fine strands. Completion is not evidence of improved quality.
+        # Keep the original hard constraints.
         from .service import refine_alpha
         if progress is not None:
             progress(phase='polish')

@@ -148,7 +148,7 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
                                'options':None,'summary':'继续核对实际透明度，未确认效果'})
         with mock_api(server,delay=.15) as (endpoint,requests):
             configure(editor.ai,endpoint)
-            channel_auto.ready(editor,{'options':options},{'token':token},editor._generation)
+            channel_auto.ready(editor,{'options':{**options,'detail':True}},{'token':token},editor._generation)
             wait_for(lambda:state.get('tuning') and editor.ai.busy)
             assert '比较原像素通道参数' in editor.ai.requestProgress and '可取消' in editor.ai.requestProgress
             if outcome=='cancel':editor.selection.cancelTask()
@@ -159,7 +159,7 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
             assert len(extractions)==1 and len(requests)==1
             actual=extractions[0]['channel_options']
             assert actual['radius']==options['radius'] and actual['interior'] is False
-            assert actual['ai'] and actual['detail'] and actual['color']
+            assert actual['ai'] and actual['color'] and actual['detail'] is False
             assert actual['gamma']==(1.4 if outcome=='propose' else options['gamma'])
             assert actual['channel']==('blue' if outcome=='propose' else options['channel'])
             assert state['channel_tuning']['status']==outcome and editor._pending_request
