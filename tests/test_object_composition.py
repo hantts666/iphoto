@@ -58,14 +58,15 @@ def test_composition_keeps_exact_source_alpha_holes_and_zero_support(mode, exclu
 
 
 @pytest.mark.parametrize("size", [(13, 11), (127, 201), (59, 43), (1, 1), (73, 9)])
-def test_small_alpha_sampling_is_identical_to_previous_full_support_order(size):
+def test_alpha_sampling_averages_reduction_and_protects_enlarged_support(size):
     values = np.random.default_rng(14).integers(0, 256, (43, 59), dtype=np.uint8)
     values[6:27, 8:29] = 0
     image = Image.fromarray(values, "L")
     asset = masks.encode_bitmap(image, sampling="alpha", preserve_resolution=True)
     support = image.point([0]+[255]*255).resize(size, Image.Resampling.NEAREST)
     expected = image.resize(size, Image.Resampling.BILINEAR)
-    expected.paste(0, mask=ImageChops.invert(support))
+    if size[0] > image.width or size[1] > image.height:
+        expected.paste(0, mask=ImageChops.invert(support))
     assert masks.decode_bitmap(asset, size).tobytes() == expected.tobytes()
 
 

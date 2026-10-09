@@ -107,11 +107,14 @@ def validate_bitmap(value, *, cache_decoded=False):
 def decode_bitmap(value, size):
     image = _decode(value["png"], value["width"], value["height"])
     if image.size != size and value.get("sampling") == "alpha":
-        # Interpolate continuous coverage without introducing ringing or
-        # modifying the protected zero support at the export resolution.
-        # Nearest-neighbour sampling and a point lookup commute exactly.
-        # Threshold the destination rather than allocating a source-size
-        # support image for every thumbnail/coverage query on a large mask.
+        # A smaller display pixel covers several source pixels. Gating this
+        # average by one nearest pixel can delete an entire subpixel strand.
+        # Bilinear's nonnegative filter retains coverage without ringing;
+        # native alpha is still returned exactly, including protected holes.
+        if size[0] <= image.width and size[1] <= image.height:
+            return image.resize(size, Image.Resampling.BILINEAR)
+        # Enlargement keeps the existing conservative zero support. A mask
+        # saved below source resolution must not grow into excluded pixels.
         support = image.resize(size, Image.Resampling.NEAREST).point([0] + [255] * 255)
         resized = image.resize(size, Image.Resampling.BILINEAR)
         resized.paste(0, mask=support.point(lambda v: 255 - v))
