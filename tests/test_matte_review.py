@@ -165,7 +165,11 @@ def test_review_source_stays_original_and_target_context_preserves_its_coordinat
     native=next(item for item in result['images'] if item['label']=='边缘1原像素原照片')
     assert Image.open(native['path']).tobytes()==source.crop(box).tobytes()
     panel=Image.open(next(item['path'] for item in result['images'] if '四格质量对照' in item['label']))
-    assert panel.crop((0,24,512,536)).tobytes()==source.crop(box).tobytes()
+    from iphoto.matte_review import quality_frame
+    observation=quality_frame(box,source.size)
+    width,height=observation[2]-observation[0],observation[3]-observation[1]
+    assert panel.crop((0,24,width,height+24)).tobytes()==source.crop(observation).tobytes()
+    assert result['quality_boxes']==[observation]
     adjusted=render_layers(source,layers);assert adjusted.tobytes()!=original
     expected=Image.alpha_composite(Image.new('RGBA',source.size,'white'),compose_cutout(adjusted,Image.fromarray(a))).convert('RGB')
     white=next(item for item in result['images'] if item['label']=='边缘1原像素候选白底')

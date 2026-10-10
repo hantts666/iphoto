@@ -5,12 +5,20 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 REFERENCE_HALO = 96
+# Four native cells plus 24px headings still fit the 1280px image transport.
+# This observation context never enlarges the editable region.
+QUALITY_HALO = 52
 
 
 def point_frame(core, size):
     """Shared native context for semantic anchors, never the publish scope."""
     return [max(0,core[0]-REFERENCE_HALO),max(0,core[1]-REFERENCE_HALO),
             min(size[0],core[2]+REFERENCE_HALO),min(size[1],core[3]+REFERENCE_HALO)]
+
+
+def quality_frame(core, size):
+    return [max(0,core[0]-QUALITY_HALO),max(0,core[1]-QUALITY_HALO),
+            min(size[0],core[2]+QUALITY_HALO),min(size[1],core[3]+QUALITY_HALO)]
 
 
 def point_bounds(core, frame, margin=80/999):
@@ -49,7 +57,7 @@ SCHEMA = {'type':'object','additionalProperties':False,
                         'summary':{'type':'string'},'corrections':CORRECTIONS_SCHEMA},
           'required':['status','summary','corrections']}
 PROMPT = """你是iPhoto独立抠图质量检查员。依据提供的实际图片核对，不因为规划者说完成就认定成功。
-图片提供原照片整体、实际紫色棋盘格抠图整体，以及最多四组原像素质量对照图，包含半透明密集处与目标外缘。每组是四格：左上Source原照片，右上Alpha透明度，左下White白底输出，右下Checker紫色棋盘格输出；四格是同一原像素位置，未缩放。最后的定位图仅供选择参照点。先逐组对照四格里的同一对象，再看整体目标范围。
+图片提供原照片整体、实际紫色棋盘格抠图整体，以及最多四组原像素质量对照图，包含半透明密集处与目标外缘。每组是四格：左上Source原照片，右上Alpha透明度，左下White白底输出，右下Checker紫色棋盘格输出；四格是同一原像素位置，未缩放。标有外侧观察区的对照和同编号Black包含修改范围外最多52原像素，用来发现被截掉的细丝；它不是新增修改权限，也不证明已检查所有外围。不能从这些扩大对照直接抄纠错坐标。最后的定位图仅供选择参照点。先逐组对照四格里的同一对象，再看整体目标范围。
 另外提供各编号同位置的原像素Black黑底输出，必须与该处Source和White逐一核对。白底或紫棋盘格可能掩盖浅色、蓝色背景串边；黑底可能掩盖暗色残块，不能只看一种底色就accept。相对Source中同段目标的不透明部分，若输出出现新增白描、天空蓝边、异色光晕或宽灰雾，应reject；目标原本就有的蓝色或真实反光不能仅因颜色而误判。无法分辨是真实颜色还是串色时uncertain。仅前景RGB串色不能靠语义保留/排除点修复，不要用删掉真实细丝来消除色边。
 核对用户指定的目标：透明发丝/细枝是否有明显灰云、旧背景串色、硬切、方块接缝；是否误包含其他对象、明显漏掉目标或破坏透明孔洞。白底下有连成片的灰雾、光晕或透出旧衣物的斑块，即使紫底上不显眼，也不能accept。只看到缩略图无法确认时应uncertain。
 逐组从Source追踪可见细丝的走向、分叉和末端，再看同一坐标的Alpha及白底：原图细丝继续向外延伸，而对应Alpha已经整片黑色或白底只剩空白，就是漏选。主体轮廓看起来柔和不证明细丝已保留；不能把大量可见细丝丢失称为自然过渡。原图真实虚焦可以保留，但不能据此忽略仍清楚可辨的延伸细丝。
@@ -60,7 +68,7 @@ PROMPT = """你是iPhoto独立抠图质量检查员。依据提供的实际图�
 accept：目标范围可用且没有明显上述缺陷；reject：实际结果存在具体可见缺陷且不能通过本轮局部纠错解决；uncertain：证据不足。
 当correction_available=true且revision=0时，发现明确的衣物/背景误选或局部漏选，应优先revise，给corrections（最多两处；普通模式全局最多六点，strand_points=true且correction_method=hair时全局最多八点；每处仍最多六点）。point_budget给出本轮全局容量。每处{edge:提供的边缘编号1到edge_count,radius:12到48的原图像素边缘宽度,points:[[x,y,label],...]}。correction_method=hair时，会结合人物外缘透明度、头发分区与语义提示点，重新判断该局部的细发丝；仍需核对实际输出，不保证成功。
 纠错点是给像素模型的语义参照，并非只修改点本身：同一裁片里的衣物与饰品误选可用一个保留点和多个不同位置的排除点处理。问题位于最多两幅裁片、且有可靠参照时应先尝试这唯一一次纠错，再依据实际复查拒绝或接受，不要仅因有两类误选或错误块面积较大就断言点不能处理。若缺少身份明确的参照仍应reject或uncertain。
-坐标默认相对该编号的原像素Source裁图：左上[0,0]，右下[999,999]，不是全图或像素坐标。context_points=true时，所有P、N、T坐标统一相对该编号的定位图原片（含周围96像素上下文），左上[0,0]右下[999,999]；四格Source只是定位图蓝框中的区域，不能把四格坐标直接抄成定位图坐标。蓝框外可选清单中的不透明P作参照，但只有蓝框内会修改；自行给N、T时必须在该编号point_bounds=[左,上,右,下]以内。上下文P与本裁片一起进入语义和透明度模型，不能因P在蓝框外就断言无法纠错。如果提供整个人物附近上下文，其蓝框数字对应边缘编号，用于辨认头发、皮肤和衣物；不能从这个整体上下文图直接取点。label=1保留、0排除，每处至少一个P和一个N。keep_candidates按边缘编号提供候选不透明参照；定位图绿圈编号对应清单顺序。P必须精确使用该编号清单坐标，不能跨边缘复制，并先确认它属于用户目标（绿圈不证明语义正确）。不要点饰品、皮肤、衣物保留头发。没有可靠参照时reject或uncertain。
+坐标默认相对该编号的原像素Source裁图：左上[0,0]，右下[999,999]，不是全图或像素坐标。context_points=true时，所有P、N、T坐标统一相对该编号的定位图原片（含周围96像素上下文），左上[0,0]右下[999,999]；四格Source可能含蓝框外最多52原像素观察区；定位图仍包含周围96原像素，二者坐标不同，不能把四格坐标直接抄成定位图坐标。蓝框外可选清单中的不透明P作参照，但只有蓝框内会修改；自行给N、T时必须在该编号point_bounds=[左,上,右,下]以内。上下文P与本裁片一起进入语义和透明度模型，不能因P在蓝框外就断言无法纠错。如果提供整个人物附近上下文，其蓝框数字对应边缘编号，用于辨认头发、皮肤和衣物；不能从这个整体上下文图直接取点。label=1保留、0排除，每处至少一个P和一个N。keep_candidates按边缘编号提供候选不透明参照；定位图绿圈编号对应清单顺序。P必须精确使用该编号清单坐标，不能跨边缘复制，并先确认它属于用户目标（绿圈不证明语义正确）。不要点饰品、皮肤、衣物保留头发。没有可靠参照时reject或uncertain。
 仅在strand_points=true且correction_method=hair时，可额外用label=2标出原片中清晰可辨的半透明或漏选细发丝；默认坐标x、y均须80到920，context_points=true时须在该编号point_bounds以内。它是发丝身份参照，不要求二值分割能将其视作不透明主体；原片核对后交给原像素模型估计透明度，绝不强制不透明。它不必在P清单或现有不透明范围内；不能点皮肤、衣物、帽子或单纯背景，也不能替代每处必须有的不透明P和排除N。优先放在漏选的可见细丝上，不能在灰云中随意点。所有角色合计最多八点。没有上述显式能力时只允许label=0或1，全局最多六点。
 具备发丝参照能力且两处同时纠错时，每处可用一个P、一个发丝身份参照T及一到两个覆盖不同误选的N，三到四点加三到四点，全局最多八点；没有漏选时把T预算用于另一处排除。其他情况只在P和N之间分配预算。每处必须单独满足P和N，不能靠另一处的P补齐，也不能把两处各自六点误当全局预算。返回前核对各编号P清单、每处角色和两处总点数。
 exclude_candidates提供候选排除参照，定位图橙圈N编号对应清单顺序。它同时包含已透明的背景和选区中颜色接近背景的可疑区域；橙圈不是已确认的背景，白色/灰色alpha也不是已确认的目标。在原照片确认是目标以外的衣物/皮肤/背景；不能把可见的细发丝当背景。发现选区中衣物等误选时，优先使用该错误区域内身份明确的N点，可再加一个已透明背景参照，不能只重复排除已经透明的远处背景。
@@ -71,7 +79,7 @@ visual_exclusions=true时，若提供的N点未覆盖实际误选，可依据原
 """
 
 FINAL_PROMPT = """你是iPhoto最终抠图质量检查员。只检查这次实际图片，不知道也不猜测前一轮结论。
-这是纠错后的输出，不能再提供取点或工具计划。先看原片目标上下文，再检查最前面的发丝局部对照，然后逐组检查边缘，最后检查整体。所有四格都对齐同一个原图位置：左上Source未经调色的原片、右上Alpha透明度、左下White实际白底抠图、右下Checker实际紫色棋盘格抠图。发丝局部格来自原像素最近邻放大2倍，不是AI重画。
+这是纠错后的输出，不能再提供取点或工具计划。先看原片目标上下文，再检查最前面的发丝局部对照，然后逐组检查边缘，最后检查整体。所有四格都对齐同一个原图位置：左上Source未经调色的原片、右上Alpha透明度、左下White实际白底抠图、右下Checker实际紫色棋盘格抠图。发丝局部格来自原像素最近邻放大2倍，不是AI重画。标有外侧观察区的编号对照和Black包含原修改范围外最多52原像素，用于核对漏选；修改范围不变，不声称覆盖全部外围。
 各编号另附同位置的原像素Black黑底输出，必须与Source和White逐一核对新增白描、天空蓝边、异色光晕和灰雾；白底/紫底掩盖的浅色串边也算缺陷，黑底掩盖的暗块仍需在白底检查。与同段不透明目标颜色对照，不能将真实蓝色目标或原本反光仅因颜色误拒绝。无法判断时uncertain。
 每组先从Source找一段实际可辨认的细丝，追踪卷曲、分叉、末端，再在同位置的Alpha和White里核对走向是否延续。不能仅看到大轮廓就声称每根细丝都在；原片的亮细丝在Alpha里没有对应的具体结构，属于漏选。原片只有窄丝、输出却变成连续灰团或宽雾，属于混入背景。真实虚焦可以保留，但不能用虚焦解释可见细丝结构消失。没有把握确认具体结构应uncertain。点上有非零Alpha不证明细丝已经恢复。
 Alpha白色是不透明目标、黑色是排除、灰色是半透明。Checker连续露出棋盘格说明对象已排除；白底的白色孔洞或黑底的黑色孔洞同理。只选头发时排除脸、帽子、衣物是正确的；仍需检查贴着脸的细丝、孔洞和外缘。不要凭空重造原片看不见的发丝。白底有新增连片灰雾、旧背景色块或衣物纹理，或原片可见细丝在Alpha/白底缺失，即使整体好看也应reject。
@@ -310,6 +318,7 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
         if not target_context:raise ValueError('发丝细节检查缺少头发上下文，原范围保留')
         detail_bounds={str(i):point_bounds(box,point_frame(box,source.size)) for i,box in enumerate(boxes,1)}
         validate_corrections(detail_points,len(boxes),strand_points=True,bounds=detail_bounds)
+    quality_boxes=[quality_frame(box,source.size) if target_context else list(box) for box in boxes]
     images=[]
     anchors={};bounds={};frames=[]
     exclusions={}
@@ -370,26 +379,35 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
                 x=round(px/999*(locating.width-1));y=round(py/999*(locating.height-1))
                 draw.ellipse((x-8,y-8,x+8,y+8),outline=color,width=2)
                 draw.text((x+10,y-6),prefix+str(number),fill=color,stroke_width=1,stroke_fill='black')
-        locating_label='全部纠错坐标相对此图0到999；蓝框内为四格Source及修改范围；蓝框外P仅作参照' if target_context else '坐标网格与候选保留点；实际细节看原照片'
+        locating_label='全部纠错坐标相对此图0到999；蓝框内为修改范围，四格对照可能含外侧观察区；蓝框外P仅作参照' if target_context else '坐标网格与候选保留点；实际细节看原照片'
         save(locating,f'边缘{index+1}定位图（{locating_label}）','locate-'+str(index),True,True)
     for background,label in (('white','白底'),('black','黑底')):
         composed=Image.alpha_composite(Image.new('RGBA',source.size,background),output)
         save(preview(composed,1280),'候选整体'+label,background)
         for index,box in enumerate(boxes):
             save(composed.crop(box),f'边缘{index+1}原像素候选'+label,background+'-'+str(index))
+            if background=='black' and quality_boxes[index]!=list(box):
+                save(composed.crop(quality_boxes[index]),f'边缘{index+1}原像素候选黑底（含外侧最多52px观察区，修改范围不变）',
+                     'quality-black-'+str(index),False,True)
     for index,box in enumerate(boxes):
         width,height=box[2]-box[0],box[3]-box[1]
         y,x=np.indices((height,width));pattern=(x//20+y//20)%2
         colors=np.array([[119,82,166,255],[170,130,200,255]],np.uint8)
         composed=Image.alpha_composite(Image.fromarray(colors[pattern]),output.crop(box))
         save(composed,f'边缘{index+1}原像素候选紫色棋盘格（连续棋盘格=已排除）','checker-'+str(index))
-        white=Image.alpha_composite(Image.new('RGBA',(width,height),'white'),output.crop(box))
+        frame=quality_boxes[index]
+        if frame!=list(box):
+            width,height=frame[2]-frame[0],frame[3]-frame[1]
+            yy,xx=np.indices((height,width));pattern=(xx//20+yy//20)%2
+            composed=Image.alpha_composite(Image.fromarray(colors[pattern]),output.crop(frame))
+        white=Image.alpha_composite(Image.new('RGBA',(width,height),'white'),output.crop(frame))
         panel=Image.new('RGB',(2*width,2*(height+24)),'#24292f');draw=ImageDraw.Draw(panel)
-        for position,(picture,label) in enumerate(((source.crop(box),'Source'),(alpha.crop(box),'Alpha'),(white,'White'),(composed,'Checker'))):
+        for position,(picture,label) in enumerate(((source.crop(frame),'Source'),(alpha.crop(frame),'Alpha'),(white,'White'),(composed,'Checker'))):
             x=(position%2)*width;y=(position//2)*(height+24)
             draw.text((x+6,y+6),label,fill='white')
             panel.paste(picture.convert('RGB'),(x,y+24))
-        save(panel,f'边缘{index+1}原像素四格质量对照（左上原片/右上透明度/左下白底/右下紫棋盘格）','panel-'+str(index),True,True)
+        exterior='；含外侧最多52px观察区，纠错仅相对定位图且修改范围不变' if frame!=list(box) else ''
+        save(panel,f'边缘{index+1}原像素四格质量对照（左上原片/右上透明度/左下白底/右下紫棋盘格{exterior}）','panel-'+str(index),True,True)
     for patch in detail_points or []:
         frame=point_frame(boxes[patch['edge']-1],source.size)
         for number,point in enumerate(patch['points'],1):
@@ -411,8 +429,8 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
     y,x=np.indices((compact.height,compact.width));pattern=(x//20+y//20)%2
     colors=np.array([[119,82,166,255],[170,130,200,255]],np.uint8)
     save(Image.alpha_composite(Image.fromarray(colors[pattern]),compact),'候选整体紫色棋盘格','checker',True)
-    # Send each comparison before its locating aid, keeping native pixels in
-    # a 1024-wide panel (below the image transport's 1280px limit).
+    # Send each comparison before its locating aid. Observation context still
+    # fits the 1280px lossless image transport without resizing native pixels.
     review_images=[images[0],images[-1]]
     if context_image is not None:review_images.insert(1,context_image)
     if final_review:
@@ -424,8 +442,10 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
         review_images.extend(item for item in images if '-panel-' in item['path'])
     # Black crops already exist, but previously never reached the reviewer.
     # Purple checker and white alone conceal pale/blue foreground spill.
-    black_views=[{**item,'lossless':True} for item in images
-                 if any(item['path'].endswith(f'-black-{index}.png') for index in range(len(boxes)))]
+    black_views=[]
+    for index,box in enumerate(boxes):
+        suffix=f'-quality-black-{index}.png' if quality_boxes[index]!=list(box) else f'-black-{index}.png'
+        black_views.append({**next(item for item in images if item['path'].endswith(suffix)),'lossless':True})
     if final_review:
         review_images[-1:-1]=black_views
     else:
@@ -438,7 +458,7 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
         images.extend(panels)
         color_images=panels
     return {'images':images,'review_images':review_images,'color_review_images':color_images,
-            'boxes':[list(box) for box in boxes],
+            'boxes':[list(box) for box in boxes],'quality_boxes':quality_boxes,
             'keep_candidates':anchors,'exclude_candidates':exclusions,
             'context_points':target_context,'point_boxes':frames,'point_bounds':bounds,
             'strand_detail_count':sum(point[2]==2 for patch in (detail_points or []) for point in patch['points'])}
