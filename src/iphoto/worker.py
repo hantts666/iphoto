@@ -414,7 +414,8 @@ def main():
         from .channel_advisor import render_evidence
         if request.get('expected_sha256')!=source.digest:
             raise ValueError('照片已变化，AI通道参照未应用')
-        result=render_evidence(source.image,request['mask'],request['options'],cache,request['id'],cache=channel_reference_cache)
+        result=render_evidence(source.image,request['mask'],request['options'],cache,request['id'],cache=channel_reference_cache,
+                               scope_limit=request.get('scope_limit'))
         current_crop_assets={Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result

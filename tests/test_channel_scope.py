@@ -127,7 +127,12 @@ def test_filter_and_real_channels_remain_pending_until_review(qt_app,ai_store,tm
             if '前景颜色检查员' in payload['messages'][0]['content']:
                 return completion({'status':'accept','summary':'受控颜色通过','corrections':[]})
             if '通道参数操作员' in payload['messages'][0]['content']:
+                context=json.loads(payload['messages'][1]['content'][0]['text'])
+                assert context['channel_scope']['upper_bound_limited'] is True
                 return completion({'status':'keep','options':None,'summary':'继续检查实际透明输出'})
+            if '抠图候选比较员' in payload['messages'][0]['content']:
+                return completion({'status':'select','candidate':'channel','regions':[],
+                                   'summary':'受控选用，继续实际颜色和边缘检查'})
             if '独立抠图质量检查员' in payload['messages'][0]['content']:
                 return completion({'status':'reject' if outcome=='reject' else 'accept','summary':'受控事务结果'})
             return completion({**plan(scope),'recipe':dict(editor._recipe),'regions':[target()]})
@@ -155,7 +160,7 @@ def test_filter_and_real_channels_remain_pending_until_review(qt_app,ai_store,tm
         else:
             assert (editor._layers,editor._candidate,editor._cursor,editor._draft_history,editor._draft_cursor)==before
         if outcome in ('complete','reject'):
-            assert len(requests)==4 and '独立抠图质量检查员' in requests[-1][2]['messages'][0]['content']
+            assert len(requests)==5 and '独立抠图质量检查员' in requests[-1][2]['messages'][0]['content']
         assert prepared==[1] and not editor.aiChannelPreparing
     finally:editor.close()
 

@@ -81,7 +81,7 @@ def test_every_channel_atlas_cell_uses_identical_native_source_pixels(tmp_path):
     for item,box in zip(result['images'][1:],result['boxes']):
         patch=source.crop(box);width,height=patch.size;atlas=Image.open(item['path'])
         assert item['lossless'] and max(width,height)<=256
-        assert atlas.size==(width*3,(height+24)*3)
+        assert atlas.size==(width*3,(height+24)*4)
         expected=[patch]+[Image.fromarray(v).convert('RGB') for v in channel_planes(patch)]
         values=np.clip((np.asarray(patch)[:,:,0].astype('float32')-35)/175,0,1)
         expected.append(Image.fromarray(np.rint(values*255).astype('uint8')).convert('RGB'))
@@ -101,7 +101,7 @@ def test_channel_evidence_includes_outward_edges_beyond_dense_partial_regions(tm
     result=render_evidence(source,mask,options,tmp_path,'distributed')
     assert len(result['boxes'])==4 and len(result['images'])==5
     assert sum(box[1]<300 for box in result['boxes'])==2
-    assert all(Image.open(item['path']).size==(768,840) for item in result['images'][1:])
+    assert all(Image.open(item['path']).size==(768,1120) for item in result['images'][1:])
 
 
 def test_ai_evidence_reuses_native_preview_samples_but_invalidates_changed_scope(tmp_path,monkeypatch):
@@ -135,6 +135,8 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
         state={'token':token,'generation':editor._generation,'candidate':deepcopy(editor._candidate),
                'target_id':editor._selection_target_id,'hair':target=='hair','interior':target!='hair','revision':0,
                'bound':True,'mask':deepcopy(mask)}
+        limited=target=='fabric' and outcome=='keep'
+        if limited:state['scope_limit']=deepcopy(mask)
         editor._pending_request={'text':{'hair':'用通道和AI修头发','branches':'保留细枝和针叶孔洞','fabric':'保留薄纱透明内部'}[target],'binding':editor._document_signature(),
                                  'layer_id':editor._selected,'layer_snapshot':deepcopy(editor._layers),'channel_auto':state}
         original_request=editor._request;extractions=[]
@@ -143,13 +145,21 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
             return original_request(op,**data)
         monkeypatch.setattr(editor,'_request',request)
         def server(payload):
+            context=json.loads(payload['messages'][1]['content'][0]['text'])
+            scope=context['channel_scope']
+            assert scope['radius']==options['radius'] and scope['upper_bound_limited'] is limited
+            assert scope['regions'] and all(region['known_background_pixels']+region['known_foreground_pixels']
+                +region['unknown_pixels']>0 for region in scope['regions'])
+            if limited:assert all('upper_bound_nonzero_pixels' in region for region in scope['regions'])
             if outcome=='failure':return completion({'status':'propose'})
             if outcome=='scope_override':return completion({**proposal(),'options':{**proposal()['options'],'radius':128}})
             return completion(proposal() if outcome=='propose' else {'status':'uncertain' if outcome=='uncertain' else 'keep',
                                'options':None,'summary':'继续核对实际透明度，未确认效果'})
         with mock_api(server,delay=.15) as (endpoint,requests):
             configure(editor.ai,endpoint)
-            channel_auto.ready(editor,{'options':{**options,'detail':True}},{'token':token},editor._generation)
+            prepared={'options':{**options,'detail':True}}
+            if limited:prepared.update(mask=deepcopy(mask),scope_limit=deepcopy(state['scope_limit']))
+            channel_auto.ready(editor,prepared,{'token':token},editor._generation)
             wait_for(lambda:state.get('tuning') and editor.ai.busy)
             assert '比较原像素通道参数' in editor.ai.requestProgress and '可取消' in editor.ai.requestProgress
             if outcome=='cancel':editor.selection.cancelTask()
@@ -163,6 +173,7 @@ def test_real_evidence_and_network_keep_changes_pending_until_matte_review(qt_ap
             assert actual['ai'] and actual['color'] and actual['detail'] is False
             assert actual['gamma']==(1.4 if outcome=='propose' else options['gamma'])
             assert actual['channel']==('blue' if outcome=='propose' else options['channel'])
+            if limited:assert extractions[0]['scope_limit']==state['scope_limit']
             assert state['channel_tuning']['status']==outcome and editor._pending_request
             editor.selection.cancelTask()
         else:

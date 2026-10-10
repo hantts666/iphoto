@@ -85,6 +85,7 @@ def ready(e, result, context, generation):
             state['tune_preparing']=True
             e._status='2/4 正在准备原像素通道与采样参照，交给AI选择参数…可取消'
             e._request('channel_evidence',mask=state['mask'],options=options,expected_sha256=e._sha,
+                       **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}),
                        context={'token':state['token']})
             return
         _extract(e,state)
@@ -115,7 +116,8 @@ def tune_ready(e,result,context,generation):
         e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,
                   'channel_tune',{'target':state['mask']['label'],'options':state['options'],
                                   'current_options':{key:state['options'][key] for key in CONTROLS},
-                                  'channel_suggestions':result['channel_suggestions'],'review_images':images})
+                                  'channel_suggestions':result['channel_suggestions'],
+                                  'channel_scope':result['channel_scope'],'review_images':images})
     except (ValueError,KeyError,OSError) as exc:e._notify(str(exc),True)
 
 

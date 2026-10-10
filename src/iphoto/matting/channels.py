@@ -153,6 +153,14 @@ def _constraints(alpha, inside, outside, values, options, score, semantic):
     return allowed, known_fg, known_bg
 
 
+def _native_pixels(values, alpha, allowed, known_fg, known_bg):
+    """The executed byte curve, shared by AI evidence, preview and output."""
+    pixels=np.rint(values*255).astype(np.uint8)
+    pixels[known_fg],pixels[known_bg]=255,0
+    pixels[~allowed]=alpha[~allowed]
+    return pixels
+
+
 def estimate(image, mask, options, *, neural=None, progress=None, native_candidate=None):
     """Only a bounded region near the selected target may grow; distant alpha stays exact."""
     started = perf_counter()
@@ -191,9 +199,7 @@ def estimate(image, mask, options, *, neural=None, progress=None, native_candida
         result = refined.copy()
         backend = '通道 + ViTMatte-S · ONNX'
     else:
-        result = np.rint(values*255).astype(np.uint8)
-        result[known_fg] = 255
-        result[known_bg] = 0
+        result = _native_pixels(values,alpha,allowed,known_fg,known_bg)
         tiles, backend = 0, '通道透明度'
     warnings = ['通道区分较弱，请放大检查颜色相近的边缘'] if score < 2 else []
     polished = False
@@ -241,8 +247,7 @@ def estimate(image, mask, options, *, neural=None, progress=None, native_candida
     if native_candidate is not None and options['ai']:
         # Reuse the same native colour planes and constraints. Do not re-read,
         # re-segment, run a second model, or average channel gray into AI alpha.
-        native = np.rint(values*255).astype(np.uint8)
-        native[known_fg], native[known_bg] = 255, 0
+        native = _native_pixels(values,alpha,allowed,known_fg,known_bg)
         native_warnings = ['通道区分较弱，请放大检查颜色相近的边缘'] if score < 2 else []
         # Include the shared preparation/model work already awaited by this
         # transaction; native finalization alone is not the user-visible wait.
@@ -263,9 +268,7 @@ def _preview_fields(fields, options, radius, semantic):
     alpha, inside, outside, planes, metrics = fields
     values, channel, score = _channel_alpha(planes, metrics, options)
     allowed, known_fg, known_bg = _constraints(alpha,inside,outside,values,{**options,'radius':radius},score,semantic)
-    pixels = np.rint(values*255).astype(np.uint8)
-    pixels[known_fg], pixels[known_bg] = 255, 0
-    pixels[~allowed] = alpha[~allowed]
+    pixels = _native_pixels(values,alpha,allowed,known_fg,known_bg)
     return Image.fromarray(pixels), channel, score
 
 
