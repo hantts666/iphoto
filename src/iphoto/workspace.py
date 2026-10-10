@@ -265,7 +265,7 @@ class Editor(QObject):
             + ([self._export_request] if self._export_request else [])
         )
         return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or self.aiMaskPreparing or self.aiPhotoPreparing or self.aiChannelPreparing or any(
-            (request["op"] in ("photo_candidate", "generative_crop", "generative_align", "foreground_import") and not request.get("cancelled"))
+            (request["op"] in ("photo_candidate", "generative_crop", "generative_align", "foreground_alpha", "foreground_import") and not request.get("cancelled"))
             or request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply"}
             or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations
@@ -1043,6 +1043,22 @@ class Editor(QObject):
     @Property(bool, notify=changed)
     def aiPhotoPreparing(self):
         return bool((self._pending_request or {}).get('photo_strategy'))
+
+    @Property(bool, notify=changed)
+    def generatedForegroundAvailable(self):
+        from .generated_foreground import available
+        return self.ai.settings.provider in ('qianwen_token_plan', 'qianwen', 'qwen') and available()
+
+    @Slot(result=bool)
+    @Slot(str, result=bool)
+    def requestGeneratedForeground(self, text=''):
+        if not self.hasImage or self.busy:
+            return False
+        if self.hasSelectionDraft or self.hasRegionDraft or not self.generatedForegroundAvailable or not self.ai.enabled:
+            self._notify('请先完成当前范围并配置AI，再使用生成式人物抠图；照片未改变', True)
+            return False
+        prompt = text.strip() or '保留主要人物及帽子、衣物和随身物品，移除背景和其他人物。保持身份、位置和姿势，检查黑白底与发丝。'
+        return conversation.sendMessage(self, 'AI重建人物抠图：' + prompt, 'auto', foreground_requested=True)
 
     @Property(bool, notify=changed)
     def aiChannelPreparing(self):

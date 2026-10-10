@@ -41,7 +41,8 @@ class ImageEditController(QObject):
     def progress(self):
         if not self.busy:
             return ''
-        task = '接收生成图像' if self.stage == 'download' else 'AI正在选区内生成精修像素'
+        task = ('接收生成图像' if self.stage == 'download' else
+                'AI正在重建白底人物（可能改变细节）' if self.intent == 'foreground' else 'AI正在选区内生成精修像素')
         return f'{task} · 已等待 {int(time.monotonic()-self.started)} 秒 · 可取消'
 
     def _tick(self):
@@ -49,24 +50,31 @@ class ImageEditController(QObject):
             self.cancel('选区图像编辑超时，照片未改变')
         self.changed.emit()
 
-    def start(self, image_url, prompt, size, token, generation, *, scope_url=None):
+    def start(self, image_url, prompt, size, token, generation, *, scope_url=None, intent='retouch'):
         try:
             if self.busy:
                 return False
             from .generation_size import validate_size
             from .generation_scope import SCOPE_PROMPT, validate_scope_reference
             size = validate_size(size)
-            validate_scope_reference(image_url, scope_url)
+            if intent not in ('retouch', 'foreground'):
+                raise ValueError('图像编辑用途无效，照片未改变')
+            validate_scope_reference(image_url, scope_url, whole_frame=intent == 'foreground')
+            if intent == 'foreground':
+                from .generated_foreground import FOREGROUND_PROMPT
+                content = [{'image': image_url}, {'text': prompt + FOREGROUND_PROMPT}]
+            else:
+                content = [{'image': image_url}, {'image': scope_url},
+                           {'text': prompt + SCOPE_PROMPT + '\n保持输入照片的构图、比例、所有内容位置和人物身份。只按要求精修。除用户明确指定的变化外，保留五官形状、年龄、表情、衣物、场景。保留皮肤纹理和原有光影，避免面具边缘、假皮肤和过度美颜。'}]
             target = endpoint(self.ai.settings)
             secret = self.ai.store.resolve_key(self.ai.settings, '')
-            payload = {'model': 'qwen-image-3.0-pro', 'input': {'messages': [{'role': 'user', 'content': [
-                {'image': image_url}, {'image': scope_url},
-                {'text': prompt + SCOPE_PROMPT + '\n保持输入照片的构图、比例、所有内容位置和人物身份。只按要求精修。除用户明确指定的变化外，保留五官形状、年龄、表情、衣物、场景。保留皮肤纹理和原有光影，避免面具边缘、假皮肤和过度美颜。'}]}]},
+            payload = {'model': 'qwen-image-3.0-pro', 'input': {'messages': [{'role': 'user', 'content': content}]},
                 'parameters': {'size': f'{size[0]}*{size[1]}', 'n': 1, 'watermark': False, 'prompt_extend': False}}
             request = QNetworkRequest(QUrl(target))
             request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
             request.setRawHeader(b'Authorization', ('Bearer '+secret).encode('ascii'))
             self.token, self.generation, self.started = token, generation, time.monotonic()
+            self.intent = intent
             self.output_size = size
             self.cancel_reason = ''
             self._send(request, json.dumps(payload, ensure_ascii=False).encode(), 'generate')
@@ -126,7 +134,8 @@ class ImageEditController(QObject):
                 if abs((image.width/image.height)/(self.output_size[0]/self.output_size[1])-1) > .02:
                     raise ValueError('生成图像比例不匹配，照片未改变')
                 image.load()
-                output = image.convert('RGB')
+                output = image.convert('RGBA' if self.intent == 'foreground' and
+                                       ('A' in image.getbands() or 'transparency' in image.info) else 'RGB')
             self.completed.emit(output, self.token, self.generation)
         except (ValueError, OSError, TypeError, KeyError, Image.DecompressionBombError):
             message = self.cancel_reason or '选区图像编辑未完整完成，照片未改变'

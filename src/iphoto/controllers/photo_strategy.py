@@ -51,7 +51,8 @@ def prepare(self, proposed, origin):
         state['proposed'] = ([state['base']] if 'base' in state else []) + deepcopy(proposed)
         if state.get('generate'):
             state['preparing'] = True
-            self._status = '正在准备照片与对应选区参考，随后生成局部精修…可取消'
+            self._status = ('1/4 正在准备整张照片，随后AI重建白底人物（可能改变细节）…可取消'
+                            if state.get('foreground') else '正在准备照片与对应选区参考，随后生成局部精修…可取消')
             self._request('generative_crop', before=pending['layer_snapshot'], proposed=state['proposed'],
                           soften=True,
                           expected_sha256=self._sha, context={'token': state['token']})
@@ -65,11 +66,13 @@ def prepare(self, proposed, origin):
 def _render(self, pending, state, soften=False):
     from .face_inventory import current as current_faces
     state['preparing'] = True
-    self._status = ('2/4 正在合成选区精修，核对边界与原图细节…可取消' if state.get('generate')
+    self._status = ('3/4 正在准备生成前景的黑白底与放大边缘…可取消' if state.get('foreground') else
+                    '2/4 正在合成选区精修，核对边界与原图细节…可取消' if state.get('generate')
                     else '2/4 正在合成整体光色和局部精修，检查原图细节…可取消')
     self._request('photo_candidate', before=pending['layer_snapshot'], proposed=state['proposed'],
                   faces=deepcopy(current_faces(self)), soften=soften,
-                  expected_sha256=self._sha, context={'token': state['token']})
+                  expected_sha256=self._sha, foreground=state.get('foreground', False),
+                  inspection_box=state.get('inspection_box'), context={'token': state['token']})
     self.changed.emit()
 
 
@@ -83,10 +86,11 @@ def ready(self, result, context, generation):
         state['preparing'] = False
         state['reviewing'] = True
         images = [{**item, 'url': image_data_url(item['path'], lossless=item.get('lossless', False))} for item in result['images']]
-        self._status = '3/4 正在对比修改前后，检查边缘、肤色和局部质感…可取消'
+        self._status = ('3/4 正在检查人物位置、黑白底边缘和不透明衣物…可取消' if state.get('foreground')
+                        else '3/4 正在对比修改前后，检查边缘、肤色和局部质感…可取消')
         self.changed.emit()
         self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], generation, 'photo_review',
-                     {'direction': state['direction'], 'revision': state['revision'],
+                     {'direction': state['direction'], 'revision': state['revision'], 'foreground': state.get('foreground', False),
                       'candidates': [{'layer_id': layer['id'], 'name': layer['name'], 'recipe': layer['recipe'],
                                       'whole_image': 'base' in state and index == 0} for index, layer in enumerate(state['proposed'])],
                       'review_images': [{'label': item['label'], 'url': item['url']} for item in images]})
@@ -100,6 +104,8 @@ def reviewed(self, result):
         if current is None:
             return
         pending, state = current
+        if state.get('foreground') and (result['status'] == 'revise' or result.get('edits')):
+            raise ValueError('生成前景不能用调色参数代替透明度或位置检查，照片未改变')
         if result['status'] == 'revise' and state['revision'] == 0:
             by_id = {layer['id']: layer for layer in state['proposed']}
             for edit in result['edits']:
@@ -118,13 +124,17 @@ def reviewed(self, result):
         applied = layers.addLocalLayers(self, state['proposed'],
                                        consume_selection=bool(pending.get('selection_snapshot')),
                                        selection_state='confirmed', allow_pixel_patch=state.get('generate', False))
-        origin = {**pending, 'layer_id': self._selected, 'layer_name': '成片精修',
+        origin = {**pending, 'layer_id': self._selected, 'layer_name': 'AI重建抠图' if state.get('foreground') else '成片精修',
                   'adjustment_layer_ids': [layer['id'] for layer in applied]}
-        saved = ('\n已保存选区精修，范围外保持；可一步撤销、调强度或查看原图对比。' if state.get('generate')
+        saved = (f"\n已保存AI重建前景（生成分辨率{state['generated_size'][0]}×{state['generated_size'][1]}），可能改变细节；原片保留，可一步撤销或查看原图对比。" if state.get('foreground') else
+                 '\n已保存选区精修，范围外保持；可一步撤销、调强度或查看原图对比。' if state.get('generate')
                  else '\n已保存整体光色与局部精修，可一步撤销、调强度或查看原图对比。')
-        self._message('assistant', state['direction'] + '\n成片检查：' + result['summary'] + saved,
+        message = (saved.strip() + '\nAI复查：' + result['summary'] if state.get('foreground') else
+                   state['direction'] + '\n成片检查：' + result['summary'] + saved)
+        self._message('assistant', message,
                       state='applied', origin=origin)
-        self._notify('4/4 成片已应用；可对比原图或一步撤销')
+        self._notify('4/4 AI重建前景已应用；可对比原图或一步撤销' if state.get('foreground')
+                     else '4/4 成片已应用；可对比原图或一步撤销')
     except (ValueError, KeyError, OSError) as exc:
         self._notify(str(exc), True)
 
@@ -160,12 +170,22 @@ def begin_generate(self, result):
     try:
         if len(self._layers) >= MAX_LAYERS or pending['binding'] != self._document_signature():
             raise ValueError('照片、图层或位置已变化，选区图像编辑未应用')
+        foreground = result['action'] == 'foreground'
+        if foreground and (pending.get('selection_snapshot') or self.hasSelectionDraft or self.hasRegionDraft
+                           or not pending.get('foreground_requested') or not self.generatedForegroundAvailable
+                           or result['scope'] != 'whole_image'):
+            raise ValueError('请先完成当前范围并配置人物透明度能力，AI重建前景未应用')
         pending['photo_strategy'] = {'token': uuid4().hex, 'generation': self._generation,
                                      'summary': result['summary'], 'direction': result['edit_prompt'],
-                                     'revision': 0, 'generate': True}
+                                     'revision': 0, 'generate': True, 'foreground': foreground,
+                                     'inspection_box': result.get('inspection_box')}
         if result['scope'] != 'regions':
-            layer = new_layer('AI 选区精修')
-            layer['mask'] = deepcopy(pending.get('selection_snapshot', {}).get('mask') or self._layer()['mask'])
+            layer = new_layer('AI 重建人物 · 生成内容', foreground)
+            if foreground:
+                layer['mask']['label'] = 'AI重建前景 · 整张画布'
+            else:
+                layer['name'] = 'AI 选区精修'
+                layer['mask'] = deepcopy(pending.get('selection_snapshot', {}).get('mask') or self._layer()['mask'])
             prepare(self, [layer], pending)
             return None
         return {**result, 'action': 'layers'}
@@ -183,7 +203,8 @@ def generative_ready(self, result, context, generation):
                      canvas_size=result['canvas_size'], reference_id=result['reference_id'])
         self._image_edit.start(image_data_url(result['path'], lossless=True), state['direction'], result['output_size'],
                                state['token'], generation,
-                               scope_url=image_data_url(result['scope_path'], lossless=True))
+                               scope_url=image_data_url(result['scope_path'], lossless=True),
+                               **({'intent': 'foreground'} if state.get('foreground') else {}))
     except (ValueError, KeyError, OSError) as exc:
         self._notify(str(exc), True)
 
@@ -196,11 +217,37 @@ def generated(self, image, token, generation):
             return
         _, state = current
         state['preparing'] = True
+        if state.get('foreground'):
+            state['generated_size'] = list(image.size)
+            self._status = '2/4 正在恢复生成前景的透明度与边缘颜色…可取消'
+            self._request('foreground_alpha', patch=encode_patch(image, state['canvas_size'], state['box'],
+                          preserve_alpha=image.mode == 'RGBA'), expected_sha256=self._sha,
+                          reference_id=state['reference_id'], context={'token': token})
+            self.changed.emit()
+            return
         state['aligning'] = True
         self._status = '正在核对生成图位置，校正选区内细节与原图的对应…可取消'
         self._request('generative_align', patch=encode_patch(image, state['canvas_size'], state['box']),
                       reference_id=state['reference_id'], expected_sha256=self._sha, context={'token':token})
         self.changed.emit()
+    except (ValueError, KeyError, OSError) as exc:
+        self._notify(str(exc), True)
+
+
+def foreground_ready(self, result, context, generation):
+    try:
+        current = _current(self, context['token'])
+        if current is None or generation != self._generation:
+            return
+        pending, state = current
+        if (not state.get('foreground') or result['reference_id'] != state['reference_id']
+                or result['patch']['canvas_size'] != state['canvas_size']
+                or result['patch']['box'] != [0, 0, *state['canvas_size']]
+                or result['patch'].get('compositing') != 'replace_rgba'):
+            raise ValueError('生成前景的颜色与透明度参照已过期，照片未改变')
+        state['proposed'][0]['pixel_patch'] = result['patch']
+        state['foreground_quality'] = result['quality']
+        _render(self, pending, state)
     except (ValueError, KeyError, OSError) as exc:
         self._notify(str(exc), True)
 

@@ -121,6 +121,22 @@ def test_pending_frame_keeps_last_result_without_accepting_it_as_ready(preview_u
     assert view.state() == state
 
 
+def test_reused_worker_frame_updates_its_generation_without_a_reload(preview_ui):
+    view = preview_ui
+    editor = view.e
+    wait_for(lambda: settled(editor) and editor.previewGeneration == editor._generation)
+    image = view.find('photoPreviewImage')
+    previous_url, previous_pixels = editor.previewUrl, view.color()
+    layers, cursor = deepcopy(editor._layers), editor._cursor
+    editor.setMaskView(editor.maskView)  # A real render with an unchanged composition.
+    wait_for(lambda: settled(editor) and editor.previewGeneration == editor._generation)
+    QTest.qWait(50)
+    assert editor.previewUrl == previous_url and editor._last_render_metrics['cache_hit']
+    assert view.color() == previous_pixels and editor._layers == layers and editor._cursor == cursor
+    assert image.property('displayedGeneration') == editor._generation
+    assert '正在更新' not in view.find('canvasViewport').property('detailStatus')
+
+
 def test_hold_original_is_immediate_and_does_not_restart_pending_preview(preview_ui, frames):
     view = preview_ui
     original = view.color()

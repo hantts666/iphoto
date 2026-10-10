@@ -1,4 +1,4 @@
-"""A persistent, CPU-only image worker using a small NDJSON protocol."""
+"""A persistent image worker using a small NDJSON protocol."""
 
 import json
 from pathlib import Path
@@ -535,6 +535,29 @@ def main():
             raise ValueError('照片已变化，透明前景未导入')
         return read_foreground(request['path'], source.image.size)
 
+    @register('foreground_alpha')
+    def _foreground_alpha(request):
+        nonlocal generative_reference
+        from .generated_foreground import extract
+        from .pixel_patch import validate_patch, _decode, encode_patch
+        reference, generative_reference = generative_reference, None
+        if (reference is None or request.get('reference_id') != reference['id']
+                or request.get('generation') != reference['generation']
+                or request.get('expected_sha256') != source.digest
+                or reference['source_sha256'] != source.digest
+                or reference['allowed'].getextrema() != (255, 255)):
+            raise ValueError('生成前景的整图参照已过期，照片未改变')
+        patch = validate_patch(request['patch'])
+        if (patch['canvas_size'] != reference['canvas_size'] or patch['box'] != [0, 0, *source.image.size]
+                or patch['box'] != reference['box']):
+            raise ValueError('生成前景不能替换局部或改变画布，照片未改变')
+        generated = _decode(patch['png'])
+        if abs((generated.width/generated.height)/(source.image.width/source.image.height)-1) > .02:
+            raise ValueError('生成前景与整张照片比例不一致，照片未改变')
+        rgba, quality = extract(generated)
+        return {'patch': encode_patch(rgba, reference['canvas_size'], reference['box'], preserve_alpha=True),
+                'quality': quality, 'reference_id': reference['id']}
+
     @register("photo_candidate")
     def _photo_candidate(request):
         nonlocal current_crop_assets
@@ -542,7 +565,8 @@ def main():
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，成片未应用')
         result = render_candidate(source.image, request['before'], request['proposed'],
-                                  request.get('faces', []), cache, request['id'], request.get('soften', False))
+                                  request.get('faces', []), cache, request['id'], request.get('soften', False),
+                                  foreground=request.get('foreground', False), inspection_box=request.get('inspection_box'))
         current_crop_assets = {Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result

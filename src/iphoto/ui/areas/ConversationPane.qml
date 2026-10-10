@@ -238,6 +238,19 @@ Rectangle {
         }
         RowLayout { Layout.fillWidth: true
             Caption { objectName: "conversationScopeHint"; text: chatRoot.canUseDraft ? (editor.selection.editingLayerMask ? "AI 可修正范围并保存调整到此层；可一步撤销。" : "AI 可修正此范围或直接调色；可一步撤销。") : editor.hasSelectionDraft ? (editor.ai.enabled ? "选择“智能修图”即可直接调整当前范围。" : "连接 AI 可直接修此范围，或点“开始调整”使用本地规则。") : editor.hasRegionDraft ? "正在预览分区，确认后建立独立图层。" : chatMode.currentIndex===2 ? "先预览和修边，再创建局部图层。" : chatMode.currentIndex===0 && editor.ai.enabled ? "AI 可分层、修正五官范围、调色或修瑕疵；可一步撤销。" : "作用范围："+editor.activeLayerName+" / "+editor.selectionLabel; Layout.fillWidth: true; elide: Text.ElideRight; font.pixelSize: 10 }
+            Action {
+                objectName: "chatGeneratedForegroundButton"; text: "AI 重建抠图"; subtle: true
+                visible: editor.generatedForegroundAvailable
+                enabled: chatRoot.canSend && !editor.hasSelectionDraft && editor.ai.enabled
+                hint: "重绘人物并移除背景，可能改变细节；可在输入框填写具体要求。"
+                onClicked: {
+                    if (editor.requestGeneratedForeground(prompt.text)) {
+                        chatList.jumpToEnd()
+                        prompt.clear()
+                        prompt.forceActiveFocus()
+                    }
+                }
+            }
             Caption { objectName: "conversationInputKeyHint"; text: "Enter 发送 · Shift+Enter 换行"; font.pixelSize: 10 }
         }
     }

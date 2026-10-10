@@ -100,6 +100,8 @@ def _message(self, role, text, mode="", state="", recipe=None, origin=None):
         item['adjustment_layer_ids'] = list(pending['adjustment_layer_ids'])
     if role in ('user', 'error') and pending.get('request_binding'):
         item['request_binding'] = pending['request_binding']
+        if pending.get('foreground_requested'):
+            item['foreground_requested'] = True
         if role == 'error' and pending.get('request_user_id'):
             item['request_user_id'] = pending['request_user_id']
     self._conversation.append(item)
@@ -144,6 +146,7 @@ def failedPromptInfo(self, message_id):
             or not 1 <= len(user['text'].strip()) <= 4000):
         return {'settings': settings}
     return {'available': True, 'settings': settings, 'text': user['text'], 'mode': user['mode'],
+            'foreground_requested': user.get('foreground_requested', False),
             'user_id': user['id'], 'binding': user.get('request_binding', ''),
             'retry': bool(reference and user.get('request_binding'))}
 
@@ -171,6 +174,8 @@ def retryFailedPrompt(self, message_id):
         restoreFailedPrompt(self, message_id)
         self._notify('照片、图层或范围已变化，未重试；原要求已取回，请检查后发送')
         return False
+    if info.get('foreground_requested'):
+        return sendMessage(self, info['text'], info['mode'], foreground_requested=True)
     return self.sendMessage(info['text'], info['mode'])
 
 
@@ -246,7 +251,7 @@ def _current_scope(self):
     return "whole_image" if full else "local"
 
 
-def sendMessage(self, text, mode):
+def sendMessage(self, text, mode, *, foreground_requested=False):
     if (
         not self.hasImage
         or self.busy
@@ -311,6 +316,7 @@ def sendMessage(self, text, mode):
         "layer_name": self.activeLayerName,
         "model": self._ai.settings.model if self._ai.enabled else "本地规则",
         "binding": self._document_signature(),
+        "foreground_requested": foreground_requested,
     }
     if mode in ('auto', 'edit', 'advice', 'regions'):
         self._pending_request['request_binding'] = _retry_binding(self, self._pending_request['binding'])
@@ -439,6 +445,7 @@ def sendMessage(self, text, mode):
             ],
             "max_new_layers": min(4, MAX_LAYERS - len(self._layers)),
             "image_edit_available": self.ai.settings.provider in ("qianwen_token_plan", "qianwen", "qwen"),
+            "foreground_edit_available": bool(foreground_requested and self.generatedForegroundAvailable),
             "channel_mask_available": any(c['id']=='details' and c['available'] for c in self.imageCapabilities),
             "hair_matting_available": any(c['id']=='hair_details' and c['available'] for c in self.imageCapabilities),
             "active_is_group": self.activeIsGroup,
@@ -568,7 +575,7 @@ def _cloud_plan(self, result, generation):
         result = begin_channel(self, result)
         if result is None:
             return
-    if result.get('mode') == 'auto' and result.get('action') == 'generate':
+    if result.get('mode') == 'auto' and result.get('action') in ('generate', 'foreground'):
         from .photo_strategy import begin_generate
         result = begin_generate(self, result)
         if result is None:

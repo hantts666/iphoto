@@ -602,6 +602,10 @@ def validate_conversation(messages):
             if not isinstance(msg['request_user_id'], str) or not 1 <= len(msg['request_user_id']) <= 200:
                 raise ValueError('原请求的对话引用无效')
             item['request_user_id'] = msg['request_user_id']
+        if 'foreground_requested' in msg:
+            if type(msg['foreground_requested']) is not bool:
+                raise ValueError('生成前景请求类型无效')
+            item['foreground_requested'] = msg['foreground_requested']
         clean.append(item)
     return clean
 

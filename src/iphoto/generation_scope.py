@@ -14,7 +14,7 @@ SCOPE_PROMPT = ('\n输入图1是唯一待编辑照片。输入图2是与图1逐�
                 '分屏、标注或参考图。')
 
 
-def validate_scope_reference(photo_url, scope_url):
+def validate_scope_reference(photo_url, scope_url, *, whole_frame=False):
     """Decline missing/misaligned guides before credentials or network access.
 
     These are generated worker assets, sent as bounded metadata-free data URLs.
@@ -47,6 +47,8 @@ def validate_scope_reference(photo_url, scope_url):
                     raw = bands[0]
                 if not raw.getbbox():
                     raise ValueError('生成精修范围为空，照片未改变')
+                if whole_frame and raw.getextrema() != (255, 255):
+                    raise ValueError('AI重建人物需要整张画布，不能丢弃当前选区；照片未改变')
             else:
                 raw.verify()
             return size

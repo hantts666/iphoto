@@ -106,6 +106,7 @@ Rectangle {
                 property string photoIdentity: editor.originalUrl
                 onPhotoIdentityChanged: { active=false; active=true }
                 sourceComponent: Image {
+                    id: proxyImage
                     objectName: "photoPreviewImage"
                     source: editor.previewUrl
                     cache: false; asynchronous: true; retainWhileLoading: true
@@ -114,11 +115,26 @@ Rectangle {
                     property bool hadFailure: false
                     property int requestedGeneration: -1
                     property int displayedGeneration: -1
+                    property string displayedUrl: ""
                     onSourceChanged: requestedGeneration = editor.previewGeneration
                     onStatusChanged: {
-                        if (status === Image.Ready) { hasFrame=true; hadFailure=false; displayedGeneration=requestedGeneration }
+                        if (status === Image.Ready) { hasFrame=true; hadFailure=false; displayedUrl=source.toString(); displayedGeneration=requestedGeneration }
                         else if (status === Image.Error) { hasFrame=false; hadFailure=true }
                         else if (status === Image.Null) hasFrame=false
+                    }
+                    Connections {
+                        target: root.editor
+                        function onChanged() {
+                            // A worker cache hit republishes the same immutable
+                            // file with a new generation. It has no source/load
+                            // event. Promote only that already displayed file,
+                            // never the retained frame of a different pending URL.
+                            if (proxyImage.status === Image.Ready && proxyImage.hasFrame
+                                    && proxyImage.displayedUrl === root.editor.previewUrl) {
+                                proxyImage.requestedGeneration = root.editor.previewGeneration
+                                proxyImage.displayedGeneration = root.editor.previewGeneration
+                            }
+                        }
                     }
                 }
             }

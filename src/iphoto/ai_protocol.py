@@ -61,7 +61,7 @@ AUTO_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "action": {"type": "string", "enum": ["adjust", "update_layers", "refine_mask", "channel_mask", "group", "repair", "global", "develop", "generate", "layers", "answer", "unsupported"]},
+        "action": {"type": "string", "enum": ["adjust", "update_layers", "refine_mask", "channel_mask", "group", "repair", "global", "develop", "generate", "foreground", "layers", "answer", "unsupported"]},
         "scope": {"type": "string", "enum": ["current_layer", "current_selection", "existing_layers", "whole_image", "regions", "none"]},
         "summary": {"type": "string"},
         "recipe": RECIPE_SCHEMA["properties"]["recipe"],
@@ -72,8 +72,9 @@ AUTO_SCHEMA = {
         "mask_refinement": MASK_REFINEMENT_SCHEMA,
         "strategy": {"type": ["string", "null"]},
         "edit_prompt": {"type": ["string", "null"]},
+        "inspection_box": {"type": ["array", "null"], "items": {"type": "number", "minimum": 0, "maximum": 999}, "minItems": 4, "maxItems": 4},
     },
-    "required": ["action", "scope", "summary", "recipe", "regions", "layer_edits", "group", "repairs", "mask_refinement", "strategy", "edit_prompt"],
+    "required": ["action", "scope", "summary", "recipe", "regions", "layer_edits", "group", "repairs", "mask_refinement", "strategy", "edit_prompt", "inspection_box"],
 }
 
 AUTO_PROMPT = (
@@ -106,6 +107,9 @@ box=[左,上,右,下]、point=[x,y] 是原图归一化0～999坐标；point 必�
             "group": None,
             "repairs": [],
             "mask_refinement": None,
+            "strategy": None,
+            "edit_prompt": None,
+            "inspection_box": None,
             "regions": [
                 {
                     "name": "面部皮肤",
@@ -476,10 +480,10 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             return {**result, "action": "adjust" if result["status"] == "applied" else "unsupported"}
         fields = {"action", "scope", "summary", "recipe", "regions", "layer_edits"}
         # JSON-object providers may omit the unused nullable group field.
-        if not fields <= set(plan) <= fields | {"group", "repairs", "mask_refinement", "strategy", "edit_prompt"}:
+        if not fields <= set(plan) <= fields | {"group", "repairs", "mask_refinement", "strategy", "edit_prompt", "inspection_box"}:
             raise ValueError("AI 返回的动作字段不完整")
         action = plan["action"]
-        if action not in ("adjust", "update_layers", "refine_mask", "channel_mask", "group", "repair", "global", "develop", "generate", "layers", "answer", "unsupported"):
+        if action not in ("adjust", "update_layers", "refine_mask", "channel_mask", "group", "repair", "global", "develop", "generate", "foreground", "layers", "answer", "unsupported"):
             raise ValueError("AI 返回了未知修图动作")
         scope = plan["scope"]
         if current_scope == "selection" and action not in ("adjust", "generate", "channel_mask", "refine_mask", "answer", "unsupported"):
@@ -504,7 +508,7 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
         elif action == "refine_mask":
             if scope != ("current_selection" if current_scope == "selection" else "existing_layers"):
                 raise ValueError("范围修正不能丢弃当前草稿或替换到其他范围")
-        elif scope != {"update_layers": "existing_layers", "group": "existing_layers", "repair": "regions", "global": "whole_image", "develop": "whole_image", "layers": "regions", "answer": "none", "unsupported": "none"}[action]:
+        elif scope != {"update_layers": "existing_layers", "group": "existing_layers", "repair": "regions", "global": "whole_image", "develop": "whole_image", "foreground": "whole_image", "layers": "regions", "answer": "none", "unsupported": "none"}[action]:
             raise ValueError("AI 的动作与作用范围不一致")
         if action != "update_layers" and plan["layer_edits"] != []:
             raise ValueError("此动作不能包含已有图层修改")
@@ -516,8 +520,10 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
             raise ValueError("此动作不能夹带范围修正")
         if action not in ('develop','channel_mask') and plan.get("strategy") is not None:
             raise ValueError("此动作不能夹带成片策略")
-        if action != 'generate' and plan.get('edit_prompt') is not None:
+        if action not in ('generate', 'foreground') and plan.get('edit_prompt') is not None:
             raise ValueError('此动作不能夹带生成图像要求')
+        if action != 'foreground' and plan.get('inspection_box') is not None:
+            raise ValueError('此动作不能夹带生成前景检查位置')
         recipe = parse_plan(
             completion({
                 "status": "applied",
@@ -541,7 +547,7 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
                     raise ValueError('通道抠图仅支持普通物体范围，不夹带调色或面部精修')
             return {'status':'planned','action':action,'scope':scope,'summary':recipe['summary'],'regions':regions,
                     **({'strategy':strategy} if strategy is not None else {})}
-        if action == 'generate':
+        if action in ('generate', 'foreground'):
             prompt = plan.get('edit_prompt')
             if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 2000:
                 raise ValueError('选区图像编辑要求无效')
@@ -549,6 +555,8 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
                 raise ValueError('图像编辑能力不可用或夹带顶层配方')
             if (workspace or {}).get('max_new_layers', 4) < 1:
                 raise ValueError('选区图像编辑图层位置不足')
+            if action == 'foreground' and (workspace or {}).get('foreground_edit_available') is not True:
+                raise ValueError('AI重建人物抠图能力不可用，照片未改变')
             regions = []
             if scope == 'regions':
                 if not isinstance(plan['regions'], list) or len(plan['regions']) != 1:
@@ -559,8 +567,12 @@ def parse_auto(data, current, locked, current_scope=None, existing_layers=None, 
                     raise ValueError('生成精修不能夹带局部调色配方')
             elif plan['regions'] != []:
                 raise ValueError('已有选区不能夹带新分区')
-            return {'status':'planned','action':action,'scope':scope,'summary':recipe['summary'],
-                    'edit_prompt':prompt,'regions':regions}
+            result = {'status':'planned','action':action,'scope':scope,'summary':recipe['summary'],
+                      'edit_prompt':prompt,'regions':regions}
+            if action == 'foreground':
+                from .generated_foreground import validate_inspection_box
+                result['inspection_box'] = validate_inspection_box(plan.get('inspection_box'))
+            return result
         if action == "refine_mask":
             if plan["regions"] != [] or plan["recipe"] != current:
                 raise ValueError("范围修正不能夹带新分区或改写顶层配方")

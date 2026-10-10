@@ -254,6 +254,14 @@ ApplicationWindow {
                         y: cutoutToolsButton.height + 4
                         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
                         MenuItem { objectName: "toolbarChannelMaskAction"; text: "通道抠图…"; onTriggered: editor.channelMask.open() }
+                        MenuItem {
+                            objectName: "generatedForegroundAction"; text: "AI 重建人物（可能改变细节）"
+                            enabled: window.editingEnabled && editor.generatedForegroundAvailable
+                            onTriggered: {
+                                window.chatOpen = true
+                                editor.requestGeneratedForeground()
+                            }
+                        }
                         MenuItem { text: "编辑当前图层范围"; enabled: editingEnabled; onTriggered: selection.reviewMask() }
                         MenuItem { text: "透明细化画笔"; enabled: editor.hasSelectionDraft && selection.transparencyAvailable; onTriggered: selection.chooseTool("transparency") }
                     }
