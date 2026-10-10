@@ -39,12 +39,13 @@ def test_strategy_scope_budget_and_whole_image_smoothing():
         parse_auto(response(plan), Recipe().to_dict(), [])
 
 
-def test_skin_transition_is_continuous_and_protects_holes_and_outside():
+@pytest.mark.parametrize('target', ['face_skin', 'body_skin'])
+def test_skin_transition_is_continuous_and_protects_holes_and_outside(target):
     alpha = Image.new('L', (440, 350))
     draw = ImageDraw.Draw(alpha)
     draw.ellipse((50, 30, 390, 310), fill=255)
     draw.ellipse((170, 200, 270, 225), fill=0)
-    mask = {**empty_mask(), 'semantic_target': 'face_skin', 'bitmap': encode_bitmap(alpha)}
+    mask = {**empty_mask(), 'semantic_target': target, 'bitmap': encode_bitmap(alpha)}
     result = soften_effect_mask(mask, alpha.size)
     before = np.asarray(alpha)
     after = np.asarray(raster_mask(result, alpha.size))
@@ -56,7 +57,7 @@ def test_skin_transition_is_continuous_and_protects_holes_and_outside():
     assert np.max(np.abs(np.diff(after[100].astype(int)))) < 22
     assert result['bitmap']['sampling'] == 'alpha'
     assert result['bitmap']['width'] == alpha.width
-    assert result['semantic_target'] == 'face_skin'
+    assert result['semantic_target'] == target
 
 
 def test_review_sees_labeled_results_without_base64_in_json():
@@ -111,6 +112,8 @@ def test_real_worker_review_before_atomic_commit(qt_app, ai_store, tmp_path, ver
         if context['mode'] == 'auto':
             return response(develop())
         assert context['mode'] == 'photo_review'
+        evidence=[item['image_url']['url'] for item in payload['messages'][1]['content'] if item['type']=='image_url']
+        assert len(evidence)==4 and all(url.startswith('data:image/png;base64,') for url in evidence[-2:])
         observed.append((len(editor._layers), editor._cursor, editor.busy))
         status = verdict if not context['revision'] else 'accept'
         edits = [{'layer_id': context['candidates'][0]['layer_id'],
@@ -121,6 +124,9 @@ def test_real_worker_review_before_atomic_commit(qt_app, ai_store, tmp_path, ver
             configure(editor.ai, url)
             editor.openImage(str(path))
             wait_for(lambda: editor.hasImage and settled(editor), seconds=25)
+            from test_face_inventory import face
+            editor._face_hints=[]
+            editor._scene.set({'summary':'Cloud face fixture','objects':[face()]})
             original = deepcopy(editor._layers)
             cursor = editor._cursor
             assert editor.sendMessage('一键自然人像', 'auto')
@@ -160,6 +166,8 @@ def test_generated_pixels_commit_only_after_review_and_keep_selection_outside_ex
                              'edit_prompt':'选区内淡紫色','strategy':None,'recipe':Recipe().to_dict(),
                              'regions':[],'layer_edits':[],'repairs':[],'group':None,'mask_refinement':None})
         assert context['mode']=='photo_review' and len(editor._layers)==1
+        evidence=[item['image_url']['url'] for item in payload['messages'][1]['content'] if item['type']=='image_url']
+        assert len(evidence)==4 and all(url.startswith('data:image/png;base64,') for url in evidence[-2:])
         return response({'status':'accept','summary':'检查选区内色彩，外部保持','edits':[]})
     original_plan=editor.ai.plan
     def plan(*args):

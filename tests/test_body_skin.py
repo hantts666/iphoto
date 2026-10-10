@@ -68,6 +68,7 @@ def test_independent_parts_merge_once_and_preserve_source_and_gap():
     source = image()
     original = source.tobytes()
     mask, quality = body_skin.segment(source, jobs(), engine=TargetFixture())
+    assert mask['semantic_target'] == 'body_skin'
     alpha = raster_mask(mask, source.size)
     assert alpha.getpixel((170, 240)) == alpha.getpixel((560, 240)) == 255
     assert not alpha.crop((320, 0, 430, 600)).getbbox()

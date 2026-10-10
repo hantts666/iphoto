@@ -1,3 +1,3 @@
 """iPhoto local prototype."""
 
-__version__ = "1.11.37"
+__version__ = "1.11.38"

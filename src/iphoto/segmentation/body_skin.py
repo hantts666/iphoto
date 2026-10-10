@@ -56,7 +56,7 @@ def segment(image, parts, *, engine=None, progress=None):
         raise ValueError("身体皮肤范围为空，照片未改变")
     result = empty_mask()
     result.update(bitmap=encode_bitmap(combined, sampling="alpha", preserve_resolution=True),
-                  label=(label + " · 身体局部")[:200])
+                  label=(label + " · 身体局部")[:200], semantic_target="body_skin")
     quality = {
         "model": "EfficientSAM-S · 原图局部", "semantic_target": "body_skin",
         "parts": qualities, "part_count": len(parts),

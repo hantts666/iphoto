@@ -355,6 +355,7 @@ class AIController(QObject):
                 "selection": "AI 正在直接描绘目标轮廓…",
                 "regions": "AI 正在规划分区图层…",
                 "auto": "AI 正在判断调整范围并规划图层…",
+                "photo_review": "3/4 AI 正在对照修改前后，检查边缘、肤色与细节…可取消",
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
                 "matte_review":("4/4 AI 正在单独核对前景颜色与黑底串色…可取消"
                                 if (workspace or {}).get('color_only') is True else

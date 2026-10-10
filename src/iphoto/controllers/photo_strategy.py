@@ -63,11 +63,12 @@ def prepare(self, proposed, origin):
 
 
 def _render(self, pending, state, soften=False):
+    from .face_inventory import current as current_faces
     state['preparing'] = True
     self._status = ('2/4 正在合成选区精修，核对边界与原图细节…可取消' if state.get('generate')
                     else '2/4 正在合成整体光色和局部精修，检查原图细节…可取消')
     self._request('photo_candidate', before=pending['layer_snapshot'], proposed=state['proposed'],
-                  faces=deepcopy(self._face_hints[:3]), soften=soften,
+                  faces=deepcopy(current_faces(self)), soften=soften,
                   expected_sha256=self._sha, context={'token': state['token']})
     self.changed.emit()
 
@@ -81,8 +82,8 @@ def ready(self, result, context, generation):
         state['proposed'] = result['proposed']
         state['preparing'] = False
         state['reviewing'] = True
-        images = [{**item, 'url': image_data_url(item['path'])} for item in result['images']]
-        self._status = '3/4 正在对比成片与放大人脸，检查面具边界、色差和皮肤质感…可取消'
+        images = [{**item, 'url': image_data_url(item['path'], lossless=item.get('lossless', False))} for item in result['images']]
+        self._status = '3/4 正在对比修改前后，检查边缘、肤色和局部质感…可取消'
         self.changed.emit()
         self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], generation, 'photo_review',
                      {'direction': state['direction'], 'revision': state['revision'],
