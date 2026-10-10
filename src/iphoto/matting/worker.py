@@ -31,6 +31,7 @@ def main():
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，原选区保持不变")
         mask = validate_mask(request["mask"])
+        native_candidate = {} if request.get('compare_native') is True and method=='channel' else None
         if method in ('channel','correction','hair'):
             from .channels import estimate
             def channel_progress(tile=None, tiles=None, phase='details', **fields):
@@ -54,7 +55,8 @@ def main():
                                      hair=request.get('hair',False),context_points=request.get('context_points',False),
                                      source_point_proposal=request.get('source_point_proposal'),learned=learned)
             else:
-                mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress)
+                mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress,
+                                         native_candidate=native_candidate)
         elif method == "neural":
             from .neural import refine
 
@@ -79,10 +81,15 @@ def main():
             mask=restrict(mask,request['scope_limit'],source.image.size)
             quality={**quality,'scope_limited':True,
                      'partial_pixels':sum(raster_mask(mask,source.image.size).histogram()[1:255])}
+            if native_candidate:
+                native_candidate['mask']=restrict(native_candidate['mask'],request['scope_limit'],source.image.size)
+                native_candidate['quality'].update(scope_limited=True,
+                    partial_pixels=sum(raster_mask(native_candidate['mask'],source.image.size).histogram()[1:255]))
         response = {
             "id": request["id"], "op": "matte",
             "generation": request["generation"], "ok": True,
-            "result": {"mask": mask, "quality": quality},
+            "result": {"mask": mask, "quality": quality,
+                       **({'native_candidate':native_candidate} if native_candidate else {})},
         }
     except Exception as exc:
         response = {

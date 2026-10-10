@@ -95,6 +95,7 @@ def ready(e, result, context, generation):
 def _extract(e,state):
     e._status='3/4 正在结合通道与 AI 细化原图透明边缘…可取消'
     e._request('matte',method='channel',mask=state['mask'],channel_options=state['options'],auto_token=state['token'],
+               compare_native=True,
                **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}))
 
 
@@ -140,6 +141,13 @@ def complete(e, result, token):
         if current is None:
             return
         pending, state = current
+        if result.get('native_candidate') and not state['revision']:
+            native=deepcopy(result['native_candidate'])
+            native['mask']=validate_mask(native['mask'])
+            if state.get('channel_tuning'):
+                native['quality']['channel_tuning']=deepcopy(state['channel_tuning'])
+            state['native_result']=native
+            result={key:value for key,value in result.items() if key!='native_candidate'}
         mask = validate_mask(result['mask'])
         if state.get('channel_tuning') and not state.get('result'):
             result={**result,'quality':{**result['quality'],'channel_tuning':deepcopy(state['channel_tuning'])}}
@@ -162,9 +170,15 @@ def complete(e, result, token):
                                       'warnings':previous['warnings']+result['quality']['warnings'],
                                       'elapsed_ms':round(previous['elapsed_ms']+result['quality']['elapsed_ms'],1)}}
         state['result'] = deepcopy(result)
-        if state.get('channel_result') and not state['revision']:
-            state['alternatives']={'channel':state.pop('channel_result'),'hair':deepcopy(result)}
-            e._status='4/4 正在准备通道与 AI 两份独立抠图，比较相同原图边缘…可取消'
+        if not state['revision'] and (state.get('channel_result') or state.get('native_result')):
+            alternatives={}
+            if state.get('native_result'):alternatives['native']=state.pop('native_result')
+            if state.get('channel_result'):
+                alternatives.update(channel=state.pop('channel_result'),hair=deepcopy(result))
+            else:
+                alternatives['channel']=deepcopy(result)
+            state['alternatives']=alternatives
+            e._status='4/4 正在准备通道与 AI 独立抠图，比较相同原图边缘…可取消'
             e._request('matte_candidate',layers=deepcopy(e._layers),expected_sha256=e._sha,
                        comparison_masks={key:value['mask'] for key,value in state['alternatives'].items()},
                        comparison_target=(state['target_id'] or e._selected) if state['bound'] else None,
@@ -207,7 +221,7 @@ def review_ready(e, result, context, generation):
             state['comparison_boxes']=deepcopy(result['boxes'])
             images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
                     for item in result['review_images']]
-            e._status='4/4 AI 正在比较通道与头发细化的断丝、灰雾和误选…可取消'
+            e._status='4/4 AI 正在比较通道与细化候选的断丝、灰雾和误选…可取消'
             e.changed.emit()
             e.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,
                       'matte_review',{'target':state['mask']['label'],'comparison_candidates':result['comparison_candidates'],
@@ -284,13 +298,15 @@ def reviewed(e, review):
             _send_review(e,pending,state,evidence,state['generation'])
             return
         if state.pop('comparing',False):
-            from ..matte_compare import CANDIDATES, validate_regions
+            from ..matte_compare import candidate_names, validate_regions
+            names=candidate_names(state['alternatives'])
             if review['status']=='select' and review.get('candidate')=='regional':
-                choices=validate_regions(review['regions'],len(state['comparison_boxes']))
+                choices=validate_regions(review['regions'],len(state['comparison_boxes']),names)
                 alternatives=state.pop('alternatives')
                 state['result']=deepcopy(alternatives['channel'])
                 quality=state['result']['quality']
-                quality['candidate_comparison']={'selected':'regional','regions':choices,'summary':review['summary']}
+                quality['candidate_comparison']={'selected':'regional','regions':choices,'candidates':list(names),'summary':review['summary']}
+                quality['ai_refined']=any(item['candidate']!='native' for item in choices)
                 quality['elapsed_ms']=max(value['quality']['elapsed_ms'] for value in alternatives.values())
                 quality['warnings']=list(dict.fromkeys(warning for value in alternatives.values() for warning in value['quality']['warnings']))
                 state['composing']=True
@@ -301,10 +317,10 @@ def reviewed(e, review):
                            composition_regions=choices,review_boxes=deepcopy(state['comparison_boxes']),
                            context={'token':state['token']})
                 return
-            if review['status']=='select' and review.get('candidate') in CANDIDATES:
+            if review['status']=='select' and review.get('candidate') in names:
                 alternatives=state.pop('alternatives')
                 state['result']=deepcopy(alternatives[review['candidate']])
-                state['result']['quality']['candidate_comparison']={'selected':review['candidate'],'summary':review['summary']}
+                state['result']['quality']['candidate_comparison']={'selected':review['candidate'],'candidates':list(names),'summary':review['summary']}
                 _prepare_review(e,state,state['token'])
                 return
             e._pending_request=None
@@ -338,7 +354,8 @@ def reviewed(e, review):
         if state['bound']:
             e.acceptSelection()
         quality = result['quality']
-        detail = f"{CHANNEL_NAMES[quality['channel']]}通道 + AI 透明边缘 · {quality['elapsed_ms']/1000:.1f}s"
+        detail = f"{CHANNEL_NAMES[quality['channel']]}通道"+(' + AI 透明边缘' if quality.get('ai_refined',True) else ' · 原像素连续灰度')
+        detail += f" · {quality['elapsed_ms']/1000:.1f}s"
         if quality.get('native_detail'):
             detail += ' · 原像素细纹理'
         if quality.get('color_recovery'):
@@ -351,8 +368,9 @@ def reviewed(e, review):
             detail += ' · 人像外缘与头发分区'
         if quality.get('candidate_comparison'):
             selected=quality['candidate_comparison']['selected']
+            labels={'native':'纯通道候选','channel':'通道与 AI 候选','hair':'头发细化候选'}
             detail += ' · '+('已按边缘分别选用通道与 AI' if selected=='regional' else
-                              '已比较两份实际抠图，选用'+('通道候选' if selected=='channel' else '头发细化候选'))
+                              '已比较实际抠图，选用'+labels[selected])
         if quality.get('correction'):
             detail += ' · AI 已按实际效果纠错并复查'
             if quality['correction'].get('hair_matting'):

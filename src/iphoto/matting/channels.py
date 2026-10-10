@@ -153,7 +153,7 @@ def _constraints(alpha, inside, outside, values, options, score, semantic):
     return allowed, known_fg, known_bg
 
 
-def estimate(image, mask, options, *, neural=None, progress=None):
+def estimate(image, mask, options, *, neural=None, progress=None, native_candidate=None):
     """Only a bounded region near the selected target may grow; distant alpha stays exact."""
     started = perf_counter()
     options = validate_options(options)
@@ -215,26 +215,40 @@ def estimate(image, mask, options, *, neural=None, progress=None):
             polished = True
         except (ValueError, ImportError) as exc:
             warnings.append('细纹理求解未完成，保留 AI 透明度：' + str(exc))
-    result[~allowed] = alpha[~allowed]
-    output = original.copy()
-    output.paste(Image.fromarray(result), box[:2])
-    final = validate_mask({**mask, 'base':'empty', 'ops':[], 'inverted':False, 'feather':0,
-                           'edge_shift':0, 'bitmap':encode_bitmap(output, sampling='alpha', preserve_resolution=True)})
-    final.pop('color_recovery', None)
-    if options.get('color'):
-        from ..cutout import recovery_box, available
-        try:
-            if not available():
-                raise ValueError('前景颜色组件未安装，请更新依赖')
-            recovery_box(output)
-            final['color_recovery'] = True
-        except ValueError as exc:
-            warnings.append('未去背景串色：' + str(exc))
-    return final, {'channel_mask':True, 'backend':backend, 'channel':channel, 'contrast_score':score,
-                   'native_detail':polished, 'color_recovery':final.get('color_recovery',False),
-                   'mask_size':list(image.size), 'tiles':tiles, 'elapsed_ms':round((perf_counter()-started)*1000,1),
-                   'unknown_pixels':int(unknown.sum()), 'partial_pixels':int(((result>0)&(result<255)).sum()),
-                   'warnings':warnings}
+    def finish(pixels, backend, tiles, polished, ai_refined, warnings):
+        pixels[~allowed] = alpha[~allowed]
+        output = original.copy()
+        output.paste(Image.fromarray(pixels), box[:2])
+        final = validate_mask({**mask, 'base':'empty', 'ops':[], 'inverted':False, 'feather':0,
+                               'edge_shift':0, 'bitmap':encode_bitmap(output, sampling='alpha', preserve_resolution=True)})
+        final.pop('color_recovery', None)
+        if options.get('color'):
+            from ..cutout import recovery_box, available
+            try:
+                if not available():
+                    raise ValueError('前景颜色组件未安装，请更新依赖')
+                recovery_box(output)
+                final['color_recovery'] = True
+            except ValueError as exc:
+                warnings.append('未去背景串色：' + str(exc))
+        return final, {'channel_mask':True, 'backend':backend, 'channel':channel, 'contrast_score':score,
+                       'ai_refined':ai_refined, 'native_detail':polished,
+                       'color_recovery':final.get('color_recovery',False), 'mask_size':list(image.size),
+                       'tiles':tiles, 'elapsed_ms':round((perf_counter()-started)*1000,1),
+                       'unknown_pixels':int(unknown.sum()), 'partial_pixels':int(((pixels>0)&(pixels<255)).sum()),
+                       'warnings':warnings}
+    final, quality = finish(result,backend,tiles,polished,options['ai'],warnings)
+    if native_candidate is not None and options['ai']:
+        # Reuse the same native colour planes and constraints. Do not re-read,
+        # re-segment, run a second model, or average channel gray into AI alpha.
+        native = np.rint(values*255).astype(np.uint8)
+        native[known_fg], native[known_bg] = 255, 0
+        native_warnings = ['通道区分较弱，请放大检查颜色相近的边缘'] if score < 2 else []
+        # Include the shared preparation/model work already awaited by this
+        # transaction; native finalization alone is not the user-visible wait.
+        native_mask, native_quality = finish(native,'通道透明度',0,False,False,native_warnings)
+        native_candidate.update(mask=native_mask,quality=native_quality)
+    return final, quality
 
 
 def preview(image, mask, options, radius):

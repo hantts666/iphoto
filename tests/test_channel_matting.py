@@ -229,6 +229,8 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
                 return completion({'status':'accept','summary':'受控颜色通过','corrections':[]})
             if '通道参数操作员' in payload['messages'][0]['content']:
                 return completion({'status':'keep','options':None,'summary':'尚未确认实际抠图质量，继续计算并检查'})
+            if '抠图候选比较员' in payload['messages'][0]['content']:
+                return completion({'status':'select','candidate':'channel','regions':[],'summary':'控制选择AI候选，继续实际效果检查'})
             if '独立抠图质量检查员' in payload['messages'][0]['content']:
                 if outcome=='failure_review':return completion({'status':'accept'})
                 return completion({'status':'reject' if outcome=='reject_review' else 'accept','summary':'核对实际黑白底边缘'})
@@ -257,12 +259,14 @@ def test_channel_auto_real_workers_are_atomic(qt_app,ai_store,tmp_path,outcome):
         else:
             assert editor._layers==original and editor._candidate is None and editor._cursor==cursor
         assert not editor.aiChannelPreparing
-        expected=5 if outcome=='failure_review' else 4 if outcome in ('complete','reject_review') else 3 if outcome=='stale_review' else 2 if outcome in ('stale_matte','failure') else 1
+        expected=6 if outcome=='failure_review' else 5 if outcome in ('complete','reject_review') else 3 if outcome=='stale_review' else 2 if outcome in ('stale_matte','failure') else 1
         assert len(requests)==expected or outcome=='cancel_review' and len(requests)<=3
         if outcome in ('complete','reject_review','stale_review','failure_review'):
             assert '通道参数操作员' in requests[1][2]['messages'][0]['content']
-            assert '前景颜色检查员' in requests[2][2]['messages'][0]['content']
-            if outcome!='stale_review':assert '独立抠图质量检查员' in requests[-1][2]['messages'][0]['content']
+            assert '抠图候选比较员' in requests[2][2]['messages'][0]['content']
+            if outcome!='stale_review':
+                assert '前景颜色检查员' in requests[3][2]['messages'][0]['content']
+                assert '独立抠图质量检查员' in requests[-1][2]['messages'][0]['content']
     finally:editor.close()
 
 
@@ -319,7 +323,9 @@ def test_native_cutout_and_gray_export_leave_draft_and_layers_exact(qt_app,ai_st
                     assert result.mode=='RGBA'
                     expected=((alpha.astype(np.uint16)*180)//255).astype(np.uint8) if rgba else alpha
                     assert np.array_equal(result.getchannel('A'),expected)
-                    assert np.array_equal(np.array(result)[:,:,:3],np.array(image.convert('RGB')))
+                    pixels=np.array(result);visible=expected>0
+                    assert np.array_equal(pixels[:,:,:3][visible],np.array(image.convert('RGB'))[visible])
+                    assert np.all(pixels[~visible]==0)
                     assert result.info.get('icc_profile')
             assert before==(editor._candidate,editor._layers,editor._cursor,editor._draft_history,editor._generation)
         assert not editor.exportRange(str(path),'mask')
@@ -344,7 +350,9 @@ def test_cutout_uses_pending_bound_layer_mask_in_its_temporary_composite(qt_app,
         target=tmp_path/'expanded.png';assert editor.exportRange(str(target),'cutout')
         wait_for(lambda:target.exists() and not editor.busy)
         with Image.open(target) as result:
-            assert np.array_equal(np.array(result)[:,:,:3],render_layers(image,expected))
+            pixels=np.array(result);visible=np.asarray(alpha)>0
+            assert np.array_equal(pixels[:,:,:3][visible],np.asarray(render_layers(image,expected))[visible])
+            assert np.all(pixels[~visible]==0)
             assert result.getchannel('A').tobytes()==alpha.tobytes()
         assert editor._layers==original and editor._candidate==mask
     finally:editor.close()

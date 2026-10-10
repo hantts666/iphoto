@@ -360,7 +360,7 @@ class AIController(QObject):
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
                 "matte_review":("4/4 AI 正在单独核对前景颜色与黑底串色…可取消"
                                 if (workspace or {}).get('color_only') is True else
-                                "4/4 AI 正在比较通道与头发细化的断丝、灰雾和误选…可取消"
+                                "4/4 AI 正在比较通道与细化候选的断丝、灰雾和误选…可取消"
                                 if (workspace or {}).get('comparison_candidates') else
                                 "4/4 AI 正在对照原片、透明度与实际抠图，检查误选和灰边…可取消"),
                 "matte_points":"4/4 AI 正在放大核对发丝落点，检查是否误点背景…可取消",

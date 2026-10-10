@@ -208,7 +208,10 @@ def test_regional_worker_reviews_same_pixels_and_only_commits_after_acceptance(q
             actual=Image.open(exported)
             assert actual.mode=='RGBA' and actual.getchannel('A').tobytes()==raster_mask(expected,source.size).tobytes()
             expected_cutout=compose_cutout(render_layers(source,editor._layers),raster_mask(expected,source.size))
-            assert actual.tobytes()==expected_cutout.tobytes()
+            pixels=np.asarray(actual);expected_pixels=np.asarray(expected_cutout)
+            visible=expected_pixels[:,:,3]>0
+            assert np.array_equal(pixels[visible],expected_pixels[visible])
+            assert np.all(pixels[~visible]==0)
             final=deepcopy((editor._layers,editor._candidate));editor.undo();assert (editor._layers,editor._candidate)==before[:2]
             editor.redo();assert (editor._layers,editor._candidate)==final
         else:assert (editor._layers,editor._candidate,editor._cursor,editor._draft_history,editor._draft_cursor)==before

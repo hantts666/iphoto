@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 from io import BytesIO
 import json
 
@@ -367,6 +368,15 @@ def build_payload(
             if mode in ("auto", "regions", "scene", "selection")
             else 4096,
         )
+        if compare_mattes:
+            # Schema choices must match these prepared pixels, including when
+            # an older two-candidate transaction is being completed.
+            schema=deepcopy(payload['response_format']['json_schema']['schema'])
+            names=context['comparison_candidates']
+            schema['properties']['candidate']['enum']=[*names,'none',*(['regional'] if regional_mattes else [])]
+            if regional_mattes:
+                schema['properties']['regions']['items']['properties']['candidate']['enum']=list(names)
+            payload['response_format']['json_schema']['schema']=schema
         if settings.model.startswith(("gpt-5", "gpt-6", "o3", "o4")):
             payload["reasoning_effort"] = "low"
     else:
