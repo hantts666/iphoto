@@ -7,6 +7,7 @@ import time
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .ai_settings import AISettings, PROVIDERS, SettingsStore
+from .ai_errors import content_inspection_failed
 from .engine import Recipe
 from .photo_strategy import parse_review as parse_photo_review
 from .matte_review import parse_review as parse_matte_review
@@ -397,6 +398,11 @@ class AIController(QObject):
             ):
                 return
             if status != 200:
+                if status == 400 and content_inspection_failed(context['body']):
+                    raise ValueError(
+                        'HTTP 400：服务端内容检查未通过，本次 AI 处理未完成；照片未改变。'
+                        '正常照片也可能被误判，可向服务商反馈核查'
+                    )
                 messages = {
                     400: "请求格式或模型不兼容，请确认模型支持图片和 JSON 输出",
                     401: "API Key 无效或与接口地域不匹配",
