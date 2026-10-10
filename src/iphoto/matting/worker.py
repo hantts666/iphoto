@@ -42,7 +42,7 @@ def main():
                 if 'stroke' in request:
                     mask,quality=refine_local(source.image,mask,request['stroke'],points=request.get('points',[]),progress=channel_progress)
                 else:
-                    mask,quality=refine_edges(source.image,mask,progress=channel_progress)
+                    mask,quality=refine_edges(source.image,mask,boxes=request.get('review_boxes'),progress=channel_progress)
             elif method=='correction':
                 from .correction import correct
                 learned = None
@@ -85,11 +85,15 @@ def main():
                 native_candidate['mask']=restrict(native_candidate['mask'],request['scope_limit'],source.image.size)
                 native_candidate['quality'].update(scope_limited=True,
                     partial_pixels=sum(raster_mask(native_candidate['mask'],source.image.size).histogram()[1:255]))
+        review_boxes = None
+        if native_candidate:
+            from ..matte_compare import comparison_boxes
+            review_boxes=comparison_boxes({'native':native_candidate['mask'],'channel':mask},source.image.size)
         response = {
             "id": request["id"], "op": "matte",
             "generation": request["generation"], "ok": True,
             "result": {"mask": mask, "quality": quality,
-                       **({'native_candidate':native_candidate} if native_candidate else {})},
+                       **({'native_candidate':native_candidate,'review_boxes':review_boxes} if native_candidate else {})},
         }
     except Exception as exc:
         response = {

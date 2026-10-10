@@ -22,6 +22,15 @@ def candidate_names(masks):
     raise ValueError('抠图比较候选无效，原范围保留')
 
 
+def comparison_boxes(masks, size):
+    """Plan native evidence once, before a later candidate changes the ranking."""
+    names=candidate_names(masks)
+    union=np.asarray(raster_mask(validate_mask(masks[names[0]]),size)).copy()
+    for key in names[1:]:
+        np.maximum(union,np.asarray(raster_mask(validate_mask(masks[key]),size)),out=union)
+    return [list(box) for box in edge_boxes(Image.fromarray(union))]
+
+
 SCHEMA = {'type':'object','additionalProperties':False,'properties':{
     'status':{'type':'string','enum':['select','reject','uncertain']},
     'candidate':{'type':'string','enum':[*ALL_CANDIDATES,'none']},
@@ -136,10 +145,7 @@ def render_comparison(source, layers, masks, directory, identity, *, target=None
     if target is not None and sum(layer.get('id')==target for layer in layers)!=1:
         raise ValueError('抠图比较目标图层已变化，原范围保留')
     if boxes is None:
-        union=np.asarray(raster_mask(masks[names[0]],source.size)).copy()
-        for key in names[1:]:
-            np.maximum(union,np.asarray(raster_mask(masks[key],source.size)),out=union)
-        boxes=edge_boxes(Image.fromarray(union))
+        boxes=comparison_boxes(masks,source.size)
     results={}
     for key in names:
         staged=deepcopy(layers)

@@ -141,6 +141,9 @@ def complete(e, result, token):
         if current is None:
             return
         pending, state = current
+        if 'review_boxes' in result and not state['revision']:
+            state['candidate_boxes']=deepcopy(result['review_boxes'])
+            result={key:value for key,value in result.items() if key!='review_boxes'}
         if result.get('native_candidate') and not state['revision']:
             native=deepcopy(result['native_candidate'])
             native['mask']=validate_mask(native['mask'])
@@ -156,6 +159,7 @@ def complete(e, result, token):
             state['result']=deepcopy(result)
             e._status='3/4 正在结合人物外缘与头发分区处理原像素边缘…可取消'
             e._request('matte',method='hair',mask=mask,auto_token=state['token'],
+                       **({'review_boxes':state['candidate_boxes']} if state.get('candidate_boxes') is not None else {}),
                        **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}))
             return
         if state['revision']:
@@ -182,6 +186,7 @@ def complete(e, result, token):
             e._request('matte_candidate',layers=deepcopy(e._layers),expected_sha256=e._sha,
                        comparison_masks={key:value['mask'] for key,value in state['alternatives'].items()},
                        comparison_target=(state['target_id'] or e._selected) if state['bound'] else None,
+                       **({'review_boxes':state['candidate_boxes']} if state.get('candidate_boxes') is not None else {}),
                        context={'token':token})
             return
         _prepare_review(e,state,token)
@@ -196,11 +201,12 @@ def _prepare_review(e,state,token):
         target = state['target_id'] or e._selected
         next(layer for layer in staged if layer['id']==target)['mask'] = mask
     e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
+    boxes=state.get('review_boxes') if state['revision'] else state.get('comparison_boxes',state.get('candidate_boxes'))
     e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
                target_context=bool(state.get('hair')),
                final_review=bool(state['revision']),
                **({'detail_points':state['corrections']} if state['revision'] and state.get('corrections') and state.get('hair') else {}),
-               **({'review_boxes':state['review_boxes']} if state['revision'] else {}),
+               **({'review_boxes':boxes} if boxes is not None else {}),
                context={'token':token})
 
 
@@ -210,6 +216,9 @@ def review_ready(e, result, context, generation):
         if current is None or generation != e._generation:
             return
         pending, state = current
+        expected=state.get('review_boxes') if state['revision'] else state.get('comparison_boxes',state.get('candidate_boxes'))
+        if expected is not None and result.get('boxes')!=expected:
+            raise ValueError('抠图比较位置与本次细化范围不一致，原范围保留')
         state['reviewing'] = True
         if 'composed_mask' in result:
             if not state.pop('composing',False):raise ValueError('分区抠图结果已过期，原范围保留')

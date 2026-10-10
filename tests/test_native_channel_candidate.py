@@ -141,6 +141,7 @@ def test_real_channel_worker_native_selection_is_atomic(qt_app,ai_store,tmp_path
             configure(editor.ai,endpoint)
             channel_auto._extract(editor,state)
             wait_for(lambda:state.get('comparing') and editor.ai.busy,seconds=25)
+            assert state['candidate_boxes']==state['comparison_boxes']
             assert (editor._layers,editor._candidate)==before[:2]
             if outcome=='cancel':editor.selection.cancelTask()
             elif outcome=='stale':editor._generation+=1
@@ -186,6 +187,8 @@ def test_full_window_chat_can_choose_native_and_undo_without_an_extra_user_step(
     ui.e._layer()['mask']=deepcopy(seed);ui.e._load_layer();ui.e._commit()
     before=deepcopy(ui.e._layers);cursor=ui.e._cursor
     native,native_quality=channels.estimate(source,seed,{**options,'ai':False})
+    from iphoto.matte_compare import comparison_boxes
+    planned=comparison_boxes({'native':native,'channel':seed},source.size)
     actual_request=ui.e._request
     def request(op,**data):
         if op=='matte' and data.get('method') in ('channel','hair'):
@@ -194,10 +197,13 @@ def test_full_window_chat_can_choose_native_and_undo_without_an_extra_user_step(
             if data['method']=='channel':
                 assert data['compare_native'] is True
                 result['native_candidate']={'mask':native,'quality':native_quality}
+                result['review_boxes']=planned
             else:
+                assert data['review_boxes']==planned
                 quality['edge_refinement']=True
             QTimer.singleShot(0,lambda:channel_auto.complete(ui.e,result,data['auto_token']))
             return
+        if op=='matte_candidate':assert data['review_boxes']==planned
         return actual_request(op,**data)
     monkeypatch.setattr(ui.e,'_request',request)
     def server(payload):

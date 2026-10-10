@@ -439,7 +439,7 @@ def main():
         elif 'comparison_masks' in request:
             from .matte_compare import render_comparison
             result=render_comparison(source.image,request['layers'],request['comparison_masks'],cache,request['id'],
-                                     target=request.get('comparison_target'))
+                                     target=request.get('comparison_target'),boxes=request.get('review_boxes'))
         else:
             result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'),target_context=request.get('target_context',False),detail_points=request.get('detail_points'),final_review=request.get('final_review',False))
         current_crop_assets={Path(item['path']) for item in result['images']}
