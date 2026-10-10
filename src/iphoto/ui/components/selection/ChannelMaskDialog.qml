@@ -10,6 +10,7 @@ Dialog {
     readonly property var config: channel.options
     readonly property bool previewReady: alphaImage.status===Image.Ready
     property bool nativeZoom: false
+    property bool comparingChannels: false
     property real viewCenterX: 0.5
     property real viewCenterY: 0.5
     function restorePosition() {
@@ -29,16 +30,17 @@ Dialog {
         }
     }
     closePolicy: Popup.CloseOnEscape
-    onOpened: { nativeZoom = false; viewCenterX = 0.5; viewCenterY = 0.5 }
+    onOpened: { nativeZoom = false; comparingChannels = false; viewCenterX = 0.5; viewCenterY = 0.5 }
     onClosed: if(channel.opened) channel.close()
     palette.text: "#e4e8ee"; palette.windowText: "#e4e8ee"; palette.buttonText: "#e4e8ee"
     background: Rectangle { color: "#2d3137"; border.color: "#55616b"; radius: 8 }
     contentItem: ColumnLayout {
         spacing: 9
         Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: root.config.whole===true ? 270 : Math.min(270,Math.max(130,root.parent.height-570)); color: "#131619"
+            Layout.fillWidth: true; Layout.preferredHeight: root.comparingChannels || root.config.whole===true ? 270 : Math.min(270,Math.max(130,root.parent.height-570)); color: "#131619"
             Flickable {
                 id: previewScroll; objectName: "channelPreviewScroll"; anchors.fill: parent; anchors.margins: 4; clip: true
+                visible: !root.comparingChannels
                 contentWidth: Math.max(width, alphaImage.width); contentHeight: Math.max(height, alphaImage.height)
                 boundsBehavior: Flickable.StopAtBounds
                 onMovementEnded: {
@@ -59,6 +61,35 @@ Dialog {
                 ScrollBar.vertical: ScrollBar {}
                 ScrollBar.horizontal: ScrollBar {}
             }
+            GridLayout {
+                objectName: "channelChoicesGrid"; anchors.fill: parent; anchors.margins: 5
+                visible: root.comparingChannels; columns: 4; rowSpacing: 5; columnSpacing: 5
+                Repeater {
+                    model: root.channel.channelChoices
+                    delegate: Rectangle {
+                        required property var modelData
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        color: "#23282d"; radius: 4
+                        border.width: 2
+                        border.color: modelData.channel===root.config.channel ? "#69bba6" : choiceMouse.containsMouse ? "#a0abb6" : "#404850"
+                        Image {
+                            anchors.fill: parent; anchors.margins: 4; anchors.bottomMargin: 23
+                            source: modelData.url; fillMode: Image.PreserveAspectFit; asynchronous: true
+                        }
+                        Caption { anchors.bottom: parent.bottom; anchors.bottomMargin: 4; anchors.horizontalCenter: parent.horizontalCenter; text: modelData.label }
+                        MouseArea {
+                            id: choiceMouse; objectName: "channelChoice_"+(modelData.channel || "source")
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: !root.editor.busy && !root.channel.loading
+                            onClicked: {
+                                root.comparingChannels = false
+                                root.channel.setView(modelData.channel ? "channel" : "source")
+                                if(modelData.channel) root.channel.setOption("channel", modelData.channel)
+                            }
+                        }
+                    }
+                }
+            }
             Caption { anchors.centerIn: parent; width: parent.width-20; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; visible: root.channel.loading || alphaImage.status===Image.Loading; text: root.editor.matteBusy ? root.editor.status : "正在更新通道预览…" }
             Caption { anchors.centerIn: parent; visible: alphaImage.status===Image.Error; text: "通道预览读取失败，请关闭后重新打开" }
         }
@@ -67,16 +98,21 @@ Dialog {
             Caption { text: "预览" }
             ComboBox {
                 objectName: "channelPreviewViewBox"; implicitWidth: 145
-                model: [{text:"黑白透明度",value:"alpha"},{text:"白底抠图",value:"white"},{text:"黑底抠图",value:"black"},{text:"原照片",value:"source"}]
+                model: [{text:"黑白透明度",value:"alpha"},{text:"白底抠图",value:"white"},{text:"黑底抠图",value:"black"},{text:"原照片",value:"source"},{text:"原始通道",value:"channel"}]
                 textRole: "text"; valueRole: "value"
                 currentIndex: Math.max(0,model.findIndex(function(item) { return item.value===root.channel.view }))
                 enabled: !root.editor.busy && !root.channel.loading && root.channel.previewUrl.length>0
-                onActivated: root.channel.setView(currentValue)
+                onActivated: { root.comparingChannels = false; root.channel.setView(currentValue) }
             }
-            Caption { objectName: "channelPreviewStage"; text: root.channel.showingResult ? "实际抠图效果" : root.config.ai===true || root.config.color===true ? "通道草图 · 尚未细化或去串色" : "通道透明度"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
+            Caption { objectName: "channelPreviewStage"; text: root.comparingChannels ? "原始通道缩略对照 · 点击选用" : root.channel.view==="channel" ? "原始颜色通道 · 未调灰度" : root.channel.view==="source" ? "原照片 · 对照细节" : root.channel.showingResult ? "实际抠图效果" : root.config.ai===true || root.config.color===true ? "通道草图 · 尚未细化或去串色" : "通道透明度"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
+            Action {
+                objectName: "channelChoicesButton"; text: root.comparingChannels ? "返回预览" : "比较通道"; subtle: true
+                enabled: !root.editor.busy && !root.channel.loading && root.channel.channelChoices.length>0
+                onClicked: root.comparingChannels = !root.comparingChannels
+            }
             Action {
                 objectName: "channelNativeZoomButton"; text: root.nativeZoom ? "适应" : "100%"; subtle: true
-                enabled: root.channel.nativeView && root.previewReady && !root.channel.loading
+                enabled: !root.comparingChannels && root.channel.nativeView && root.previewReady && !root.channel.loading
                 onClicked: {
                     root.nativeZoom = !root.nativeZoom
                     Qt.callLater(root.restorePosition)
@@ -84,8 +120,9 @@ Dialog {
             }
             Action { objectName: "channelCompareButton"; text: root.channel.showingResult ? "对照草图" : "查看实际效果"; visible: root.channel.hasResult; enabled: !root.editor.busy && !root.channel.loading; subtle:true; onClicked: root.channel.compare() }
         }
-        Caption { Layout.fillWidth: true; text: root.channel.note; wrapMode: Text.Wrap }
+        Caption { Layout.fillWidth: true; text: root.comparingChannels ? "比较目标与背景的明暗差异，点击通道后调黑白场和灰度。此处是缩略对照；返回预览可用100%检查原像素。" : root.channel.view==="channel" ? "原始颜色通道尚未应用黑白场、反转与灰度，明暗不等于透明度。调整这些参数后自动显示黑白透明度；可再切换黑白底检查。" : root.channel.note; wrapMode: Text.Wrap }
         RowLayout {
+            visible: !root.comparingChannels
             Caption { text: "通道" }
             ComboBox {
                 objectName: "channelChoiceBox"; Layout.fillWidth: true
@@ -99,6 +136,7 @@ Dialog {
             Action { objectName: "channelRecommendButton"; text: "自动推荐"; visible: root.config.whole!==true; subtle: true; enabled: !root.editor.busy; onClicked: root.channel.open() }
         }
         RowLayout {
+            visible: !root.comparingChannels
             Caption { text: "黑场" }
             SpinBox { objectName: "channelBlackBox"; editable:true; from:0; to:Math.max(0,(root.config.white || 255)-1); value:root.config.black || 0; enabled:!root.editor.busy; onValueModified:root.channel.setOption("black",value) }
             Caption { text: "白场" }
@@ -108,16 +146,16 @@ Dialog {
             Caption { text: Number(root.config.gamma || 1).toFixed(2) }
         }
         RowLayout {
-            visible: root.config.whole!==true
+            visible: !root.comparingChannels && root.config.whole!==true
             CheckBox { objectName: "channelUseAiBox"; text: "结合 AI 细化透明边缘"; checked: root.config.ai===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("ai",checked) }
             Item { Layout.fillWidth:true }
             Caption { text: "范围" }
             SpinBox { objectName: "channelRadiusBox"; editable:true; from:1; to:256; value:root.config.radius || 32; enabled:!root.editor.busy; onValueModified:root.channel.setOption("radius",value) }
             Caption { text: "原图 px" }
         }
-        CheckBox { objectName:"channelInteriorBox"; visible:root.config.whole!==true; text:"处理内部透明与孔洞（薄纱、玻璃、细枝）"; checked:root.config.interior===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("interior",checked) }
+        CheckBox { objectName:"channelInteriorBox"; visible:!root.comparingChannels && root.config.whole!==true; text:"处理内部透明与孔洞（薄纱、玻璃、细枝）"; checked:root.config.interior===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("interior",checked) }
         CheckBox {
-            objectName:"channelDetailBox"; visible:root.config.whole!==true
+            objectName:"channelDetailBox"; visible:!root.comparingChannels && root.config.whole!==true
             text:"用原片颜色重算透明度（可选）"; checked:root.config.detail===true
             enabled:!root.editor.busy && root.config.ai===true
             hoverEnabled:true
@@ -125,7 +163,7 @@ Dialog {
             ToolTip.text:"会重新计算 AI 的透明边缘；请先预览，对照发丝与薄透区域后再使用。"
             onClicked:root.channel.setOption("detail",checked)
         }
-        CheckBox { objectName:"channelColorBox"; visible:root.config.whole!==true; text:"去背景串色（黑白底检查与透明 PNG）"; checked:root.config.color===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("color",checked) }
+        CheckBox { objectName:"channelColorBox"; visible:!root.comparingChannels && root.config.whole!==true; text:"去背景串色（黑白底检查与透明 PNG）"; checked:root.config.color===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("color",checked) }
         Caption { Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10; text:root.config.whole===true ? "无需先选目标。整图通道适合主体与背景颜色差异明显的照片，同色背景也会选中；生成范围后可用画笔或 AI 继续修细节。" : "先比较通道；预览实际效果可检查 AI 细化与去串色。100%时拖动查看发丝与孔洞，使用结果后可撤销。" }
     }
     footer: RowLayout {

@@ -6,7 +6,7 @@ from ..document import raster_mask
 MAX_NATIVE_VIEW = 8_000_000
 
 
-def native_previews(source, alpha, reference, radius, *, layers=None, mask=None, whole=False):
+def native_previews(source, alpha, reference, radius, *, layers=None, mask=None, whole=False, channel=None):
     """One native frame for draft/result comparisons, including export colours.
 
     Large views are delivered at display size. A view advertised as 100% is
@@ -32,6 +32,11 @@ def native_previews(source, alpha, reference, radius, *, layers=None, mask=None,
     def pictures():
         yield 'alpha', cropped
         yield 'source', original
+        if channel is not None:
+            from .channels import channel_plane
+            # Compute before display resizing: clipped colour differences at
+            # fine edges are not equivalent to a plane of a resized RGB image.
+            yield 'channel', Image.fromarray(channel_plane(original, channel))
         if mask is None:
             for color in ('white', 'black'):
                 yield color, Image.composite(original, Image.new('RGB', original.size, color), cropped)
@@ -41,6 +46,16 @@ def native_previews(source, alpha, reference, radius, *, layers=None, mask=None,
                 yield color, background_view(source, layers, mask, color, rendered, box)
     views = ((name, picture if native else preview(picture, 1600)) for name, picture in pictures())
     return views, {'native': native, 'box': list(box), 'focused': box != (0, 0, *source.size)}
+
+
+def channel_choices(source, box):
+    """Small, read-only overviews; the selected raw view remains native above."""
+    from ..engine import preview
+    from .channels import CHANNELS, CHANNEL_NAMES, channel_planes
+    overview = preview(source.crop(box).convert('RGB'), 192)
+    yield '', '原照片', overview
+    for name, plane in zip(CHANNELS, channel_planes(overview)):
+        yield name, CHANNEL_NAMES[name] + '通道', Image.fromarray(plane)
 
 
 def previews(image, alpha, mask, radius, *, whole=False):

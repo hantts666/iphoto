@@ -364,28 +364,38 @@ def main():
             options = validate_options(request['options'])
             result_mask = validate_mask(request['result_mask'])
             alpha = raster_mask_cached(result_mask, source.image.size)
-            channel, score = options['channel'], 0.
+            channel, score = request.get('resolved_channel', options['channel']), 0.
+            from .matting.channels import CHANNELS
+            if channel not in CHANNELS:
+                raise ValueError('实际结果缺少对应的原始通道')
         else:
             alpha, options, channel, score = native_preview(source.image, request['mask'], request['options'],
                                                            initial=bool(request.get('initial')),cache=channel_reference_cache)
         if request.get('native_views') is True:
-            from .matting.channel_view import native_previews
+            from .matting.channel_view import native_previews, channel_choices
             pictures, info = native_previews(source.image, alpha, request['mask'], options['radius'],
                 **({'layers': validate_layers(request['layers']), 'mask': result_mask} if actual else {}),
-                whole=bool(options.get('whole')))
+                whole=bool(options.get('whole')), channel=channel)
             views, created = {}, set()
             for name, picture in pictures:
                 destination = cache / f"channel-native-{request['id']}-{name}.png"
                 picture.save(destination, compress_level=3)
                 views[name] = str(destination)
                 created.add(destination)
+            choices = []
+            if request.get('channel_choices') is True:
+                for name, label, picture in channel_choices(source.image, info['box']):
+                    destination = cache / f"channel-choice-{request['id']}-{name or 'source'}.png"
+                    picture.save(destination, compress_level=3)
+                    choices.append({'channel': name, 'label': label, 'path': str(destination)})
+                    created.add(destination)
             if not actual:
                 channel_draft_assets.clear()
                 channel_draft_assets.update(created)
             current_crop_assets = created | channel_draft_assets
             assets.extend(created)
             return {'path': views['alpha'], 'views': views, 'options': options,
-                    'channel': channel, 'score': score, **info,
+                    'channel': channel, 'score': score, 'channel_choices': choices, **info,
                     **({'mask':scoped_mask,'scope_limit':scope_limit} if scoped_mask is not None else {})}
         alpha = alpha.resize(proxy.size, Image.Resampling.LANCZOS)
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))

@@ -17,6 +17,7 @@ class ChannelMaskController(QObject):
         self._preview = ''
         self._options = {}
         self._views = {}
+        self._choices = []
         self._view = 'alpha'
         self._note = ''
         self._loading = False
@@ -77,6 +78,10 @@ class ChannelMaskController(QObject):
     def options(self):
         return self._options
 
+    @Property('QVariantList', notify=changed)
+    def channelChoices(self):
+        return self._choices
+
     @Property(str, notify=changed)
     def view(self):
         return self._view
@@ -112,6 +117,7 @@ class ChannelMaskController(QObject):
                       'target_id':e._selection_target_id, 'revision':0}
         self._preview, self._note = '', '正在比较红、绿、蓝、亮度与通道计算…'
         self._views, self._view = {}, 'alpha'
+        self._choices = []
         self._result, self._draft_views, self._result_views = None, {}, {}
         self._show_result, self._native = False, False
         # A second color-line solve can erase learned translucent coverage.
@@ -126,7 +132,7 @@ class ChannelMaskController(QObject):
         self.state['revision'] += 1
         self._loading = True
         self.editor._queue = type(self.editor._queue)(r for r in self.editor._queue if r['op'] != 'channel_preview')
-        self.editor._request('channel_preview', mask=self.state['mask'], options=self._options, initial=initial, display_preview=True, native_views=True,
+        self.editor._request('channel_preview', mask=self.state['mask'], options=self._options, initial=initial, display_preview=True, native_views=True, channel_choices=True,
                               expected_sha256=self.state['sha'], context={'token':self.state['token'],
                               'revision':self.state['revision']})
         self.changed.emit()
@@ -137,6 +143,8 @@ class ChannelMaskController(QObject):
         from PySide6.QtCore import QUrl
         self._options = result['options']
         self._views = {name:QUrl.fromLocalFile(path).toString() for name,path in result.get('views',{'alpha':result['path']}).items()}
+        self._choices = [{**item, 'url': QUrl.fromLocalFile(item['path']).toString()}
+                         for item in result.get('channel_choices', [])]
         self._native = result.get('native', False)
         self._show_result = context.get('result_preview', False)
         if self._show_result:
@@ -179,10 +187,13 @@ class ChannelMaskController(QObject):
             return
         if options == self._options:
             return
+        if self._view == 'channel' and name in ('black', 'white', 'gamma', 'invert'):
+            self._view = 'alpha'
         self._options = options
         self._result, self._draft_views, self._result_views = None, {}, {}
         self._show_result = False
         self._preview, self._views = '', {}
+        self._choices = []
         # Invalidate in-flight previews immediately; waiting for the debounce
         # would let an older reply overwrite the user's latest controls.
         self.state['revision'] += 1
@@ -228,7 +239,8 @@ class ChannelMaskController(QObject):
         if target:
             next(layer for layer in layers if layer['id'] == target)['mask'] = deepcopy(self._result['mask'])
         self.editor._request('channel_preview', mask=self.state['mask'], result_mask=self._result['mask'],
-            options=self._options, layers=layers, expected_sha256=self.state['sha'], native_views=True,
+            options=self._options, layers=layers, expected_sha256=self.state['sha'], native_views=True, channel_choices=True,
+            resolved_channel=self._result['quality']['channel'],
             context={'token':self.state['token'], 'revision':self.state['revision'], 'result_preview':True})
         self.changed.emit()
 
@@ -269,6 +281,7 @@ class ChannelMaskController(QObject):
         self.state = None
         self._preview = ''
         self._views = {}
+        self._choices = []
         self._loading = False
         self._result, self._draft_views, self._result_views = None, {}, {}
         if owned:
