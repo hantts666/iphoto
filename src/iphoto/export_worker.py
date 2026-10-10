@@ -44,6 +44,10 @@ def main():
                 from .cutout import color_patch, compose_cutout
                 patch = color_patch(source.image, layers, validate_mask(request['mask']), alpha)
                 rendered = compose_cutout(rendered, alpha, patch)
+                # Fully transparent source RGB is invisible but can dominate
+                # PNG size. Keep every visible sample and alpha byte exact.
+                transparent = rendered.getchannel('A').point([255] + [0] * 255)
+                rendered.paste((0, 0, 0, 0), mask=transparent)
         progress(3)
         if output == 'mask':
             from .storage import atomic_output

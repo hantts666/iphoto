@@ -135,8 +135,44 @@ def test_real_export_worker_keeps_native_alpha_and_uses_foreground_colors(tmp_pa
     with Image.open(target) as output:
         assert output.size==source.size and output.mode=='RGBA'
         assert output.getchannel('A').tobytes()==alpha.tobytes()
+        expected=compose_cutout(source,Image.fromarray(alpha),color_patch(source,layers,mask))
+        pixels=np.asarray(output)
+        assert np.array_equal(pixels[alpha>0],np.asarray(expected)[alpha>0])
+        assert not pixels[alpha==0].any()
         partial=(alpha>0)&(alpha<255)
-        assert np.abs(np.asarray(output)[...,:3].astype(float)[partial]-truth).mean()<3
+        assert np.abs(pixels[...,:3].astype(float)[partial]-truth).mean()<3
+
+
+def test_cutout_export_drops_hidden_noise_but_preserves_composites_and_resampling(tmp_path):
+    rng=np.random.default_rng(42)
+    source=Image.fromarray(rng.integers(1,256,(384,512,3),dtype=np.uint8))
+    alpha=Image.new('L',source.size)
+    # Adjacent alpha values include the faintest visible pixel and opacity.
+    values=np.broadcast_to(np.arange(256,dtype=np.uint8),(32,256)).copy()
+    alpha.paste(Image.fromarray(values),(128,176))
+    mask={**empty_mask(),'bitmap':encode_bitmap(alpha,sampling='alpha',preserve_resolution=True)}
+    layers=[new_layer('Original',True)]
+    path=tmp_path/'noise.png';source.save(path)
+    target=tmp_path/'cutout.png'
+    request={'op':'export','id':1,'source_path':str(path),'source_sha':load_source(path).digest,
+             'layers':layers,'mask':mask,'output':'cutout','stage_path':str(target),'jpeg_quality':100}
+    process=subprocess.run([sys.executable,str(ROOT/'run.py'),'--export-worker'],input=json.dumps(request)+'\n',
+                           capture_output=True,text=True,encoding='utf-8',timeout=40)
+    assert process.returncode==0 and json.loads(process.stdout.splitlines()[-1])['ok']
+    baseline=compose_cutout(source,alpha)
+    baseline_path=tmp_path/'baseline.png';baseline.save(baseline_path)
+    with Image.open(target) as optimized:
+        assert optimized.getchannel('A').tobytes()==alpha.tobytes()
+        visible=np.asarray(alpha)>0
+        assert np.array_equal(np.asarray(optimized)[visible],np.asarray(baseline)[visible])
+        assert not np.asarray(optimized)[~visible].any()
+        for size in (source.size,(257,193),(1024,768)):
+            before=baseline.resize(size,Image.Resampling.LANCZOS)
+            after=optimized.resize(size,Image.Resampling.LANCZOS)
+            for color in ('white','black'):
+                bg=Image.new('RGBA',size,color)
+                assert Image.alpha_composite(bg,before).tobytes()==Image.alpha_composite(bg,after).tobytes()
+    assert target.stat().st_size < baseline_path.stat().st_size/5
 
 
 def test_real_preview_worker_reuses_photo_cache_and_refreshes_background_colors(qt_app,ai_store,tmp_path):
