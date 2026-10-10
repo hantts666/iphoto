@@ -121,6 +121,7 @@ def test_main_menu_can_create_channel_range_without_prior_selection(canvas,tmp_p
     wait_for(lambda:ui.e.channelMask.opened and not ui.e.channelMask.loading and ui.e.channelMask.previewUrl)
     wait_for(lambda:ui.find('channelMaskDialog').property('opened'))
     assert ui.e.channelMask.options['whole'] and ui.e.channelMask.options['ai'] is False
+    assert not ui.e.hasSelectionDraft
     assert ui.find('channelApplyButton').property('text')=='生成选区'
     assert not ui.find('channelUseAiBox').isVisible()
     ui.click('channelChoiceBox');ui.key(Qt.Key_Home);ui.key(Qt.Key_Return)
@@ -128,7 +129,8 @@ def test_main_menu_can_create_channel_range_without_prior_selection(canvas,tmp_p
     for field,value in [('channelBlackBox','35'),('channelWhiteBox','210')]:
         ui.click(field);ui.key(Qt.Key_A,Qt.ControlModifier);ui.type(value);ui.key(Qt.Key_Return)
         wait_for(lambda:not ui.e.channelMask.loading)
-    before=deepcopy(ui.e._candidate)
+    before=deepcopy(ui.e._layer()['mask'])
+    assert ui.e._candidate is None
     wait_for(lambda:ui.find('channelMaskDialog').property('previewReady') and ui.find('channelApplyButton').property('enabled'))
     ui.click('channelApplyButton')
     wait_for(lambda:not ui.e.busy and settled(ui.e) and not ui.e.channelMask.opened)
@@ -138,3 +140,24 @@ def test_main_menu_can_create_channel_range_without_prior_selection(canvas,tmp_p
     final=deepcopy(ui.e._candidate)
     ui.e.undo();assert ui.e._candidate==before
     ui.e.redo();assert ui.e._candidate==final
+
+
+@pytest.mark.parametrize('ending',['close','escape'])
+def test_closing_channel_preview_does_not_create_selection_or_unsaved_changes(canvas,tmp_path,ending):  # noqa: F811
+    ui=canvas;image,_,_,_=scene();path=tmp_path/'preview-only.png';image.save(path)
+    ui.e.openImage(str(path));wait_for(lambda:ui.e.hasImage and settled(ui.e))
+    def snapshot():
+        return deepcopy((ui.e._layers,ui.e._candidate,ui.e._selection_target_id,
+                         ui.e._cursor,ui.e._draft_history,ui.e._draft_cursor,
+                         ui.e._generation,ui.e.dirty,ui.e._edit_revision))
+    before=snapshot()
+    assert not ui.e.hasSelectionDraft and not ui.e.dirty
+    ui.click('cutoutToolsButton');wait_for(lambda:ui.find('toolbarChannelMaskAction').isVisible())
+    ui.click('toolbarChannelMaskAction')
+    wait_for(lambda:ui.e.channelMask.opened and not ui.e.channelMask.loading and
+             ui.find('channelMaskDialog').property('previewReady') and settled(ui.e))
+    assert snapshot()==before
+    if ending=='escape':ui.key(Qt.Key_Escape)
+    else:ui.click('channelCloseButton')
+    wait_for(lambda:not ui.find('channelMaskDialog').property('opened') and settled(ui.e))
+    assert snapshot()==before

@@ -34,9 +34,15 @@ class ChannelMaskController(QObject):
     def _valid(self):
         state = self.state
         e = self.editor
-        return bool(state and state['generation'] == e._generation and state['sha'] == e._sha
-                    and state['layer_id'] == e._selected and state['mask'] == e._candidate
+        return bool(state and not e.hasRegionDraft and state['generation'] == e._generation and state['sha'] == e._sha
+                    and state['layer_id'] == e._selected and state['candidate'] == e._candidate
                     and state['layers'] == e._layers and state['target_id'] == e._selection_target_id)
+
+    def matches_request(self, request):
+        return bool(self._valid() and request.get('channel_token') == self.state['token']
+                    and request.get('channel_revision') == self.state['revision']
+                    and request.get('channel_options') == self._options
+                    and request.get('mask') == self.state['mask'])
 
     @Property(bool, notify=changed)
     def opened(self):
@@ -96,10 +102,13 @@ class ChannelMaskController(QObject):
         e = self.editor
         if e.busy or not e.hasImage or e.hasRegionDraft:
             return
-        if not e.hasSelectionDraft:
-            e.beginSelection('current')
+        # Preview owns its input independently. Opening a dialog must not
+        # create a selection, dirty the project or change its undo history.
+        candidate = deepcopy(e._candidate)
         self.state = {'token':uuid4().hex, 'generation':e._generation, 'sha':e._sha,
-                      'layer_id':e._selected, 'mask':deepcopy(e._candidate), 'layers':deepcopy(e._layers),
+                      'layer_id':e._selected, 'candidate':candidate,
+                      'mask':deepcopy(candidate if candidate is not None else e._layer()['mask']),
+                      'layers':deepcopy(e._layers),
                       'target_id':e._selection_target_id, 'revision':0}
         self._preview, self._note = '', '正在比较红、绿、蓝、亮度与通道计算…'
         self._views, self._view = {}, 'alpha'
@@ -197,15 +206,15 @@ class ChannelMaskController(QObject):
         self.changed.emit()
 
     def result_ready(self, result, active):
-        if (not self._valid() or active['channel_token'] != self.state['token']
-                or active['channel_revision'] != self.state['revision'] or active['channel_options'] != self._options):
+        if not self.matches_request(active):
             return
         from ..document import validate_mask
         self._result = {'mask':validate_mask(result['mask']), 'quality':deepcopy(result['quality'])}
         self._note = '正在准备实际黑白底效果与前景颜色…'
         layers = deepcopy(self.state['layers'])
-        if self.state['target_id']:
-            next(layer for layer in layers if layer['id'] == self.state['target_id'])['mask'] = deepcopy(self._result['mask'])
+        target = self.state['target_id'] or (self.state['layer_id'] if self.state['candidate'] is None else '')
+        if target:
+            next(layer for layer in layers if layer['id'] == target)['mask'] = deepcopy(self._result['mask'])
         self.editor._request('channel_preview', mask=self.state['mask'], result_mask=self._result['mask'],
             options=self._options, layers=layers, expected_sha256=self.state['sha'], native_views=True,
             context={'token':self.state['token'], 'revision':self.state['revision'], 'result_preview':True})
@@ -221,12 +230,23 @@ class ChannelMaskController(QObject):
     @Slot()
     def apply(self):
         if self.hasResult and not self.editor.busy and not self._loading:
-            from .matting import complete
-            result = self._result
-            self.close()
-            complete(self.editor, result)
+            self._publish(self._result)
         else:
             self._calculate()
+
+    def complete_result(self, result, active):
+        if self.matches_request(active):
+            self._publish(result)
+
+    def _publish(self, result):
+        from ..document import validate_mask
+        from .matting import complete
+        result = {**result, 'mask':validate_mask(result['mask'])}
+        create_draft = self.state['candidate'] is None
+        self.close()
+        if create_draft:
+            self.editor.beginSelection('current')
+        complete(self.editor, result)
 
     @Slot()
     def close(self):

@@ -67,9 +67,10 @@ def read(self):
                 and response.get("generation") == active["generation"]
                 and response.get("op") == "matte"
                 and not self._closing and not self._matte_aborting
-                and ("stroke" not in active and "channel_token" not in active or (active["layer_id"] == self._selected
-                     and active["target_id"] == self._selection_target_id and active["mask"] == self._candidate
-                     and not self.hasRegionDraft))
+                and (self._channel_mask.matches_request(active) if 'channel_token' in active else
+                     ('stroke' not in active or (active['layer_id'] == self._selected
+                      and active['target_id'] == self._selection_target_id and active['mask'] == self._candidate
+                      and not self.hasRegionDraft)))
             )
             if "progress" in response:
                 if current and active.get("method") in ("neural", "channel", "correction", "hair"):
@@ -82,6 +83,10 @@ def read(self):
             if current and response.get("ok"):
                 if active.get('preview_only') and 'channel_token' in active:
                     self._channel_mask.result_ready(response['result'], active)
+                    self.changed.emit()
+                    continue
+                if 'channel_token' in active:
+                    self._channel_mask.complete_result(response['result'], active)
                     self.changed.emit()
                     continue
                 if 'auto_token' in active:

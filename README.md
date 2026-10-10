@@ -1,8 +1,12 @@
-# iPhoto 1.11.35
+# iPhoto 1.11.36
 
 基于 Qt 6 / PySide6 的 Windows 原生修图工作室。采用独立选区、调整图层和 AI 助手的操作方式，无需 Electron 或 WebView。
 
-双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.11.35**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
+双击 [start-iphoto.cmd](start-iphoto.cmd) 启动。新窗口标题应为 **iPhoto 1.11.36**，已打开的旧窗口不会自动更新。开发环境为 Python 3.12；其他电脑先运行 `scripts/setup.ps1`，再运行 `scripts/setup_segmentation.py` 安装选区模型。目前是源码与启动器，尚无独立安装包。
+
+## 通道预览 · 1.11.36
+
+打开通道窗口先看效果，关闭或按Esc不会留下新的选区，也不会让原本已保存的项目变成未保存。确认使用结果后才建立可撤销的范围修改；已有选区仍可继续编辑。此更新修正预览操作，发丝、半透明边缘与AI精修的画质验证仍在继续。
 
 ## 生成精修的选区传递 · 1.11.35
 
