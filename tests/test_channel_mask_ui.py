@@ -161,3 +161,22 @@ def test_closing_channel_preview_does_not_create_selection_or_unsaved_changes(ca
     else:ui.click('channelCloseButton')
     wait_for(lambda:not ui.find('channelMaskDialog').property('opened') and settled(ui.e))
     assert snapshot()==before
+
+
+def test_paired_channel_levels_keep_preview_usable_when_typing_past_each_other(canvas,tmp_path):  # noqa: F811
+    ui=canvas;image,_,_,_=scene();path=tmp_path/'paired-levels.png';image.save(path)
+    ui.e.openImage(str(path));wait_for(lambda:ui.e.hasImage and settled(ui.e))
+    before=deepcopy((ui.e._candidate,ui.e._layers,ui.e._generation,ui.e.dirty))
+    ui.e.channelMask.open()
+    wait_for(lambda:not ui.e.channelMask.loading and ui.e.channelMask.previewUrl and settled(ui.e))
+    wait_for(lambda:ui.find('channelMaskDialog').property('previewReady'))
+    for field,text in [('channelBlackBox','200'),('channelWhiteBox','100'),('channelBlackBox','250')]:
+        ui.click(field);ui.key(Qt.Key_A,Qt.ControlModifier);ui.type(text);ui.key(Qt.Key_Return)
+        wait_for(lambda:not ui.e.channelMask.loading and settled(ui.e) and
+                 ui.find('channelMaskDialog').property('previewReady'))
+        options=ui.e.channelMask.options
+        assert options['black']<options['white']
+        assert ui.find('channelBlackBox').property('to')==options['white']-1
+        assert ui.find('channelWhiteBox').property('from')==options['black']+1
+        assert ui.find('channelApplyButton').property('enabled')
+        assert (ui.e._candidate,ui.e._layers,ui.e._generation,ui.e.dirty)==before

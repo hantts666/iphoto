@@ -167,7 +167,19 @@ class ChannelMaskController(QObject):
     def setOption(self, name, value):
         if not self._valid() or self.editor.busy or name not in self._options:
             return
-        self._options = {**self._options, name:value}
+        from ..matting.channels import validate_options
+        try:
+            options = validate_options({**self._options, name:value})
+        except ValueError as exc:
+            # Reject before invalidating an existing preview or cached result.
+            # QML controls constrain paired levels; this also guards callers
+            # using stale bounds or non-UI input.
+            self._note = '参数未更新：' + str(exc)
+            self.changed.emit()
+            return
+        if options == self._options:
+            return
+        self._options = options
         self._result, self._draft_views, self._result_views = None, {}, {}
         self._show_result = False
         self._preview, self._views = '', {}

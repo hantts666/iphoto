@@ -100,9 +100,9 @@ Dialog {
         }
         RowLayout {
             Caption { text: "黑场" }
-            SpinBox { objectName: "channelBlackBox"; editable:true; from:0; to:254; value:root.config.black || 0; enabled:!root.editor.busy; onValueModified:root.channel.setOption("black",value) }
+            SpinBox { objectName: "channelBlackBox"; editable:true; from:0; to:Math.max(0,(root.config.white || 255)-1); value:root.config.black || 0; enabled:!root.editor.busy; onValueModified:root.channel.setOption("black",value) }
             Caption { text: "白场" }
-            SpinBox { objectName: "channelWhiteBox"; editable:true; from:1; to:255; value:root.config.white || 255; enabled:!root.editor.busy; onValueModified:root.channel.setOption("white",value) }
+            SpinBox { objectName: "channelWhiteBox"; editable:true; from:(root.config.black || 0)+1; to:255; value:root.config.white || 255; enabled:!root.editor.busy; onValueModified:root.channel.setOption("white",value) }
             Caption { text: "灰度" }
             FineSlider { objectName: "channelGammaSlider"; Layout.fillWidth:true; from:.2; to:5; stepSize:.05; value:root.config.gamma || 1; enabled:!root.editor.busy; onMoved:root.channel.setOption("gamma",value) }
             Caption { text: Number(root.config.gamma || 1).toFixed(2) }

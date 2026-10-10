@@ -118,6 +118,30 @@ def test_parameter_change_discards_cached_result_and_ignores_old_reply(qt_app, a
     finally: e.close()
 
 
+def test_invalid_or_unchanged_option_preserves_real_cached_result_without_recalculating(qt_app, ai_store, tmp_path, monkeypatch):
+    e = Editor(ai_store=ai_store)
+    try:
+        prepared(e, tmp_path); channel = e.channelMask; before = unchanged(e)
+        channel.previewResult(); wait_for(lambda: channel.hasResult and not channel.loading and settled(e), seconds=45)
+        original = deepcopy((channel.options, channel.state, channel._result, channel._views, channel._result_views))
+        preview = channel.previewUrl
+        requests = []; request = e._request
+        def counted(op, **fields):
+            requests.append(op)
+            return request(op, **fields)
+        monkeypatch.setattr(e, '_request', counted)
+        for name, value in [('black', channel.options['white']), ('white', channel.options['black']),
+                            ('gamma', float('nan')), ('gamma', True), ('gamma', channel.options['gamma'])]:
+            channel.setOption(name, value)
+            assert channel.hasResult and not channel.loading and channel.previewUrl == preview
+            assert (channel.options, channel.state, channel._result, channel._views, channel._result_views) == original
+            assert not channel.timer.isActive() and unchanged(e) == before
+        channel.apply(); wait_for(lambda: not channel.opened and settled(e))
+        assert 'matte' not in requests and e._candidate == original[2]['mask']
+        assert e._layers == before[1]
+    finally: e.close()
+
+
 def test_large_views_do_not_claim_native_resolution(monkeypatch):
     image, _, mask, _ = scene(); alpha = raster_mask(mask, image.size)
     monkeypatch.setattr('iphoto.matting.channel_view.MAX_NATIVE_VIEW', 1)
