@@ -37,7 +37,7 @@ def available():
         return False
 
 
-def white_guide(image, coarse):
+def white_guide(image, coarse, *, background=None):
     """Known background needs observable white AND low portrait confidence.
 
     White garments are not background simply because they are white. Conversely,
@@ -48,19 +48,24 @@ def white_guide(image, coarse):
     confidence = np.asarray(coarse)
     foreground = cv2.erode(np.uint8(confidence > 229), np.ones((17, 17), np.uint8),
                            borderType=cv2.BORDER_REPLICATE) > 0
-    white = np.asarray(image).min(axis=2) >= 254
+    if background is None:
+        white = np.asarray(image).min(axis=2) >= 254
+    else:
+        from .generated_background import validate
+        background = validate(background,image.size)
+        white = np.max(np.abs(np.asarray(image,dtype=np.float32)-background),axis=2) <= 2.5
     background = cv2.erode(np.uint8(white & (confidence < 16)), np.ones((3, 3), np.uint8),
                            borderType=cv2.BORDER_REPLICATE) > 0
     minimum = max(16, image.width * image.height // 100)
     if np.count_nonzero(foreground) < minimum or np.count_nonzero(background) < minimum:
-        raise ValueError('生成图缺少可靠的人物或纯白背景，未转成透明前景；照片未改变')
+        raise ValueError('生成图缺少可靠的人物或近白背景，未转成透明前景；照片未改变')
     guide = np.full(confidence.shape, 128, np.uint8)
     guide[background & ~foreground] = 0
     guide[foreground] = 255
     return guide
 
 
-def white_foreground(image, matte):
+def white_foreground(image, matte, *, background=None):
     """Unmix only the partial foreground from an explicitly white work image.
 
     In byte RGB, I = a*F + (1-a)*255 implies a >= 1-min(I)/255
@@ -71,6 +76,8 @@ def white_foreground(image, matte):
     Zero support and opaque RGB stay exact. A nearly white generated background
     is not a reason to grow alpha everywhere. This neither recovers model-missed
     wisps nor applies to an original photo with an unknown/coloured background.
+    An observed near-white field replaces 255 in this equation when supplied;
+    its colour estimate is approximate and still requires actual image review.
     """
     if (image.mode != 'RGB' or matte.mode != 'L' or image.size != matte.size
             or image.width * image.height > MAX_PIXELS):
@@ -80,8 +87,17 @@ def white_foreground(image, matte):
     partial = (coverage > 0) & (coverage < 255)
     samples = pixels[partial].astype(np.float32)
     previous = coverage[partial]
-    feasible = np.maximum(previous, 255-samples.min(axis=1))
-    colours = 255-(255-samples)*255/feasible[:, None]
+    if background is None:
+        feasible = np.maximum(previous, 255-samples.min(axis=1))
+        colours = 255-(255-samples)*255/feasible[:, None]
+    else:
+        from .generated_background import validate
+        backdrop = validate(background,image.size)[partial]
+        # The fitted backdrop is approximate. Enforce nonnegative foreground
+        # coverage without growing zero support or altering opaque RGB.
+        lower = np.maximum(0,1-samples/backdrop).max(axis=1)
+        feasible = np.maximum(previous,np.ceil(lower*255-1e-4))
+        colours = backdrop+(samples-backdrop)*255/feasible[:,None]
     pixels[partial] = np.rint(np.clip(colours, 0, 255)).astype(np.uint8)
     coverage[partial] = feasible.astype(np.uint8)
     rgba = Image.fromarray(pixels).convert('RGBA')
@@ -102,7 +118,10 @@ def extract(image):
     from .matting.neural import NativeMatte, solve
     rgb = image.convert('RGB')
     portrait = PortraitMatte()
-    guide = white_guide(rgb, portrait.predict_image(rgb))
+    from .generated_background import observe
+    coarse = portrait.predict_image(rgb)
+    background, background_quality = observe(rgb,coarse)
+    guide = white_guide(rgb, coarse, background=background)
     # Release the coarse session before loading the tiled detail session.
     portrait_provider = portrait.provider
     del portrait
@@ -111,10 +130,11 @@ def extract(image):
     if (alpha.dtype != np.uint8 or alpha.shape != guide.shape
             or not np.array_equal(alpha[guide != 128], guide[guide != 128])):
         raise ValueError('生成前景的透明度求解无效，照片未改变')
-    rgba, adjusted = white_foreground(rgb, Image.fromarray(alpha))
+    rgba, adjusted = white_foreground(rgb, Image.fromarray(alpha), background=background)
     return rgba, {'method': 'generated_white_portrait', 'size': list(rgba.size), 'tiles': tiles,
                   'portrait_provider': portrait_provider, 'detail_provider': engine.provider,
-                  'colour_recovery': 'known_white', 'coverage_adjusted_pixels': adjusted,
+                  'colour_recovery': 'known_white' if background is None else 'observed_near_white',
+                  'coverage_adjusted_pixels': adjusted, **background_quality,
                   'geometry_verified': False}
 
 
