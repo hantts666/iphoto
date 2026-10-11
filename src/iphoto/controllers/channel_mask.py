@@ -6,6 +6,8 @@ from uuid import uuid4
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer
 from ..matting.channels import CHANNEL_NAMES
 
+LEVEL_CONTROLS = ('channel','black','white','gamma','invert')
+
 
 class ChannelMaskController(QObject):
     changed = Signal()
@@ -18,6 +20,7 @@ class ChannelMaskController(QObject):
         self._options = {}
         self._views = {}
         self._choices = []
+        self._levels, self._suggestions = {}, {}
         self._view = 'alpha'
         self._note = ''
         self._loading = False
@@ -118,6 +121,7 @@ class ChannelMaskController(QObject):
         self._preview, self._note = '', '正在比较红、绿、蓝、亮度与通道计算…'
         self._views, self._view = {}, 'alpha'
         self._choices = []
+        self._levels, self._suggestions = {}, {}
         self._result, self._draft_views, self._result_views = None, {}, {}
         self._show_result, self._native = False, False
         # A second color-line solve can erase learned translucent coverage.
@@ -142,6 +146,8 @@ class ChannelMaskController(QObject):
             return
         from PySide6.QtCore import QUrl
         self._options = result['options']
+        if 'level_suggestions' in result:
+            self._suggestions = deepcopy(result['level_suggestions'])
         self._views = {name:QUrl.fromLocalFile(path).toString() for name,path in result.get('views',{'alpha':result['path']}).items()}
         self._choices = [{**item, 'url': QUrl.fromLocalFile(item['path']).toString()}
                          for item in result.get('channel_choices', [])]
@@ -155,7 +161,7 @@ class ChannelMaskController(QObject):
         self._preview = self._views[self._view]
         self._loading = False
         self._note = ('从整张照片建立范围：选择通道，调黑白场和灰度；白色保留、黑色移除、灰色半透明。'
-                      if self._options.get('whole') else f"推荐 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else ''))
+                      if self._options.get('whole') else f"当前 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else ''))
         self._note += ' 可切换100%拖动检查。' if self._native else ' 大范围预览已缩小显示。'
         if self._show_result:
             self._note = '实际结果已就绪；黑白底使用与透明 PNG 相同的前景颜色恢复。' + '；'.join(self._result['quality'].get('warnings', []))
@@ -177,7 +183,13 @@ class ChannelMaskController(QObject):
             return
         from ..matting.channels import validate_options
         try:
-            options = validate_options({**self._options, name:value})
+            changes = {name:value}
+            if name=='channel' and isinstance(value,str) and value in (*CHANNEL_NAMES,'auto'):
+                # One plane's byte endpoints do not describe another plane.
+                # Restore manual tuning before using fresh native references.
+                changes = self._levels.get(value) or self._suggestions.get(value) or {
+                    'channel':value,'black':0,'white':255,'gamma':1.,'invert':False}
+            options = validate_options({**self._options, **changes})
         except ValueError as exc:
             # Reject before invalidating an existing preview or cached result.
             # QML controls constrain paired levels; this also guards callers
@@ -187,7 +199,9 @@ class ChannelMaskController(QObject):
             return
         if options == self._options:
             return
-        if self._view == 'channel' and name in ('black', 'white', 'gamma', 'invert'):
+        self._levels[self._options['channel']] = {key:self._options[key] for key in LEVEL_CONTROLS}
+        self._levels[options['channel']] = {key:options[key] for key in LEVEL_CONTROLS}
+        if name=='channel' or self._view == 'channel' and name in ('black', 'white', 'gamma', 'invert'):
             self._view = 'alpha'
         self._options = options
         self._result, self._draft_views, self._result_views = None, {}, {}
@@ -283,6 +297,7 @@ class ChannelMaskController(QObject):
         self._views = {}
         self._choices = []
         self._loading = False
+        self._levels, self._suggestions = {}, {}
         self._result, self._draft_views, self._result_views = None, {}, {}
         if owned:
             self.editor.cancelMatte()

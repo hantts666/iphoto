@@ -358,6 +358,7 @@ def main():
             scoped_mask = restrict(request['mask'],scope_limit,source.image.size)
             request = {**request,'mask':scoped_mask}
         actual = request.get('result_mask') is not None
+        level_suggestions = {} if request.get('channel_choices') is True and not actual else None
         if actual:
             from .matting.channels import validate_options
             from .document import raster_mask_cached
@@ -370,7 +371,8 @@ def main():
                 raise ValueError('实际结果缺少对应的原始通道')
         else:
             alpha, options, channel, score = native_preview(source.image, request['mask'], request['options'],
-                                                           initial=bool(request.get('initial')),cache=channel_reference_cache)
+                                                           initial=bool(request.get('initial')),cache=channel_reference_cache,
+                                                           suggestions=level_suggestions)
         if request.get('native_views') is True:
             from .matting.channel_view import native_previews, channel_choices
             pictures, info = native_previews(source.image, alpha, request['mask'], options['radius'],
@@ -396,6 +398,7 @@ def main():
             assets.extend(created)
             return {'path': views['alpha'], 'views': views, 'options': options,
                     'channel': channel, 'score': score, 'channel_choices': choices, **info,
+                    **({'level_suggestions':level_suggestions} if level_suggestions is not None else {}),
                     **({'mask':scoped_mask,'scope_limit':scope_limit} if scoped_mask is not None else {})}
         alpha = alpha.resize(proxy.size, Image.Resampling.LANCZOS)
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))

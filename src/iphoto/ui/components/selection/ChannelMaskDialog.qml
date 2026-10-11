@@ -83,7 +83,7 @@ Dialog {
                             enabled: !root.editor.busy && !root.channel.loading
                             onClicked: {
                                 root.comparingChannels = false
-                                root.channel.setView(modelData.channel ? "channel" : "source")
+                                root.channel.setView(modelData.channel ? "alpha" : "source")
                                 if(modelData.channel) root.channel.setOption("channel", modelData.channel)
                             }
                         }
@@ -120,7 +120,7 @@ Dialog {
             }
             Action { objectName: "channelCompareButton"; text: root.channel.showingResult ? "对照草图" : "查看实际效果"; visible: root.channel.hasResult; enabled: !root.editor.busy && !root.channel.loading; subtle:true; onClicked: root.channel.compare() }
         }
-        Caption { Layout.fillWidth: true; text: root.comparingChannels ? "比较目标与背景的明暗差异，点击通道后调黑白场和灰度。此处是缩略对照；返回预览可用100%检查原像素。" : root.channel.view==="channel" ? "原始颜色通道尚未应用黑白场、反转与灰度，明暗不等于透明度。调整这些参数后自动显示黑白透明度；可再切换黑白底检查。" : root.channel.note; wrapMode: Text.Wrap }
+        Caption { Layout.fillWidth: true; text: root.comparingChannels ? "比较原始通道，点击后显示通道草图。各通道分别保存黑白场、反转与灰度；首次用原片参照，参照不足保留完整灰阶。可用100%及黑白底检查。" : root.channel.view==="channel" ? "原始颜色通道尚未应用黑白场、反转与灰度，明暗不等于透明度。调整这些参数后自动显示黑白透明度；可再切换黑白底检查。" : root.channel.note; wrapMode: Text.Wrap }
         RowLayout {
             visible: !root.comparingChannels
             Caption { text: "通道" }
@@ -129,7 +129,7 @@ Dialog {
                 model: (root.config.whole===true ? [] : [{text:"自动",value:"auto"}]).concat([{text:"红",value:"red"},{text:"绿",value:"green"},{text:"蓝",value:"blue"},{text:"亮度",value:"luminance"},{text:"红−绿（计算）",value:"red_green"},{text:"红−蓝（计算）",value:"red_blue"},{text:"绿−蓝（计算）",value:"green_blue"}])
                 textRole: "text"; valueRole: "value"
                 currentIndex: Math.max(0, model.findIndex(function(item) { return item.value===root.config.channel }))
-                enabled: !root.editor.busy
+                enabled: !root.editor.busy && !root.channel.loading
                 onActivated: root.channel.setOption("channel", currentValue)
             }
             CheckBox { objectName: "channelInvertBox"; text: "反转"; checked: root.config.invert || false; enabled: !root.editor.busy; onClicked: root.channel.setOption("invert",checked) }

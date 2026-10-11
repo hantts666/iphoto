@@ -121,15 +121,16 @@ def test_clicking_channel_overviews_and_native_inspection_never_publishes(canvas
     ui.click('channelChoice_red_green')
     wait_for(lambda: not ui.e.channelMask.loading and settled(ui.e)
              and ui.find('channelMaskDialog').property('previewReady'))
-    assert ui.e.channelMask.view == 'channel'
+    assert ui.e.channelMask.view == 'alpha'
     assert ui.e.channelMask.options['channel'] == 'red_green'
     assert not ui.find('channelChoicesGrid').isVisible()
-    assert '未调灰度' in ui.find('channelPreviewStage').property('text')
-    raw = Path(QUrl(ui.e.channelMask.previewUrl).toLocalFile()).read_bytes()
+    assert '通道草图' in ui.find('channelPreviewStage').property('text')
+    raw = Path(QUrl(ui.e.channelMask._views['channel']).toLocalFile()).read_bytes()
     ui.e.channelMask.setOption('gamma', 1.7)
     wait_for(lambda: not ui.e.channelMask.loading and settled(ui.e))
     assert ui.e.channelMask.view == 'alpha'
     assert Path(QUrl(ui.e.channelMask._views['channel']).toLocalFile()).read_bytes() == raw
+    wait_for(lambda:ui.find('channelMaskDialog').property('previewReady'))
     ui.click('channelNativeZoomButton')
     assert ui.find('channelMaskDialog').property('nativeZoom')
     assert snapshot() == before

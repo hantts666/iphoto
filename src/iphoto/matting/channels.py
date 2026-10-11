@@ -272,15 +272,19 @@ def _preview_fields(fields, options, radius, semantic):
     return Image.fromarray(pixels), channel, score
 
 
-def native_preview(image, mask, options, *, initial=False, cache=None):
+def native_preview(image, mask, options, *, initial=False, cache=None, suggestions=None):
     """Derive levels and gray coverage before any display resize.
 
     RGB resampling followed by clipping/gamma is not the displayed coverage
     of a native channel curve. Share the application's original ROI, radius
     and reference pixels; the worker resizes only the resulting gray image.
     This draft does not include neural refinement or foreground recovery.
+    Optional suggestions receive per-plane levels from these same samples,
+    without a second native solve; they are initialization, not quality proof.
     """
     options = validate_options(options)
+    if suggestions is not None:
+        suggestions.clear()
     if initial and not mask.get('semantic_target') and raster_mask(mask,image.size).getextrema()==(255,255):
         options = whole_options()
     if options.get('whole'):
@@ -288,6 +292,14 @@ def native_preview(image, mask, options, *, initial=False, cache=None):
             cache.clear()
         return Image.fromarray(_whole_pixels(image,mask,options)), options, options['channel'], 0.
     original, box, fields = native_reference(image,mask,options['radius'],cache=cache)
+    if suggestions is not None:
+        for metric in fields[-1]:
+            if 0<=metric['black']<metric['white']<=255 and metric['white']-metric['black']>=8:
+                suggestions[metric['channel']]={key:metric[key] for key in ('channel','black','white','invert')}
+                suggestions[metric['channel']]['gamma']=1.
+        best=max(fields[-1],key=lambda metric:metric['score'])['channel']
+        if best in suggestions:
+            suggestions['auto']={**suggestions[best],'channel':'auto'}
     if initial:
         flags = {key:options[key] for key in ('interior','detail','color') if key in options}
         options = {**_suggest(fields[-1],options['radius']), **flags}
