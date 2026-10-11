@@ -2,7 +2,7 @@
 import json
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 REFERENCE_HALO = 96
 # Four native cells plus 24px headings still fit the 1280px image transport.
@@ -177,11 +177,29 @@ def parse_review(data, workspace=None):
         raise ValueError('AI未返回有效抠图检查，原范围保留') from None
 
 
+def _internal_edges(alpha):
+    """Observe both sides of real transitions without inventing canvas edges."""
+    edges=Image.new('L',alpha.size)
+    for y in range(0,alpha.height,256):
+        top=max(0,y-1);bottom=min(alpha.height,y+257)
+        patch=np.asarray(alpha.crop((0,top,alpha.width,bottom)))
+        changed=np.zeros(patch.shape,dtype=bool)
+        horizontal=patch[:,1:]!=patch[:,:-1]
+        changed[:,1:]|=horizontal;changed[:,:-1]|=horizontal
+        vertical=patch[1:]!=patch[:-1]
+        changed[1:]|=vertical;changed[:-1]|=vertical
+        core=changed[y-top:min(y+256,alpha.height)-top]
+        edges.paste(Image.fromarray(core.astype('uint8')*255),(0,y))
+    return edges
+
+
 def edge_boxes(alpha, count=4, side=512):
     """Inspect dense partial alpha and outward edges missing from that ranking."""
     partial=alpha.point([255 if 0<v<255 else 0 for v in range(256)])
     if partial.getbbox() is None:
-        partial=alpha.filter(ImageFilter.FIND_EDGES)
+        partial=_internal_edges(alpha)
+        if partial.getbbox() is None:
+            return []
     scores=[]
     for y in range(0,alpha.height,side):
         for x in range(0,alpha.width,side):
