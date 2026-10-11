@@ -119,7 +119,7 @@ def extract(image):
 
 
 def review_images(baseline, rgba, inspection_box):
-    """At most eight real RGB composites, including native generated edges.
+    """At most seven RGB images, with a source comparison for every edge.
 
     Full-frame previews alone hide halos. Evidence is deliberately made from
     the paired content at its own resolution, not from an upscaled 24MP export.
@@ -127,6 +127,8 @@ def review_images(baseline, rgba, inspection_box):
     from .engine import preview
     if rgba.mode != 'RGBA':
         raise ValueError('生成前景缺少透明通道，照片未改变')
+    if baseline.mode == 'RGBA':
+        baseline = Image.alpha_composite(Image.new('RGBA',baseline.size,'white'),baseline).convert('RGB')
     composites = {name: Image.alpha_composite(Image.new('RGBA', rgba.size, name), rgba).convert('RGB')
                   for name in ('white', 'black')}
     images = [(preview(baseline.convert('RGB'), 1280), '修改前整图'),
@@ -145,9 +147,13 @@ def review_images(baseline, rgba, inspection_box):
             selected.append(box)
     for index, box in enumerate(selected):
         label = f'生成分辨率边缘{index+1}'
-        if index == 0:
-            native = tuple(round(value * baseline.size[i % 2] / rgba.size[i % 2]) for i, value in enumerate(box))
-            images.append((baseline.crop(native).convert('RGB').resize((width,height), Image.Resampling.LANCZOS),
-                           label+' · 原片同画布位置（未验证几何一致）'))
-        images.extend((picture.crop(box), label+' · '+name) for name, picture in composites.items())
+        native = tuple(round(value * baseline.size[i % 2] / rgba.size[i % 2]) for i, value in enumerate(box))
+        source = baseline.crop(native).convert('RGB').resize((width,height), Image.Resampling.LANCZOS)
+        # Two native panels fit the existing 1280px lossless transport limit.
+        # Do not downsample the generated edge just to include its source.
+        pair = Image.new('RGB',(width*2,height))
+        pair.paste(source,(0,0))
+        pair.paste(composites['white'].crop(box),(width,0))
+        images.append((pair,label+' · 左原片同画布位置（未验证几何一致）／右生成白底'))
+        images.append((composites['black'].crop(box),label+' · 生成黑底（与上图右侧同位置）'))
     return images

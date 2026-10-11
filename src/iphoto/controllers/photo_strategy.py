@@ -66,7 +66,7 @@ def prepare(self, proposed, origin):
 def _render(self, pending, state, soften=False):
     from .face_inventory import current as current_faces
     state['preparing'] = True
-    self._status = ('3/4 正在准备生成前景的黑白底与放大边缘…可取消' if state.get('foreground') else
+    self._status = ('3/4 正在核对人物位置并准备黑白底边缘…可取消' if state.get('foreground') else
                     '2/4 正在合成选区精修，核对边界与原图细节…可取消' if state.get('generate')
                     else '2/4 正在合成整体光色和局部精修，检查原图细节…可取消')
     self._request('photo_candidate', before=pending['layer_snapshot'], proposed=state['proposed'],
@@ -88,6 +88,12 @@ def ready(self, result, context, generation):
                            'geometry_verified': False}
             if result.get('frame_facts') != frame_facts:
                 raise ValueError('生成前景复查的实际画布参照不一致，照片未改变')
+            from ..foreground_position import validate_position
+            expected_pixel_sha = state['proposed'][0]['pixel_patch']['sha256']
+            if result['proposed'][0]['pixel_patch']['sha256'] != expected_pixel_sha:
+                raise ValueError('AI重建人物的位置参照不一致，照片未改变')
+            position = validate_position(result.get('position_check'),state['canvas_size'],state['generated_size'],
+                                         expected_pixel_sha)
         state['proposed'] = result['proposed']
         state['preparing'] = False
         state['reviewing'] = True
@@ -97,7 +103,7 @@ def ready(self, result, context, generation):
         self.changed.emit()
         self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], generation, 'photo_review',
                      {'direction': state['direction'], 'revision': state['revision'], 'foreground': state.get('foreground', False),
-                      **({'frame_facts': frame_facts} if state.get('foreground') else {}),
+                      **({'frame_facts': frame_facts,'position_check': position} if state.get('foreground') else {}),
                       'candidates': [{'layer_id': layer['id'], 'name': layer['name'], 'recipe': layer['recipe'],
                                       'whole_image': 'base' in state and index == 0} for index, layer in enumerate(state['proposed'])],
                       'review_images': [{'label': item['label'], 'url': item['url']} for item in images]})

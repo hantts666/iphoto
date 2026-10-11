@@ -156,14 +156,14 @@ def test_review_evidence_has_actual_white_black_and_native_coverage():
     baseline = Image.new('RGB', (1800,1200), '#537c45')
     before = rgba.tobytes(), baseline.tobytes()
     pictures = review_images(baseline, rgba, [200, 300, 800, 700])
-    assert 6 <= len(pictures) <= 8
+    assert len(pictures) == 7
     assert all(picture.mode == 'RGB' for picture, _ in pictures)
     assert pictures[1][0].getpixel((0,0)) == (255,255,255)
     assert pictures[2][0].getpixel((0,0)) == (0,0,0)
     expected = Image.alpha_composite(Image.new('RGBA', rgba.size, 'black'), rgba).convert('RGB')
     assert pictures[2][0].tobytes() == expected.tobytes()
-    assert pictures[5][0].tobytes() == expected.crop((0,44,512,556)).tobytes()
-    assert all(max(picture.size) <= 512 for picture, _ in pictures[3:])
+    assert pictures[4][0].tobytes() == expected.crop((0,44,512,556)).tobytes()
+    assert all(max(picture.size) <= 1024 for picture, _ in pictures[3:])
     assert (rgba.tobytes(), baseline.tobytes()) == before
 
 
@@ -217,15 +217,28 @@ def click(window, item):
 @pytest.mark.parametrize('case,size', [('accept',(1440,930)),('accept',(1080,700)),
     ('chat',(1080,700)),
     ('reject',(1440,930)),('cancel',(1080,700)),('alpha_cancel',(1080,700)),
-    ('failure',(1440,930)),('retry',(1440,930)),('frame_mismatch',(1080,700))])
+    ('failure',(1440,930)),('retry',(1440,930)),('frame_mismatch',(1080,700)),
+    ('no_position',(1080,700)),('drift',(1440,930)),('position_mismatch',(1080,700))])
 def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch, case, size):
     from iphoto import generated_foreground
     from iphoto.controllers import worker_bridge, photo_strategy
     editor, window, find, warnings, folder = ui
     window.resize(*size)
     monkeypatch.setattr(generated_foreground, 'available', lambda: True)
-    original, cursor = deepcopy(editor._layers), editor._cursor
     rgba = paired()
+    if case != 'no_position':
+        import cv2
+        import numpy as np
+        pixels=np.array(rgba)
+        texture=cv2.GaussianBlur(np.random.default_rng(188).integers(0,256,(*pixels.shape[:2],3),dtype='uint8'),(5,5),.9)
+        pixels[pixels[...,3]==255,:3]=texture[pixels[...,3]==255]
+        rgba=Image.fromarray(pixels)
+        source=Image.alpha_composite(Image.new('RGBA',rgba.size,'#375a82'),rgba).convert('RGB')
+        path=folder/'matched-framing.png';source.save(path)
+        editor.openImage(str(path));wait_for(lambda:editor.hasImage and settled(editor))
+        if case == 'drift':
+            moved=Image.new('RGBA',rgba.size);moved.alpha_composite(rgba,(20,0));rgba=moved
+    original, cursor = deepcopy(editor._layers), editor._cursor
     callbacks, stages = [], []
     def answer(payload):
         context = json.loads(payload['messages'][1]['content'][0]['text'])
@@ -239,10 +252,12 @@ def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch
         assert context['mode'] == 'photo_review' and context['foreground'] is True
         assert context['frame_facts'] == {'original_size':[300,200], 'generated_size':[300,200],
                                           'geometry_verified':False}
+        assert context['position_check']['status']=='consistent' and context['position_check']['inliers']>=24
         images = [part['image_url']['url'] for part in payload['messages'][1]['content'] if part['type'] == 'image_url']
-        assert len(images) == 6
+        assert len(images) == 5
         decoded = [Image.open(BytesIO(base64.b64decode(value.partition(',')[2]))) for value in images]
         assert decoded[1].getpixel((0,0)) == (255,255,255) and decoded[2].getpixel((0,0)) == (0,0,0)
+        assert decoded[3].size == (600,200) and decoded[4].size == (300,200)
         return response({'status':'reject' if case == 'reject' else 'accept', 'summary':'检查了实际黑白底与边缘', 'edits':[]})
     def generate(photo, prompt, size, token, generation, *, scope_url, intent):
         validate_scope_reference(photo, scope_url, whole_frame=True)
@@ -256,10 +271,11 @@ def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch
         return True
     monkeypatch.setattr(editor._image_edit, 'start', generate)
     original_read = worker_bridge._read
-    if case == 'frame_mismatch':
+    if case in ('frame_mismatch','position_mismatch'):
         original_ready = photo_strategy.ready
         def wrong_frame(owner,result,context,generation):
-            result['frame_facts']['generated_size'][0] += 1
+            if case == 'frame_mismatch':result['frame_facts']['generated_size'][0] += 1
+            else:result['position_check']['pixel_sha256']='stale-patch'
             return original_ready(owner,result,context,generation)
         monkeypatch.setattr(photo_strategy,'ready',wrong_frame)
     if case == 'alpha_cancel':
@@ -319,6 +335,11 @@ def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch
             assert '生成分辨率300×200' in editor._conversation[-1]['text']
         else:
             assert editor._layers == original and editor._cursor == cursor
+            if case == 'no_position':assert '无法可靠核对' in editor.status
+            elif case == 'drift':
+                assert '改变了人物位置或大小' in editor.status
+                assert editor.failedPromptInfo(editor._conversation[-1]['id'])['foreground_requested']
+            elif case == 'position_mismatch':assert '位置参照不一致' in editor.status
         expected = (['auto','auto','photo_review'] if case == 'retry' else
                     ['auto','photo_review'] if case in ('accept','reject','chat') else ['auto'])
         assert stages == expected
