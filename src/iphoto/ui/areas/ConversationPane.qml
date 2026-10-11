@@ -152,7 +152,7 @@ Rectangle {
                             objectName: "reviewMessageAdjustments_"+messageRow.id; text: "查看局部效果"
                             visible: messageDelegate.adjustmentLayers.length > 0; implicitHeight: 24; primary: true
                             enabled: workspace.editingEnabled
-                            hint: "以100%逐处查看这次调整的实际范围；可按住看原图比较"
+                            hint: "逐处放大查看实际效果；生成内容按其像素尺寸显示，其他调整按原图100%显示；可按住看原图比较"
                             onClicked: workspace.reviewAdjustments(messageDelegate.adjustmentLayers)
                         }
                         Action {

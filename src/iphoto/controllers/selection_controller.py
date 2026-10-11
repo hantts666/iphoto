@@ -228,11 +228,14 @@ class SelectionController(QObject):
             self.focusChangedParameters()
         self._show_mask = False
         self.chooseTool('inspect')
-        editor.viewport.setZoom(1.)
+        zoom, generated_size = adjustment_review.content_scale(editor,layer)
+        editor.viewport.setZoom(zoom)
         editor.viewport.centerOn(*point)
         note = '；此层效果未显示' if not editor.activeDisplay['enabled'] else ''
         next_note = '再次点击查看下一处，' if len(targets) > 1 else ''
-        editor._notify(f"正在查看局部效果 {index+1}/{len(targets)} · {layer['name']} · 100%{note}；{next_note}可按住看原图比较")
+        scale_note = (f'生成像素{generated_size[0]}×{generated_size[1]} · 原图比例{editor.viewport.zoom*100:.1f}%'
+                      if generated_size else '100%')
+        editor._notify(f"正在查看局部效果 {index+1}/{len(targets)} · {layer['name']} · {scale_note}{note}；{next_note}可按住看原图比较")
         return True
 
     @Slot("QVariantList", result=bool)

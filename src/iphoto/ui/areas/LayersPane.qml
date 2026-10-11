@@ -90,25 +90,46 @@ ColumnLayout {
                 Action { text: layerRow.visible ? "显" : "隐"; hint: layerRow.effectiveVisible ? "显示 / 隐藏" : "自身或父组已隐藏"; opacity: layerRow.effectiveVisible ? 1 : .5; implicitWidth: 24; subtle: true; enabled: workspace.editingEnabled; onClicked: editor.toggleLayer(layerRow.id) }
                 Action { objectName: "groupToggle_"+layerRow.id; text: layerRow.collapsed ? "+" : "-"; visible: layerRow.kind==="group"; implicitWidth: 22; subtle: true; enabled: !editor.busy; onClicked: editor.toggleGroup(layerRow.id) }
                 Rectangle { visible: layerRow.kind!=="group"; Layout.preferredWidth: 33; Layout.preferredHeight: 26; color: "black"; border.color: "#9eb2a8"
+                    Canvas {
+                        anchors.fill: parent; anchors.margins: 2; visible: layerRow.hasPixelContent
+                        onPaint: {
+                            var c=getContext("2d"); c.reset()
+                            for(var y=0;y<height;y+=6) for(var x=0;x<width;x+=6) {
+                                c.fillStyle=((x/6+y/6)%2) ? "#777777" : "#bbbbbb"
+                                c.fillRect(x,y,6,6)
+                            }
+                        }
+                    }
                     Image {
                         id: layerThumb
-                        objectName: "layerMaskThumb_"+layerRow.id
-                        anchors.fill: parent; anchors.margins: 2; cache: false
-                        property var shownMaskToken: null
+                        objectName: (layerRow.hasPixelContent ? "layerContentThumb_" : "layerMaskThumb_")+layerRow.id
+                        anchors.fill: parent; anchors.margins: 2; cache: false; fillMode: Image.PreserveAspectFit
+                        readonly property string currentToken: layerRow.hasPixelContent ? "pixels:"+layerRow.contentToken : "mask:"+layerRow.maskToken
+                        property string shownToken: ""
                         function refresh() {
-                            if (shownMaskToken === layerRow.maskToken) return
-                            shownMaskToken = layerRow.maskToken
-                            source = editor.layerMaskThumbnail(layerRow.id)
+                            if (shownToken === currentToken) return
+                            shownToken = currentToken
+                            source = layerRow.hasPixelContent ? editor.layerContentThumbnail(layerRow.id) : editor.layerMaskThumbnail(layerRow.id)
                         }
+                        onCurrentTokenChanged: refresh()
                         Component.onCompleted: refresh()
                         Connections { target: editor; function onLayersChanged() { layerThumb.refresh() } }
                     }
-                    MouseArea { anchors.fill: parent; enabled: workspace.editingEnabled; onClicked: { editor.selection.pickLayer(layerRow.id); workspace.reviewMask() } }
+                    MouseArea {
+                        id: thumbMouse; anchors.fill: parent; enabled: workspace.editingEnabled; hoverEnabled: true
+                        onClicked: {
+                            editor.selection.pickLayer(layerRow.id)
+                            if(layerRow.hasPixelContent) workspace.reviewAdjustments([layerRow.id])
+                            else workspace.reviewMask()
+                        }
+                    }
+                    ToolTip.visible: thumbMouse.containsMouse; ToolTip.delay: 600
+                    ToolTip.text: layerRow.hasPixelContent ? "像素内容 · 点击放大查看实际效果" : "蒙版范围 · 点击修正范围"
                 }
                 Item { Layout.fillWidth: true; Layout.fillHeight: true
                     ColumnLayout { anchors.fill: parent; spacing: 1
                         Text { text: layerRow.name; textFormat: Text.PlainText; color: Theme.ink; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                        Caption { text: layerRow.kind==="group" ? "组 · "+layerRow.childCount+" 项" : layerRow.mask.label; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
+                        Caption { text: layerRow.kind==="group" ? "组 · "+layerRow.childCount+" 项" : (layerRow.hasPixelContent ? "像素内容 · " : "")+layerRow.mask.label; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
                     }
                     MouseArea { objectName: "layerSelect_"+layerRow.id; anchors.fill: parent; enabled: workspace.editingEnabled; onClicked: editor.selection.pickedLayerId === layerRow.id ? editor.selection.clearPick() : editor.selection.pickLayer(layerRow.id) }
                 }
@@ -154,6 +175,6 @@ ColumnLayout {
         FineSlider { objectName: "layerOpacitySlider"; Layout.fillWidth: true; implicitHeight: 25; from: 0; to: 100; value: editor.layerOpacity; enabled: workspace.editingEnabled; onMoved: editor.setOpacity(value); onPressedChanged: if(!pressed) editor.finishGesture() }
         Caption { text: Math.round(editor.layerOpacity)+"%"; font.pixelSize: 10 }
     }
-    Caption { visible: detailsVisible; text: "右键图层：复制 / 删除 / 编组 / 移动 / 载入蒙版。点击蒙版缩略图修正范围。"; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
+    Caption { visible: detailsVisible; text: "点击内容缩略图查看效果；点击蒙版缩略图修正范围。右键管理图层。"; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
     }
 }

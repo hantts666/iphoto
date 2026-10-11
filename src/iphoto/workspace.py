@@ -550,6 +550,7 @@ class Editor(QObject):
         self._publish_scene_rows()
         self._scene_followup = ""
         self._mask_thumbnails = {}
+        self._content_thumbnails = {}
         self._pending_project = None
         self._relink_pending = None
         self._project_path = ""
@@ -932,6 +933,14 @@ class Editor(QObject):
     @Slot(str, result=str)
     def layerMaskThumbnail(self, lid):
         return layers.layerMaskThumbnail(self, lid)
+
+    @Slot(str, result=str)
+    def layerContentThumbnail(self, lid):
+        return layers.layerContentThumbnail(self,lid)
+
+    @Property(bool, notify=changed)
+    def hasTransparentContent(self):
+        return any(layer.get('pixel_patch',{}).get('compositing') == 'replace_rgba' for layer in self._layers)
 
     @Property("QVariantList", notify=conversationChanged)
     def conversation(self):

@@ -12,6 +12,8 @@ Rectangle {
     property bool holdingOriginal: false
     property bool showNavigator: true
     property bool wheelZoom: false
+    property string transparencyBackground: "checker"
+    onTransparencyBackgroundChanged: checker.requestPaint()
     readonly property var navigation: editor.viewport
     readonly property bool previewReady: previewLoader.item !== null && previewLoader.item.status === Image.Ready
     readonly property bool previewFailed: previewLoader.item !== null && previewLoader.item.status === Image.Error
@@ -85,7 +87,10 @@ Rectangle {
                 var left = Math.max(0,photo.x), top = Math.max(0,photo.y)
                 var right = Math.min(width,photo.x+photo.width), bottom = Math.min(height,photo.y+photo.height)
                 c.save(); c.beginPath(); c.rect(left,top,right-left,bottom-top); c.clip()
-                for (var y = Math.floor(top/12)*12; y < bottom; y += 12)
+                if(root.transparencyBackground !== "checker") {
+                    c.fillStyle = root.transparencyBackground === "white" ? "white" : "black"
+                    c.fillRect(left,top,right-left,bottom-top)
+                } else for (var y = Math.floor(top/12)*12; y < bottom; y += 12)
                     for (var x = Math.floor(left/12)*12; x < right; x += 12) {
                         c.fillStyle = ((x/12+y/12)%2) ? "#4a4d52" : "#383c41"; c.fillRect(x,y,12,12)
                     }
@@ -148,6 +153,7 @@ Rectangle {
                     && (root.detailCoversViewport && (!editor.detailFailed || frameCurrent)
                         || previewLoader.item !== null && displayedGeneration === previewLoader.item.displayedGeneration && frameCurrent)
                 PhotoTransparency {
+                    backgroundMode: root.transparencyBackground
                     originX: photo.x+detailImage.x; originY: photo.y+detailImage.y
                     viewportWidth: surface.width; viewportHeight: surface.height
                 }
@@ -160,6 +166,7 @@ Rectangle {
                     objectName: "originalPhotoImage"; width: photo.width; height: photo.height
                     source: editor.originalUrl; fillMode: Image.Stretch
                     PhotoTransparency {
+                        backgroundMode: root.transparencyBackground
                         originX: photo.x; originY: photo.y
                         viewportWidth: surface.width; viewportHeight: surface.height
                     }
@@ -172,6 +179,7 @@ Rectangle {
                     source: editor.detailOriginalUrl
                     visible: root.originalDetailReady
                     PhotoTransparency {
+                        backgroundMode: root.transparencyBackground
                         originX: photo.x+originalDetail.x; originY: photo.y+originalDetail.y
                         viewportWidth: surface.width; viewportHeight: surface.height
                     }

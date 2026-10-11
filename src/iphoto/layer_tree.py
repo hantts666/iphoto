@@ -96,6 +96,8 @@ def display_rows(layers):
                     # Production mask edits replace the dict. Carry its identity
                     # so the layer list can refresh thumbnails only on mask edits.
                     "maskToken": id(layer["mask"]),
+                    "hasPixelContent": bool(layer.get('pixel_patch')),
+                    "contentToken": layer.get('pixel_patch',{}).get('sha256',''),
                     "childCount": len(node["children"]),
                 }
             )

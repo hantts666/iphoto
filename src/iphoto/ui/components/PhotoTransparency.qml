@@ -8,6 +8,7 @@ Canvas {
     required property real originY
     required property real viewportWidth
     required property real viewportHeight
+    property string backgroundMode: "checker"
     x: Math.max(0, -originX)
     y: Math.max(0, -originY)
     width: Math.max(0, Math.min(parent.width-x, viewportWidth-originX-x))
@@ -19,9 +20,15 @@ Canvas {
     onYChanged: requestPaint()
     onWidthChanged: requestPaint()
     onHeightChanged: requestPaint()
+    onBackgroundModeChanged: requestPaint()
     onPaint: {
         var c = getContext("2d"); c.reset()
         var ox = originX+x, oy = originY+y
+        if(backgroundMode !== "checker") {
+            c.fillStyle=backgroundMode === "white" ? "white" : "black"
+            c.fillRect(0,0,width,height)
+            return
+        }
         var left = Math.floor(ox/12)*12, top = Math.floor(oy/12)*12
         for (var py = top; py < oy+height; py += 12)
             for (var px = left; px < ox+width; px += 12) {

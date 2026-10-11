@@ -74,6 +74,18 @@ ColumnLayout {
         Action { objectName: "fitCanvasButton"; text: "适应"; hint: "适应画布 Ctrl+0 · 双击抓手也可复位"; primary: editor.viewport.fitMode; enabled: editor.hasImage; implicitHeight: 27; onClicked: { editor.viewport.fit(); canvasRoot.focusCanvas() } }
         Action { objectName: "actualSizeButton"; text: "100%"; hint: "原图尺寸比例 Ctrl+1"; enabled: editor.hasImage; implicitHeight: 27; onClicked: { editor.viewport.setZoom(1); canvasRoot.focusCanvas() } }
         Action { objectName: "navigatorToggle"; text: "导航"; hint: "显示 / 隐藏角落导航图"; primary: viewport.showNavigator; implicitHeight: 27; onClicked: { viewport.showNavigator=!viewport.showNavigator; canvasRoot.focusCanvas() } }
+        Action {
+            objectName: "transparencyBackgroundButton"; visible: editor.hasTransparentContent; enabled: editor.hasImage
+            text: viewport.transparencyBackground === "white" ? "白底" : viewport.transparencyBackground === "black" ? "黑底" : "背景"
+            hint: "切换透明区域的查看背景，方便检查发丝与浅边；不影响导出"; implicitHeight: 27
+            onClicked: transparencyMenu.popup()
+            Menu {
+                id: transparencyMenu; y: -implicitHeight; width: 180
+                MenuItem { objectName: "transparencyCheckerMenuItem"; text: "透明网格"; checkable: true; checked: viewport.transparencyBackground === "checker"; onTriggered: { viewport.transparencyBackground="checker"; canvasRoot.focusCanvas() } }
+                MenuItem { objectName: "transparencyWhiteMenuItem"; text: "白色背景"; checkable: true; checked: viewport.transparencyBackground === "white"; onTriggered: { viewport.transparencyBackground="white"; canvasRoot.focusCanvas() } }
+                MenuItem { objectName: "transparencyBlackMenuItem"; text: "黑色背景"; checkable: true; checked: viewport.transparencyBackground === "black"; onTriggered: { viewport.transparencyBackground="black"; canvasRoot.focusCanvas() } }
+            }
+        }
         Item { Layout.fillWidth: true }
         Action { id: holdOriginal; objectName: "holdOriginalButton"; text: "按住看原图"; subtle: true; implicitHeight: 27; font.pixelSize: 10 }
         Action {

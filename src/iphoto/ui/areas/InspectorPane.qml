@@ -123,7 +123,7 @@ Rectangle {
                 anchors.fill: parent; anchors.margins: 8; spacing: 6
                 RowLayout {
                     visible: !editor.activeRepairInfo.isolated; Layout.fillWidth: true; spacing: 6
-                    Action { objectName: "reviewLayerAdjustmentButton"; text: "查看效果"; visible: editor.canReviewAdjustment; Layout.fillWidth: true; enabled: workspace.editingEnabled; hint: "定位到此层实际范围，以100%查看局部效果；再次点击查看下一处"; onClicked: workspace.reviewAdjustments([editor.activeLayerId]) }
+                    Action { objectName: "reviewLayerAdjustmentButton"; text: "查看效果"; visible: editor.canReviewAdjustment; Layout.fillWidth: true; enabled: workspace.editingEnabled; hint: "放大查看此层实际效果；生成内容按其像素尺寸显示，其他调整按原图100%显示；再次点击查看下一处"; onClicked: workspace.reviewAdjustments([editor.activeLayerId]) }
                     Action { objectName: "addLayerMaskButton"; text: "补选范围"; Layout.fillWidth: true; enabled: workspace.editingEnabled; hint: "直接用画笔补上漏选，保存后继续调整当前图层"; onClicked: workspace.correctMask("add") }
                     Action { objectName: "eraseLayerMaskButton"; text: "擦除范围"; Layout.fillWidth: true; enabled: workspace.editingEnabled; hint: "直接用画笔排除嘴唇、五官或多选的背景，保存后继续调整当前图层"; onClicked: workspace.correctMask("subtract") }
                 }

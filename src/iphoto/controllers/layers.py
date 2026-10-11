@@ -5,6 +5,7 @@ import base64
 from io import BytesIO
 from ..engine import LABELS, PRESETS, RANGES, Recipe, RECIPE_FIELDS
 from ..document import new_layer, raster_mask, raster_mask_cached, validate_layers, MAX_LAYERS
+from PIL import Image
 from ..ai_layer_edits import validate_layer_controls
 from ..ai_layer_groups import validate_group_plan
 from ..layer_tree import (
@@ -103,6 +104,26 @@ def layerMaskThumbnail(self, lid):
     raster_mask(layer["mask"], (48, 32)).save(output, format="PNG")
     url = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii")
     self._mask_thumbnails[lid] = (deepcopy(layer["mask"]), url)
+    return url
+
+
+def layerContentThumbnail(self, lid):
+    layer = next((l for l in self._layers if l['id'] == lid), None)
+    patch = (layer or {}).get('pixel_patch')
+    if not patch:
+        return ''
+    cached = self._content_thumbnails.get(lid)
+    if cached and cached[0] == patch['sha256']:
+        return cached[1]
+    from ..pixel_patch import _decode
+    pixels = _decode(patch['png']).convert('RGBA')
+    pixels.thumbnail((48,32),Image.Resampling.LANCZOS)
+    image = Image.new('RGBA',(48,32))
+    image.alpha_composite(pixels,((48-pixels.width)//2,(32-pixels.height)//2))
+    output = BytesIO()
+    image.save(output,format='PNG')
+    url = 'data:image/png;base64,'+base64.b64encode(output.getvalue()).decode('ascii')
+    self._content_thumbnails[lid] = (patch['sha256'],url)
     return url
 
 
