@@ -30,10 +30,9 @@ def validate_inspection_box(value):
 def available():
     from .matting.models import available as details
     from .matting.portrait_models import MODEL_DIR, NAME, SIZE
-    from .cutout import available as recovery
     try:
         path = MODEL_DIR / NAME
-        return details() and recovery() and path.is_file() and path.stat().st_size == SIZE
+        return details() and path.is_file() and path.stat().st_size == SIZE
     except (OSError, ValueError):
         return False
 
@@ -61,6 +60,35 @@ def white_guide(image, coarse):
     return guide
 
 
+def white_foreground(image, matte):
+    """Unmix only the partial foreground from an explicitly white work image.
+
+    In byte RGB, I = a*F + (1-a)*255 implies a >= 1-min(I)/255
+    for a nonnegative F. The learned alpha can violate that lower bound. Make
+    only its partial pixels feasible before inverse composition; clipping a
+    negative foreground alone darkens the edge and cannot reproduce the input.
+
+    Zero support and opaque RGB stay exact. A nearly white generated background
+    is not a reason to grow alpha everywhere. This neither recovers model-missed
+    wisps nor applies to an original photo with an unknown/coloured background.
+    """
+    if (image.mode != 'RGB' or matte.mode != 'L' or image.size != matte.size
+            or image.width * image.height > MAX_PIXELS):
+        raise ValueError('白底生成前景的颜色或透明度无效，照片未改变')
+    pixels = np.array(image)
+    coverage = np.array(matte)
+    partial = (coverage > 0) & (coverage < 255)
+    samples = pixels[partial].astype(np.float32)
+    previous = coverage[partial]
+    feasible = np.maximum(previous, 255-samples.min(axis=1))
+    colours = 255-(255-samples)*255/feasible[:, None]
+    pixels[partial] = np.rint(np.clip(colours, 0, 255)).astype(np.uint8)
+    coverage[partial] = feasible.astype(np.uint8)
+    rgba = Image.fromarray(pixels).convert('RGBA')
+    rgba.putalpha(Image.fromarray(coverage))
+    return rgba, int(np.count_nonzero(feasible != previous))
+
+
 def extract(image):
     if (image.mode not in ('RGB', 'RGBA') or min(image.size) < 64
             or image.width * image.height > MAX_PIXELS):
@@ -72,7 +100,6 @@ def extract(image):
         return image.copy(), {'method': 'generated_rgba', 'size': list(image.size), 'geometry_verified': False}
     from .matting.portrait import PortraitMatte
     from .matting.neural import NativeMatte, solve
-    from .cutout import _recover
     rgb = image.convert('RGB')
     portrait = PortraitMatte()
     guide = white_guide(rgb, portrait.predict_image(rgb))
@@ -84,11 +111,10 @@ def extract(image):
     if (alpha.dtype != np.uint8 or alpha.shape != guide.shape
             or not np.array_equal(alpha[guide != 128], guide[guide != 128])):
         raise ValueError('生成前景的透明度求解无效，照片未改变')
-    matte = Image.fromarray(alpha)
-    rgba = _recover(rgb, matte).convert('RGBA')
-    rgba.putalpha(matte)
+    rgba, adjusted = white_foreground(rgb, Image.fromarray(alpha))
     return rgba, {'method': 'generated_white_portrait', 'size': list(rgba.size), 'tiles': tiles,
                   'portrait_provider': portrait_provider, 'detail_provider': engine.provider,
+                  'colour_recovery': 'known_white', 'coverage_adjusted_pixels': adjusted,
                   'geometry_verified': False}
 
 

@@ -82,6 +82,12 @@ def ready(self, result, context, generation):
         if current is None or generation != self._generation:
             return
         pending, state = current
+        frame_facts = {}
+        if state.get('foreground'):
+            frame_facts = {'original_size': state['canvas_size'], 'generated_size': state['generated_size'],
+                           'geometry_verified': False}
+            if result.get('frame_facts') != frame_facts:
+                raise ValueError('生成前景复查的实际画布参照不一致，照片未改变')
         state['proposed'] = result['proposed']
         state['preparing'] = False
         state['reviewing'] = True
@@ -91,6 +97,7 @@ def ready(self, result, context, generation):
         self.changed.emit()
         self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], generation, 'photo_review',
                      {'direction': state['direction'], 'revision': state['revision'], 'foreground': state.get('foreground', False),
+                      **({'frame_facts': frame_facts} if state.get('foreground') else {}),
                       'candidates': [{'layer_id': layer['id'], 'name': layer['name'], 'recipe': layer['recipe'],
                                       'whole_image': 'base' in state and index == 0} for index, layer in enumerate(state['proposed'])],
                       'review_images': [{'label': item['label'], 'url': item['url']} for item in images]})

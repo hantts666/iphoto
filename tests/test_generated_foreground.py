@@ -14,7 +14,7 @@ from iphoto.ai_protocol import parse_auto
 from iphoto.ai_settings import AISettings
 from iphoto.document import read_project
 from iphoto.engine import Recipe
-from iphoto.generated_foreground import white_guide, extract, review_images, FOREGROUND_PROMPT
+from iphoto.generated_foreground import white_guide, white_foreground, extract, review_images, FOREGROUND_PROMPT
 from iphoto.generation_scope import SCOPE_PROMPT, validate_scope_reference
 from iphoto.image_edit import ImageEditController
 from test_ai import mock_api, wait_for
@@ -77,6 +77,78 @@ def test_real_rgba_keeps_own_colours_and_coverage_without_rematting():
     assert quality['method'] == 'generated_rgba' and not quality['geometry_verified']
     with pytest.raises(ValueError, match='确定背景'):
         extract(Image.new('RGBA', (128,128), (80,30,20,100)))
+
+
+def test_white_inverse_reproduces_known_foreground_and_preserves_hard_support():
+    # Choose byte-exact known-white composites, with an independently specified
+    # expected foreground rather than checking the implementation's formula.
+    rgb = Image.new('RGB', (5, 1))
+    rgb.putdata([(211, 221, 231), (231, 241, 251), (199, 207, 241), (255,255,255), (12,45,88)])
+    alpha = Image.new('L', rgb.size)
+    alpha.putdata([51, 51, 0, 255, 255])
+    before = rgb.tobytes(), alpha.tobytes()
+    rgba, count = white_foreground(rgb, alpha)
+    assert [rgba.getpixel((x,0)) for x in range(5)] == [(35,85,135,51), (135,185,235,51), (199,207,241,0),
+                                    (255,255,255,255), (12,45,88,255)]
+    assert count == 0 and (rgb.tobytes(), alpha.tobytes()) == before
+
+
+def test_white_inverse_constrains_partial_coverage_without_growing_background():
+    rgb = Image.new('RGB', (4, 1))
+    rgb.putdata([(15,135,255), (252,253,254), (0,50,80), (250,251,252)])
+    alpha = Image.new('L', rgb.size)
+    alpha.putdata([40, 0, 1, 1])
+    rgba, count = white_foreground(rgb, alpha)
+    # The first pixel requires at least 240/255 coverage; clipping F at alpha40
+    # would lose the observed dark strand. A near-white zero stays zero.
+    assert rgba.getpixel((0,0)) == (0,128,255,240)
+    assert rgba.getpixel((1,0)) == (252,253,254,0)
+    assert rgba.getpixel((2,0)) == (0,50,80,255)
+    assert rgba.getpixel((3,0)) == (0,51,102,5)
+    assert count == 3
+    white = Image.alpha_composite(Image.new('RGBA', rgba.size, 'white'), rgba).convert('RGB')
+    assert all(max(abs(a-b) for a,b in zip(white.getpixel((x,0)),rgb.getpixel((x,0)))) <= 1
+               for x in (0,2,3))
+
+
+@pytest.mark.parametrize('coverage', [0,255])
+def test_white_inverse_without_partial_pixels_is_exact(coverage):
+    rgb = Image.new('RGB', (80,80), '#aa7643')
+    rgba, count = white_foreground(rgb, Image.new('L', rgb.size, coverage))
+    assert rgba.convert('RGB').tobytes() == rgb.tobytes() and rgba.getchannel('A').getextrema() == (coverage,coverage)
+    assert count == 0
+
+
+@pytest.mark.parametrize('case', ['rgb_mode','alpha_mode','size','budget'])
+def test_white_inverse_declines_invalid_inputs(case, monkeypatch):
+    from iphoto import generated_foreground
+    rgb, alpha = Image.new('RGB',(80,80)), Image.new('L',(80,80))
+    if case == 'rgb_mode': rgb = rgb.convert('RGBA')
+    elif case == 'alpha_mode': alpha = alpha.convert('RGB')
+    elif case == 'size': alpha = alpha.resize((81,80))
+    else: monkeypatch.setattr(generated_foreground, 'MAX_PIXELS', 6399)
+    with pytest.raises(ValueError): white_foreground(rgb, alpha)
+
+
+def test_rgb_extraction_uses_white_constraints_on_its_actual_model_output(monkeypatch):
+    import numpy as np
+    from iphoto.matting import portrait, neural
+    rgb, coarse = Image.new('RGB',(128,128),'white'), Image.new('L',(128,128))
+    ImageDraw.Draw(coarse).rectangle((25,15,100,120),fill=255)
+    rgb.putpixel((5,60),(15,135,255))
+    monkeypatch.setattr(portrait,'PortraitMatte',lambda:SimpleNamespace(provider='fixture',predict_image=lambda _:coarse))
+    monkeypatch.setattr(neural,'NativeMatte',lambda:SimpleNamespace(provider='fixture'))
+    def solve(image,guide,*,engine):
+        assert image.tobytes() == rgb.tobytes() and guide[60,5] == 128
+        pixels = np.where(guide==255,255,0).astype(np.uint8)
+        pixels[60,5] = 40
+        return pixels, 1
+    monkeypatch.setattr(neural,'solve',solve)
+    rgba, quality = extract(rgb)
+    assert rgba.getpixel((5,60)) == (0,128,255,240)
+    assert rgba.getpixel((60,60)) == (255,255,255,255) and rgba.getpixel((2,2))[3] == 0
+    assert quality['colour_recovery'] == 'known_white' and quality['coverage_adjusted_pixels'] == 1
+    assert not quality['geometry_verified']
 
 
 def test_review_evidence_has_actual_white_black_and_native_coverage():
@@ -145,10 +217,10 @@ def click(window, item):
 @pytest.mark.parametrize('case,size', [('accept',(1440,930)),('accept',(1080,700)),
     ('chat',(1080,700)),
     ('reject',(1440,930)),('cancel',(1080,700)),('alpha_cancel',(1080,700)),
-    ('failure',(1440,930)),('retry',(1440,930))])
+    ('failure',(1440,930)),('retry',(1440,930)),('frame_mismatch',(1080,700))])
 def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch, case, size):
     from iphoto import generated_foreground
-    from iphoto.controllers import worker_bridge
+    from iphoto.controllers import worker_bridge, photo_strategy
     editor, window, find, warnings, folder = ui
     window.resize(*size)
     monkeypatch.setattr(generated_foreground, 'available', lambda: True)
@@ -165,6 +237,8 @@ def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch
                 assert '去掉其他人物' in editor._pending_request['text']
             return response(plan())
         assert context['mode'] == 'photo_review' and context['foreground'] is True
+        assert context['frame_facts'] == {'original_size':[300,200], 'generated_size':[300,200],
+                                          'geometry_verified':False}
         images = [part['image_url']['url'] for part in payload['messages'][1]['content'] if part['type'] == 'image_url']
         assert len(images) == 6
         decoded = [Image.open(BytesIO(base64.b64decode(value.partition(',')[2]))) for value in images]
@@ -182,6 +256,12 @@ def test_explicit_menu_real_worker_review_export_and_atomic_undo(ui, monkeypatch
         return True
     monkeypatch.setattr(editor._image_edit, 'start', generate)
     original_read = worker_bridge._read
+    if case == 'frame_mismatch':
+        original_ready = photo_strategy.ready
+        def wrong_frame(owner,result,context,generation):
+            result['frame_facts']['generated_size'][0] += 1
+            return original_ready(owner,result,context,generation)
+        monkeypatch.setattr(photo_strategy,'ready',wrong_frame)
     if case == 'alpha_cancel':
         def held_read(owner):
             if owner._active and owner._active['op'] == 'foreground_alpha':
