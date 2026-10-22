@@ -57,6 +57,7 @@ SCHEMA = {'type':'object','additionalProperties':False,
                         'summary':{'type':'string'},'corrections':CORRECTIONS_SCHEMA},
           'required':['status','summary','corrections']}
 PROMPT = """你是iPhoto独立抠图质量检查员。依据提供的实际图片核对，不因为规划者说完成就认定成功。
+原片/Source指已应用像素修改的图像内容（调色前）；白底、黑底和棋盘格是包含实际调色的候选输出。
 图片提供原照片整体、实际紫色棋盘格抠图整体，以及最多四组原像素质量对照图，包含半透明密集处与目标外缘。每组是四格：左上Source原照片，右上Alpha透明度，左下White白底输出，右下Checker紫色棋盘格输出；四格是同一原像素位置，未缩放。标有外侧观察区的对照和同编号Black包含修改范围外最多52原像素，用来发现被截掉的细丝；它不是新增修改权限，也不证明已检查所有外围。不能从这些扩大对照直接抄纠错坐标。最后的定位图仅供选择参照点。先逐组对照四格里的同一对象，再看整体目标范围。
 另外提供各编号同位置的原像素Black黑底输出，必须与该处Source和White逐一核对。白底或紫棋盘格可能掩盖浅色、蓝色背景串边；黑底可能掩盖暗色残块，不能只看一种底色就accept。相对Source中同段目标的不透明部分，若输出出现新增白描、天空蓝边、异色光晕或宽灰雾，应reject；目标原本就有的蓝色或真实反光不能仅因颜色而误判。无法分辨是真实颜色还是串色时uncertain。仅前景RGB串色不能靠语义保留/排除点修复，不要用删掉真实细丝来消除色边。
 核对用户指定的目标：透明发丝/细枝是否有明显灰云、旧背景串色、硬切、方块接缝；是否误包含其他对象、明显漏掉目标或破坏透明孔洞。白底下有连成片的灰雾、光晕或透出旧衣物的斑块，即使紫底上不显眼，也不能accept。只看到缩略图无法确认时应uncertain。
@@ -79,6 +80,7 @@ visual_exclusions=true时，若提供的N点未覆盖实际误选，可依据原
 """
 
 FINAL_PROMPT = """你是iPhoto最终抠图质量检查员。只检查这次实际图片，不知道也不猜测前一轮结论。
+原片/Source指已应用像素修改的图像内容（调色前）；白底、黑底和棋盘格是包含实际调色的候选输出。
 这是纠错后的输出，不能再提供取点或工具计划。先看原片目标上下文，再检查最前面的发丝局部对照，然后逐组检查边缘，最后检查整体。所有四格都对齐同一个原图位置：左上Source未经调色的原片、右上Alpha透明度、左下White实际白底抠图、右下Checker实际紫色棋盘格抠图。发丝局部格来自原像素最近邻放大2倍，不是AI重画。标有外侧观察区的编号对照和Black包含原修改范围外最多52原像素，用于核对漏选；修改范围不变，不声称覆盖全部外围。
 各编号另附同位置的原像素Black黑底输出，必须与Source和White逐一核对新增白描、天空蓝边、异色光晕和灰雾；白底/紫底掩盖的浅色串边也算缺陷，黑底掩盖的暗块仍需在白底检查。与同段不透明目标颜色对照，不能将真实蓝色目标或原本反光仅因颜色误拒绝。无法判断时uncertain。
 每组先从Source找一段实际可辨认的细丝，追踪卷曲、分叉、末端，再在同位置的Alpha和White里核对走向是否延续。不能仅看到大轮廓就声称每根细丝都在；原片的亮细丝在Alpha里没有对应的具体结构，属于漏选。原片只有窄丝、输出却变成连续灰团或宽雾，属于混入背景。真实虚焦可以保留，但不能用虚焦解释可见细丝结构消失。没有把握确认具体结构应uncertain。点上有非零Alpha不证明细丝已经恢复。
@@ -311,7 +313,7 @@ def exclude_candidates(image, alpha):
     return points
 
 
-def render_review(source, layers, mask, directory, identity, boxes=None, *, target_context=False, detail_points=None, final_review=False):
+def render_review(source, layers, mask, directory, identity, boxes=None, *, target_context=False, detail_points=None, final_review=False, content=None):
     from .cutout import color_patch,compose_cutout
     from .document import raster_mask,render_layers,validate_layers,validate_mask
     from .engine import preview
@@ -326,6 +328,9 @@ def render_review(source, layers, mask, directory, identity, boxes=None, *, targ
         raise ValueError('候选范围为空，原范围保留')
     rendered=render_layers(source,validate_layers(layers))
     output=compose_cutout(rendered,alpha,color_patch(source,layers,mask,alpha))
+    if content is not None:
+        if content.size!=source.size:raise ValueError('图像内容与照片坐标不一致')
+        source=content
     boxes=edge_boxes(alpha) if boxes is None else boxes
     if (not isinstance(boxes,list) or len(boxes)>4 or any(
         not isinstance(box,(list,tuple)) or len(box)!=4 or any(type(v) is not int for v in box)

@@ -20,6 +20,7 @@ SCHEMA = {'type':'object','additionalProperties':False,'properties':{
                       'invert':{'type':'boolean'}},'required':list(CONTROLS)}]},
     'summary':{'type':'string'}},'required':['status','options','summary']}
 PROMPT = """你是iPhoto通道参数操作员。根据目标附近原照片、多处原像素通道图和真实通道采样建议，为随后透明度模型提出一组通道参数；本轮尚未运行透明度模型或前景颜色恢复，不能声称已修好。
+本轮原照片/Source是已应用像素修改的图像内容（调色前），与通道计算和透明度模型使用的内容一致。
 每张通道图十二格，按从左到右、从上到下依次是Source原片、red、green、blue、luminance、red_green、red_blue、green_blue、current curve当前参数灰度、current mask当前选区、solver guide实际解算约束、native result受限通道结果。每格来自完全相同位置的最多256原像素，未缩放。计算通道是两色相减后加128，范围0～255，不是绝对色差。current curve只展示通道曲线；native result才应用了当前范围和语义保护，但都未经过透明度模型或前景颜色恢复，不是最终合格Alpha。solver guide是实际随后传给透明度模型的三分图：白=确定保留、黑=确定排除、灰=允许估计。黑色也可能来自范围限制，不证明Source中没有真实目标；模型不能只靠估计灰区找回已锁成黑色的细丝。必须对照Source、current mask、solver guide及native result，检查真实细结构是否被当前范围截掉、错误锁成背景或把背景锁为前景，不能只看current curve对比鲜明就keep。
 先依据target与用户要求在Source辨认目标及背景，再比较同位置各通道。目标为头发时，不将衣服、皮肤、帽子或模糊背景纹理当成头发；目标为细枝、针叶、薄纱或玻璃时，核对其细结构、内部孔洞和连续半透明覆盖，不将其套用头发判断，也不将透过目标可见的背景全设为不透明。原照片上下文的编号框对应通道图，仅用于辨认目标。最多四处代表边缘仍可能遗漏问题，不声称看完所有边缘。
 current_options是程序当前推荐值，channel_suggestions来自同一原像素范围的不透明内部与周围背景采样；这些参照和颜色差异不是语义真值，也不证明质量。整块区域的采样可能不能区分局部细丝，不能只按某个数值或模型名称选择。只有看到另一通道/黑白场能更好地区分真实目标与背景时才propose；没有可靠改善依据时keep或uncertain。

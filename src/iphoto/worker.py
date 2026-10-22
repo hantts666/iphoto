@@ -60,6 +60,8 @@ def main():
     generative_reference = None
     composition_cache = LayerPreviewCache()
     channel_reference_cache = {}
+    from .analysis_content import ContentCache
+    content_cache = ContentCache(cache)
     channel_draft_assets = set()
     handlers = {}
 
@@ -126,6 +128,7 @@ def main():
         generative_reference = None
         current_crop_assets = set()
         channel_reference_cache.clear()
+        content_cache.clear()
         channel_draft_assets.clear()
         composition_cache.clear()
         RASTER_CACHE.clear()
@@ -346,6 +349,8 @@ def main():
         from .matting.channels import native_preview
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，通道预览未应用')
+        content, content_reference = content_cache.get(source,layers=request.get('analysis_layers'),
+                                                     reference=request.get('content_reference'))
         scoped_mask = None
         scope_limit = None
         if 'scope_limit' in request:
@@ -370,14 +375,14 @@ def main():
             if channel not in CHANNELS:
                 raise ValueError('实际结果缺少对应的原始通道')
         else:
-            alpha, options, channel, score = native_preview(source.image, request['mask'], request['options'],
+            alpha, options, channel, score = native_preview(content, request['mask'], request['options'],
                                                            initial=bool(request.get('initial')),cache=channel_reference_cache,
                                                            suggestions=level_suggestions)
         if request.get('native_views') is True:
             from .matting.channel_view import native_previews, channel_choices
             pictures, info = native_previews(source.image, alpha, request['mask'], options['radius'],
                 **({'layers': validate_layers(request['layers']), 'mask': result_mask} if actual else {}),
-                whole=bool(options.get('whole')), channel=channel)
+                whole=bool(options.get('whole')), channel=channel,content=content)
             views, created = {}, set()
             for name, picture in pictures:
                 destination = cache / f"channel-native-{request['id']}-{name}.png"
@@ -386,7 +391,7 @@ def main():
                 created.add(destination)
             choices = []
             if request.get('channel_choices') is True:
-                for name, label, picture in channel_choices(source.image, info['box']):
+                for name, label, picture in channel_choices(content, info['box']):
                     destination = cache / f"channel-choice-{request['id']}-{name or 'source'}.png"
                     picture.save(destination, compress_level=3)
                     choices.append({'channel': name, 'label': label, 'path': str(destination)})
@@ -398,19 +403,22 @@ def main():
             assets.extend(created)
             return {'path': views['alpha'], 'views': views, 'options': options,
                     'channel': channel, 'score': score, 'channel_choices': choices, **info,
+                    'content_reference':content_reference,
                     **({'level_suggestions':level_suggestions} if level_suggestions is not None else {}),
                     **({'mask':scoped_mask,'scope_limit':scope_limit} if scoped_mask is not None else {})}
         alpha = alpha.resize(proxy.size, Image.Resampling.LANCZOS)
         radius = max(2, round(options['radius']*min(proxy.size)/min(source.image.size)))
         path = cache / f"channel-preview-{request['id']}.png"
         alpha.save(path, compress_level=3)
-        result={'path':str(path),'channel':channel,'score':score,'options':options}
+        result={'path':str(path),'channel':channel,'score':score,'options':options,
+                'content_reference':content_reference}
         if scoped_mask is not None:
             result.update(mask=scoped_mask,scope_limit=scope_limit)
         current_crop_assets = {path}
         if request.get('display_preview') is True:
             from .matting.channel_view import previews
-            pictures,focused=previews(proxy,alpha,request['mask'],radius,whole=bool(options.get('whole')))
+            content_proxy=preview(content,1600) if content_reference is not None else proxy
+            pictures,focused=previews(content_proxy,alpha,request['mask'],radius,whole=bool(options.get('whole')))
             views={}
             for name,picture in pictures.items():
                 destination=cache / f"channel-view-{request['id']}-{name}.png"
@@ -427,8 +435,10 @@ def main():
         from .channel_advisor import render_evidence
         if request.get('expected_sha256')!=source.digest:
             raise ValueError('照片已变化，AI通道参照未应用')
-        result=render_evidence(source.image,request['mask'],request['options'],cache,request['id'],cache=channel_reference_cache,
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
+        result=render_evidence(content,request['mask'],request['options'],cache,request['id'],cache=channel_reference_cache,
                                scope_limit=request.get('scope_limit'))
+        result['content_reference']=reference
         current_crop_assets={Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result
@@ -439,6 +449,8 @@ def main():
         from .matte_review import render_review
         if request.get('expected_sha256') != source.digest:
             raise ValueError('照片已变化，抠图检查未应用')
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
+        content=content if reference is not None else None
         if 'composition_regions' in request:
             from copy import deepcopy
             from .matte_compare import compose_regions
@@ -448,14 +460,15 @@ def main():
                 if sum(layer.get('id')==target for layer in layers)!=1:
                     raise ValueError('分区抠图的图层已变化，原范围保留')
                 next(layer for layer in layers if layer['id']==target)['mask']=mask
-            result=render_review(source.image,layers,mask,cache,request['id'],request['review_boxes'],target_context=True)
+            result=render_review(source.image,layers,mask,cache,request['id'],request['review_boxes'],target_context=True,content=content)
             result['composed_mask']=mask
         elif 'comparison_masks' in request:
             from .matte_compare import render_comparison
             result=render_comparison(source.image,request['layers'],request['comparison_masks'],cache,request['id'],
-                                     target=request.get('comparison_target'),boxes=request.get('review_boxes'))
+                                     target=request.get('comparison_target'),boxes=request.get('review_boxes'),content=content)
         else:
-            result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'),target_context=request.get('target_context',False),detail_points=request.get('detail_points'),final_review=request.get('final_review',False))
+            result=render_review(source.image,request['layers'],request['mask'],cache,request['id'],request.get('review_boxes'),target_context=request.get('target_context',False),detail_points=request.get('detail_points'),final_review=request.get('final_review',False),content=content)
+        result['content_reference']=reference
         current_crop_assets={Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result
@@ -466,7 +479,9 @@ def main():
         from .matte_points import render_points
         if request.get('expected_sha256')!=source.digest:
             raise ValueError('照片已变化，发丝落点检查未应用')
-        result=render_points(source.image,request['corrections'],request['review_boxes'],cache,request['id'],context_points=request.get('context_points',False))
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
+        result=render_points(content,request['corrections'],request['review_boxes'],cache,request['id'],context_points=request.get('context_points',False))
+        result['content_reference']=reference
         current_crop_assets={Path(item['path']) for item in result['images']}
         assets.extend(current_crop_assets)
         return result

@@ -138,8 +138,9 @@ class ChannelMaskController(QObject):
                       'layer_id':e._selected, 'candidate':candidate,
                       'mask':deepcopy(candidate if candidate is not None else e._layer()['mask']),
                       'layers':deepcopy(e._layers),
+                      'content_prepared':False,'content_reference':None,
                       'target_id':e._selection_target_id, 'revision':0}
-        self._preview, self._note = '', '正在比较红、绿、蓝、亮度与通道计算…'
+        self._preview, self._note = '', '正在准备图像内容与原像素通道（调色前）…'
         self._views, self._view = {}, 'alpha'
         self._choices = []
         self._levels, self._suggestions = {}, {}
@@ -158,6 +159,8 @@ class ChannelMaskController(QObject):
         self._loading = True
         self.editor._queue = type(self.editor._queue)(r for r in self.editor._queue if r['op'] != 'channel_preview')
         self.editor._request('channel_preview', mask=self.state['mask'], options=self._options, initial=initial, display_preview=True, native_views=True, channel_choices=True,
+                              **({'analysis_layers':self.state['layers']} if not self.state['content_prepared'] else
+                                 {'content_reference':self.state['content_reference']} if self.state['content_reference'] else {}),
                               expected_sha256=self.state['sha'], context={'token':self.state['token'],
                               'revision':self.state['revision']})
         self.changed.emit()
@@ -166,6 +169,12 @@ class ChannelMaskController(QObject):
         if not self._valid() or context['token'] != self.state['token'] or context['revision'] != self.state['revision'] or generation != self.editor._generation:
             return
         from PySide6.QtCore import QUrl
+        reference=result.get('content_reference')
+        if self.state['content_prepared'] and reference!=self.state['content_reference']:
+            self.failed('图像内容参照已变化，请重新打开通道工具',context)
+            return
+        self.state['content_reference']=deepcopy(reference)
+        self.state['content_prepared']=True
         self._options = result['options']
         if 'level_suggestions' in result:
             self._suggestions = deepcopy(result['level_suggestions'])
@@ -189,6 +198,7 @@ class ChannelMaskController(QObject):
                       else '实际结果已就绪；')
             self._note = prefix + '黑白底与透明 PNG 的前景颜色一致。' + '；'.join(self._result['quality'].get('warnings', []))
         if result.get('focused'):self._note='当前范围局部 · '+self._note
+        if reference:self._note='依据已应用的图像内容（调色前）。'+self._note
         self.changed.emit()
 
     def failed(self, message, context):
@@ -262,6 +272,7 @@ class ChannelMaskController(QObject):
             self._loading = True
             self._note = '正在计算实际透明边缘，原范围保留…可取消'
         if e._request('matte', method='channel', mask=deepcopy(self.state['mask']), channel_options=options,
+                    **({'content_reference':self.state['content_reference']} if self.state['content_reference'] else {}),
                     channel_token=self.state['token'], channel_session=self.state['token'],
                     channel_revision=self.state['revision'], preview_only=preview_only) is False:
             self.cancelled()
@@ -269,6 +280,9 @@ class ChannelMaskController(QObject):
 
     def result_ready(self, result, active):
         if not self.matches_request(active):
+            return
+        if not self._matches_content(result):
+            self.failed('图像内容已变化，实际效果未应用',{'token':self.state['token'],'revision':self.state['revision']})
             return
         from ..document import validate_mask
         self._result = {'mask':validate_mask(result['mask']), 'quality':deepcopy(result['quality'])}
@@ -279,6 +293,7 @@ class ChannelMaskController(QObject):
         if target:
             next(layer for layer in layers if layer['id'] == target)['mask'] = deepcopy(self._result['mask'])
         self.editor._request('channel_preview', mask=self.state['mask'], result_mask=self._result['mask'],
+            **({'content_reference':self.state['content_reference']} if self.state['content_reference'] else {}),
             options=self._options, layers=layers, expected_sha256=self.state['sha'], native_views=True, channel_choices=True,
             resolved_channel=self._result['quality']['channel'],
             context={'token':self.state['token'], 'revision':self.state['revision'], 'result_preview':True})
@@ -301,7 +316,12 @@ class ChannelMaskController(QObject):
 
     def complete_result(self, result, active):
         if self.matches_request(active):
-            self._publish(result)
+            if self._matches_content(result):self._publish(result)
+            else:self.failed('图像内容已变化，结果未应用',{'token':self.state['token'],'revision':self.state['revision']})
+
+    def _matches_content(self,result):
+        expected=(self.state.get('content_reference') or {}).get('sha256')
+        return result.get('quality',{}).get('content_sha256')==expected
 
     def _publish(self, result):
         from .layers import applyRangeMask

@@ -36,6 +36,7 @@ SCHEMA = {'type':'object','additionalProperties':False,'properties':{
     'candidate':{'type':'string','enum':[*ALL_CANDIDATES,'none']},
     'summary':{'type':'string'}},'required':['status','candidate','summary']}
 PROMPT = """你是iPhoto抠图候选比较员。依据原片和实际输出，在本次提供的独立候选中选择值得继续检查的一份，不修改或混合它们。
+原片/Source指已应用像素修改的图像内容（调色前）；候选输出包含实际调色。
 comparison_candidates是本次实际准备的候选清单，只能选择其中一项。native是保留目标范围和语义排除后的纯原像素通道曲线，未使用透明度模型；channel是相同通道参照与透明度模型的结果；hair是在channel基础上增加人像外缘、头发分区后的另一结果。并非每次都有全部三份；未提供的候选不能选择。名称、AI步骤数量与通道对比度不代表质量。各份在完全相同的原图位置、相同白底与紫色棋盘格中比较；同编号边缘对应同一位置。四格左上Source原片、右上Alpha透明度、左下White实际白底、右下Checker实际紫棋盘格，未缩放原像素。原片与各份整体图也已提供。标有外侧观察区的编号对照和Black包含实际修改范围外最多52原像素，用来检查被截掉的细丝；各候选观察位置相同，修改范围仍是原编号区域，不能把范围外漏丝当成分区选用就能修复，也不声称检查全部外围。
 先从Source追踪真实细丝的卷曲、分叉和末端，再在各份同位置的Alpha和White核对延续。具体细丝消失是漏选；窄丝变成大片灰云是混入背景；衣物、皮肤、帽子在只选头发时应排除。不能因为轮廓柔和、更多半透明像素、更多AI步骤或紫底好看就选择它。连续紫棋盘格表示对象已排除。
 每份每个边缘还附同位置原像素Black黑底，逐一与Source和White核对新增白描、天空蓝边与异色光晕；不能因白底或紫底掩盖串色就选择。保留目标原本颜色和真实反光，不仅因目标是蓝色就误拒绝；无法辨认时uncertain。仅颜色串色不能靠语义点删除真实细丝来修好。
@@ -138,7 +139,7 @@ def compose_regions(masks, boxes, regions, size):
     return validate_mask(result)
 
 
-def render_comparison(source, layers, masks, directory, identity, *, target=None, boxes=None):
+def render_comparison(source, layers, masks, directory, identity, *, target=None, boxes=None, content=None):
     """Use identical native boxes and each mask's real foreground recovery."""
     names=candidate_names(masks)
     masks={key:validate_mask(value) for key,value in masks.items()}
@@ -152,7 +153,7 @@ def render_comparison(source, layers, masks, directory, identity, *, target=None
         if target is not None:
             next(layer for layer in staged if layer['id']==target)['mask']=deepcopy(masks[key])
         results[key]=render_review(source,staged,masks[key],directory,f'{identity}-{key}',boxes,
-                                   target_context=True,final_review=True)
+                                   target_context=True,final_review=True,content=content)
     images=[item for key in names for item in results[key]['images']]
     reviews=[results['channel']['review_images'][0],results['channel']['review_images'][1]]
     for index in range(len(boxes)):

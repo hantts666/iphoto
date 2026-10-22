@@ -10,6 +10,10 @@ from ..matting.channels import CHANNEL_NAMES, validate_options
 from . import pixel_selections
 
 
+def _basis(state):
+    return {'content_reference':deepcopy(state['content_reference'])} if state.get('content_reference') else {}
+
+
 def _current(e, token):
     pending = e._pending_request or {}
     state = pending.get('channel_auto')
@@ -54,12 +58,13 @@ def prepare(e, mask, token):
         current = _current(e, token)
         if current is None:
             return
-        _, state = current
+        pending, state = current
         state['mask'] = deepcopy(mask)
-        e._status = '2/4 正在读取原片通道，准备透明边缘参照…可取消'
+        e._status = '2/4 正在读取图像内容通道（调色前），准备透明边缘参照…可取消'
         options = {'channel':'auto','black':0,'white':255,'gamma':1.,'invert':False,'radius':32,
                    'ai':True,'interior':state['interior'],'detail':False,'color':True}
         e._request('channel_preview',mask=state['mask'],options=options,initial=True,expected_sha256=e._sha,
+                   analysis_layers=deepcopy(pending['layer_snapshot']),
                    **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}),
                    **({'scope_extent':state['scope_extent']} if state.get('scope_extent') else {}),
                    context={'channel_auto':True,'token':token})
@@ -73,6 +78,7 @@ def ready(e, result, context, generation):
         if current is None or generation != e._generation:
             return
         _, state = current
+        state['content_reference']=deepcopy(result.get('content_reference'))
         if state.get('scope_limit'):
             state['mask']=validate_mask(result['mask'])
             state['scope_limit']=validate_mask(result['scope_limit'])
@@ -85,6 +91,7 @@ def ready(e, result, context, generation):
             state['tune_preparing']=True
             e._status='2/4 正在准备原像素通道与采样参照，交给AI选择参数…可取消'
             e._request('channel_evidence',mask=state['mask'],options=options,expected_sha256=e._sha,
+                       **_basis(state),
                        **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}),
                        context={'token':state['token']})
             return
@@ -96,6 +103,7 @@ def ready(e, result, context, generation):
 def _extract(e,state):
     e._status='3/4 正在结合通道与 AI 细化原图透明边缘…可取消'
     e._request('matte',method='channel',mask=state['mask'],channel_options=state['options'],auto_token=state['token'],
+               **_basis(state),
                compare_native=True,
                **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}))
 
@@ -108,6 +116,8 @@ def tune_ready(e,result,context,generation):
         if not state.pop('tune_preparing',False):return
         if result['options']!=state['options']:
             raise ValueError('通道参照参数已变化，原范围保留')
+        if result.get('content_reference')!=state.get('content_reference'):
+            raise ValueError('图像内容参照已变化，AI通道参数未应用')
         state['tuning']=True
         images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=item['lossless'])}
                 for item in result['images']]
@@ -143,6 +153,8 @@ def complete(e, result, token):
         if current is None:
             return
         pending, state = current
+        if result['quality'].get('content_sha256')!=(state.get('content_reference') or {}).get('sha256'):
+            raise ValueError('图像内容已变化，透明度结果未应用')
         if 'review_boxes' in result and not state['revision']:
             state['candidate_boxes']=deepcopy(result['review_boxes'])
             result={key:value for key,value in result.items() if key!='review_boxes'}
@@ -161,6 +173,7 @@ def complete(e, result, token):
             state['result']=deepcopy(result)
             e._status='3/4 正在结合人物外缘与头发分区处理原像素边缘…可取消'
             e._request('matte',method='hair',mask=mask,auto_token=state['token'],
+                       **_basis(state),
                        **({'review_boxes':state['candidate_boxes']} if state.get('candidate_boxes') is not None else {}),
                        **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}))
             return
@@ -186,6 +199,7 @@ def complete(e, result, token):
             state['alternatives']=alternatives
             e._status='4/4 正在准备通道与 AI 独立抠图，比较相同原图边缘…可取消'
             e._request('matte_candidate',layers=deepcopy(e._layers),expected_sha256=e._sha,
+                       **_basis(state),
                        comparison_masks={key:value['mask'] for key,value in state['alternatives'].items()},
                        comparison_target=(state['target_id'] or e._selected) if state['bound'] else None,
                        **({'review_boxes':state['candidate_boxes']} if state.get('candidate_boxes') is not None else {}),
@@ -205,6 +219,7 @@ def _prepare_review(e,state,token):
     e._status = '4/4 正在准备实际透明输出与原像素对照，核对抠图质量…可取消'
     boxes=state.get('review_boxes') if state['revision'] else state.get('comparison_boxes',state.get('candidate_boxes'))
     e._request('matte_candidate', mask=mask, layers=staged, expected_sha256=e._sha,
+               **_basis(state),
                target_context=bool(state.get('hair')),
                final_review=bool(state['revision']),
                **({'detail_points':state['corrections']} if state['revision'] and state.get('corrections') and state.get('hair') else {}),
@@ -218,6 +233,8 @@ def review_ready(e, result, context, generation):
         if current is None or generation != e._generation:
             return
         pending, state = current
+        if result.get('content_reference')!=state.get('content_reference'):
+            raise ValueError('图像内容参照已变化，抠图检查未应用')
         expected=state.get('review_boxes') if state['revision'] else state.get('comparison_boxes',state.get('candidate_boxes'))
         if expected is not None and result.get('boxes')!=expected:
             raise ValueError('抠图比较位置与本次细化范围不一致，原范围保留')
@@ -323,6 +340,7 @@ def reviewed(e, review):
                 state['composing']=True
                 e._status='4/4 正在按边缘选用通道与 AI，检查连接处和实际透明输出…可取消'
                 e._request('matte_candidate',layers=deepcopy(e._layers),expected_sha256=e._sha,
+                           **_basis(state),
                            comparison_masks={key:value['mask'] for key,value in alternatives.items()},
                            comparison_target=(state['target_id'] or e._selected) if state['bound'] else None,
                            composition_regions=choices,review_boxes=deepcopy(state['comparison_boxes']),
@@ -349,6 +367,7 @@ def reviewed(e, review):
                 state['points_pending']=True
                 e._status='4/4 正在放大发丝参照原片，核对 AI 的真实落点…可取消'
                 e._request('matte_point_evidence',corrections=deepcopy(corrections),review_boxes=state['review_boxes'],
+                           **_basis(state),
                            context_points=state.get('context_points',False),expected_sha256=e._sha,context={'token':state['token']})
             else:
                 _correct(e,state,corrections)
@@ -406,6 +425,7 @@ def _correct(e, state, corrections):
     state['corrections']=deepcopy(corrections)
     e._status='4/4 已发现局部误选，AI 正在修正范围后重新检查…可取消'
     e._request('matte',method='correction',mask=state['result']['mask'],
+               **_basis(state),
                corrections=deepcopy(corrections),review_boxes=state['review_boxes'],auto_token=state['token'],
                **({'scope_limit':state['scope_limit']} if state.get('scope_limit') else {}),
                **({'source_point_proposal':deepcopy(state['point_corrections'])}
@@ -418,6 +438,8 @@ def points_ready(e, result, context, generation):
         current=_current(e,context['token'])
         if current is None or generation!=e._generation:return
         pending,state=current
+        if result.get('content_reference')!=state.get('content_reference'):
+            raise ValueError('图像内容参照已变化，发丝落点未应用')
         if not state.get('points_pending') or state['revision']:return
         state['points_pending']=False;state['points_reviewing']=True
         state['point_workspace']={'correction_method':'hair','revision':0,'edge_count':len(state['review_boxes']),

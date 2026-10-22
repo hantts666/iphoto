@@ -75,6 +75,11 @@ def test_real_worker_color_check_precedes_geometry_and_never_commits_alone(qt_ap
         phases=[]
         def server(payload):
             context=json.loads(payload['messages'][1]['content'][0]['text'])
+            if context.get('comparison_candidates'):
+                phases.append('compare')
+                assert (editor._layers,editor._candidate,editor._cursor)==before
+                return completion({'status':'select','candidate':'channel','regions':[],
+                                   'summary':'受控选用通道候选，尚未通过颜色和范围检查'})
             if context.get('color_only'):
                 phases.append('color')
                 assert (editor._layers,editor._candidate,editor._cursor)==before
@@ -98,12 +103,12 @@ def test_real_worker_color_check_precedes_geometry_and_never_commits_alone(qt_ap
                 else:editor._generation+=1
             wait_for(lambda:not editor.busy and settled(editor),seconds=45)
         if outcome=='accept':
-            assert phases==['color','geometry'] and editor._cursor==before[2]+1
+            assert phases==['compare','color','geometry'] and editor._cursor==before[2]+1
             after=deepcopy(editor._layers);editor.undo();assert editor._layers==before[0]
             editor.redo();assert editor._layers==after
         else:
             assert (editor._layers,editor._candidate,editor._cursor)==before
-            if outcome=='geometry_reject':assert phases==['color','geometry']
+            if outcome=='geometry_reject':assert phases==['compare','color','geometry']
             else:assert 'geometry' not in phases
         assert not editor.aiChannelPreparing
     finally:editor.close()

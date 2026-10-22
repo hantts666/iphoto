@@ -11,7 +11,9 @@ from ..paths import ROOT
 
 def _session_key(request):
     token = request.get('channel_session')
-    return (token,request.get('source_path'),request.get('source_sha')) if token else None
+    reference=request.get('content_reference')
+    content=reference.get('sha256') if isinstance(reference,dict) else None
+    return (token,request.get('source_path'),request.get('source_sha'),content) if token else None
 
 
 def _retire(self):
@@ -135,7 +137,7 @@ def read(self):
 
                 complete(self, response["result"], points=active.get("points", []) if active.get("method") == "neural" else None)
             elif current:
-                if active.get('preview_only') and 'channel_token' in active:
+                if 'channel_token' in active:
                     self._channel_mask.failed(response.get('error', '实际效果预览失败'),
                         {'token':active['channel_token'], 'revision':active['channel_revision']})
                 self._status = ("AI 抠图未通过像素验证，原范围保留" if active.get('method')=='correction' and 'auto_token' in active
@@ -146,7 +148,7 @@ def read(self):
             self._matte_active = None
             if getattr(self,'_matte_session',None) or active.get('channel_session'):
                 _retire(self)
-            if active.get('preview_only') and 'channel_token' in active:
+            if 'channel_token' in active:
                 self._channel_mask.failed('实际效果预览失败，原范围保留',
                     {'token':active['channel_token'], 'revision':active['channel_revision']})
             self._notify("处理边缘细化结果失败：" + str(exc), True)
@@ -246,7 +248,7 @@ def finished(self, *_):
     self._matte_fresh = False
     self._matte_session = None
     if had_active and not aborted and not self._closing:
-        if active.get('preview_only') and 'channel_token' in active:
+        if 'channel_token' in active:
             self._channel_mask.failed('计算进程已退出，原范围保留；可重试',
                 {'token':active['channel_token'], 'revision':active['channel_revision']})
         self._notify("边缘细化进程已退出，原选区保留；可重试", True)
@@ -267,7 +269,7 @@ def error(self, reason):
     self._matte_fresh = False
     self._matte_session = None
     if not aborted and not self._closing:
-        if active and active.get('preview_only') and 'channel_token' in active:
+        if active and 'channel_token' in active:
             self._channel_mask.failed('计算进程未能启动，原范围保留；可重试',
                 {'token':active['channel_token'], 'revision':active['channel_revision']})
         self._notify("边缘细化进程未能启动，原选区保留", True)

@@ -17,7 +17,7 @@ from test_matte_points import completion
 @pytest.mark.parametrize('outcome',['keep','revise','reject','cancel','stale','failure','malformed'])
 def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(qt_app,ai_store,tmp_path,outcome):
     image,mask,boxes=scene();path=tmp_path/'source.png';image.save(path)
-    editor=Editor(ai_store=ai_store);captured={};expected={};pixel_calls=[];gate=Event();request=editor._request
+    editor=Editor(ai_store=ai_store);captured={};expected={};pixel_calls=[];phases=[];gate=Event();request=editor._request
     def dispatch(op,**data):
         if op=='matte' and data.get('method')=='correction':captured.update(data);pixel_calls.append(deepcopy(data));return
         return request(op,**data)
@@ -40,9 +40,12 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
             content=payload['messages'][1]['content'][1:]
             for label,picture in zip(content[::2],content[1::2]):
                 url=picture['image_url']['url']
-                native=(context['mode']=='matte_points' or '质量对照' in label['text'] or '定位图（' in label['text'])
-                assert url.startswith('data:image/png;base64,' if native else 'data:image/jpeg;base64,')
+                native=(context['mode']=='matte_points' or context.get('color_only') or '质量对照' in label['text'] or '定位图（' in label['text']
+                        or '原像素候选黑底' in label['text'])
+                actual_mime=url.partition(';')[0]
+                assert actual_mime==('data:image/png' if native else 'data:image/jpeg'),(context['mode'],label['text'])
             if context['mode']=='matte_points':
+                phases.append('points')
                 if '上次回复未通过程序校验' in payload['messages'][0]['content']:
                     assert payload['enable_thinking'] is False and 'thinking_budget' not in payload
                     assert payload['response_format']=={'type':'json_object'}
@@ -62,6 +65,11 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
                 return completion({'status':'revise' if outcome in ('revise','malformed') else 'reject' if outcome=='reject' else 'keep',
                                    'summary':'控制身份检查结果','corrections':corrections if outcome in ('revise','malformed') else []})
             assert context['mode']=='matte_review' and context['revision']==1
+            assert editor._layers==original and editor._cursor==cursor
+            if context.get('color_only'):
+                phases.append('color')
+                return completion({'status':'accept','summary':'控制前景颜色检查','corrections':[]})
+            phases.append('final')
             corrected=expected.get('corrections',[patch])
             details=sum(point[2]==2 for item in corrected for point in item['points'])
             assert context['strand_detail_count']==details
@@ -102,7 +110,7 @@ def test_strand_preflight_cannot_publish_without_pixel_result_and_final_review(q
             assert editor._layers!=original and len(editor._layers)==len(original) and editor._cursor==cursor+1
             assert editor._layer()['recipe']==original[-1]['recipe']
             editor.undo();assert editor._layers==original
-            assert len(requests)==2
+            assert len(requests)==3 and phases==['points','color','final']
         else:
             assert not captured and editor._layers==original and editor._cursor==cursor
             assert len(requests)==(2 if outcome=='malformed' else 1)

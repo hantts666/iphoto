@@ -98,13 +98,13 @@ Dialog {
             Caption { text: "预览" }
             ComboBox {
                 objectName: "channelPreviewViewBox"; implicitWidth: 145
-                model: [{text:"黑白透明度",value:"alpha"},{text:"白底抠图",value:"white"},{text:"黑底抠图",value:"black"},{text:"原照片",value:"source"},{text:"原始通道",value:"channel"}]
+                model: [{text:"黑白透明度",value:"alpha"},{text:"白底抠图",value:"white"},{text:"黑底抠图",value:"black"},{text:"图像内容",value:"source"},{text:"原始通道",value:"channel"}]
                 textRole: "text"; valueRole: "value"
                 currentIndex: Math.max(0,model.findIndex(function(item) { return item.value===root.channel.view }))
                 enabled: !root.editor.busy && !root.channel.loading && root.channel.previewUrl.length>0
                 onActivated: { root.comparingChannels = false; root.channel.setView(currentValue) }
             }
-            Caption { objectName: "channelPreviewStage"; text: root.comparingChannels ? "原始通道缩略对照 · 点击选用" : root.channel.view==="channel" ? "原始颜色通道 · 未调灰度" : root.channel.view==="source" ? "原照片 · 对照细节" : root.channel.showingResult ? "实际抠图效果" : root.config.ai===true || root.config.color===true ? "通道草图 · 尚未细化或去串色" : "通道透明度"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
+            Caption { objectName: "channelPreviewStage"; text: root.comparingChannels ? "原始通道缩略对照 · 点击选用" : root.channel.view==="channel" ? "原始颜色通道 · 未调灰度" : root.channel.view==="source" ? "图像内容 · 调色前" : root.channel.showingResult ? "实际抠图效果" : root.config.ai===true || root.config.color===true ? "通道草图 · 尚未细化或去串色" : "通道透明度"; Layout.fillWidth:true; wrapMode:Text.Wrap; font.pixelSize:10 }
             Action {
                 objectName: "channelChoicesButton"; text: root.comparingChannels ? "返回预览" : "比较通道"; subtle: true
                 enabled: !root.editor.busy && !root.channel.loading && root.channel.channelChoices.length>0

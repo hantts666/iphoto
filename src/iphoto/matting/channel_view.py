@@ -6,7 +6,7 @@ from ..document import raster_mask
 MAX_NATIVE_VIEW = 8_000_000
 
 
-def native_previews(source, alpha, reference, radius, *, layers=None, mask=None, whole=False, channel=None):
+def native_previews(source, alpha, reference, radius, *, layers=None, mask=None, whole=False, channel=None, content=None):
     """One native frame for draft/result comparisons, including export colours.
 
     Large views are delivered at display size. A view advertised as 100% is
@@ -27,7 +27,9 @@ def native_previews(source, alpha, reference, radius, *, layers=None, mask=None,
             box = (max(0, bounds[0]-margin), max(0, bounds[1]-margin),
                    min(source.width, bounds[2]+margin), min(source.height, bounds[3]+margin))
     native = (box[2]-box[0])*(box[3]-box[1]) <= MAX_NATIVE_VIEW
-    original = source.crop(box).convert('RGB')
+    if content is not None and content.size!=source.size:
+        raise ValueError('图像内容与照片坐标不一致')
+    original = (source if content is None else content).crop(box).convert('RGB')
     cropped = alpha.crop(box)
     def pictures():
         yield 'alpha', cropped
@@ -53,7 +55,7 @@ def channel_choices(source, box):
     from ..engine import preview
     from .channels import CHANNELS, CHANNEL_NAMES, channel_planes
     overview = preview(source.crop(box).convert('RGB'), 192)
-    yield '', '原照片', overview
+    yield '', '图像内容', overview
     for name, plane in zip(CHANNELS, channel_planes(overview)):
         yield name, CHANNEL_NAMES[name] + '通道', Image.fromarray(plane)
 

@@ -17,7 +17,9 @@ def channel_session(request):
             or request.get('method')!='channel' or type(request.get('preview_only')) is not bool
             or token!=request.get('channel_token')):
         raise ValueError('通道计算会话无效，原范围保留')
-    return token, request.get('source_path'), request.get('source_sha')
+    reference=request.get('content_reference')
+    content=reference.get('sha256') if isinstance(reference,dict) else None
+    return token, request.get('source_path'), request.get('source_sha'),content
 
 
 def execute(request, *, session=None, solver=None):
@@ -25,8 +27,10 @@ def execute(request, *, session=None, solver=None):
         if request.get("op") != "matte":
             raise ValueError("未知边缘细化操作")
         key = channel_session(request)
+        reference=request.get('content_reference')
+        content_id=reference.get('sha256') if isinstance(reference,dict) else None
         if session is not None and (request.get('method')!='channel'
-                or (request.get('channel_token'),request.get('source_path'),request.get('source_sha'))!=session
+                or (request.get('channel_token'),request.get('source_path'),request.get('source_sha'),content_id)!=session
                 or key is not None and key!=session):
             raise ValueError('通道计算会话已变化，原范围保留')
         method = request.get("method", "classic")
@@ -37,6 +41,9 @@ def execute(request, *, session=None, solver=None):
         source = load_source(Path(request["source_path"]))
         if source.digest != request["source_sha"]:
             raise ValueError("源照片已变化，原选区保持不变")
+        from ..analysis_content import resolve
+        content_reference=request.get('content_reference')
+        content=resolve(source,content_reference)
         mask = validate_mask(request["mask"])
         native_candidate = {} if request.get('compare_native') is True and method=='channel' else None
         if method in ('channel','correction','hair'):
@@ -47,9 +54,9 @@ def execute(request, *, session=None, solver=None):
             if method=='hair':
                 from .hair import refine_local, refine_edges
                 if 'stroke' in request:
-                    mask,quality=refine_local(source.image,mask,request['stroke'],points=request.get('points',[]),progress=channel_progress)
+                    mask,quality=refine_local(content,mask,request['stroke'],points=request.get('points',[]),progress=channel_progress)
                 else:
-                    mask,quality=refine_edges(source.image,mask,boxes=request.get('review_boxes'),progress=channel_progress)
+                    mask,quality=refine_edges(content,mask,boxes=request.get('review_boxes'),progress=channel_progress)
             elif method=='correction':
                 from .correction import correct
                 learned = None
@@ -58,11 +65,11 @@ def execute(request, *, session=None, solver=None):
                     if learned_available():
                         from .learned import LearnedTrimap
                         learned = LearnedTrimap()
-                mask,quality=correct(source.image,mask,request['corrections'],request['review_boxes'],progress=channel_progress,
+                mask,quality=correct(content,mask,request['corrections'],request['review_boxes'],progress=channel_progress,
                                      hair=request.get('hair',False),context_points=request.get('context_points',False),
                                      source_point_proposal=request.get('source_point_proposal'),learned=learned)
             else:
-                mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress,
+                mask, quality = estimate(content, mask, request['channel_options'], progress=channel_progress,
                                          native_candidate=native_candidate,neural=solver)
                 if solver is not None and request['channel_options'].get('ai'):
                     quality={**quality,'reused_alpha':solver.reused,'computed_tiles':solver.computed_tiles}
@@ -78,13 +85,17 @@ def execute(request, *, session=None, solver=None):
             if "stroke" in request:
                 from .local import refine as refine_local
 
-                mask, quality = refine_local(source.image, mask, request["stroke"],
+                mask, quality = refine_local(content, mask, request["stroke"],
                                              points=request.get("points", []), progress=progress)
             else:
-                mask, quality = refine(source.image, mask, request["radius"],
+                mask, quality = refine(content, mask, request["radius"],
                                        points=request.get("points", []), progress=progress)
         else:
-            mask, quality = refine_alpha(source.image, mask, request["radius"])
+            mask, quality = refine_alpha(content, mask, request["radius"])
+        if content_reference is not None:
+            quality={**quality,'content_sha256':content_reference['sha256']}
+            if native_candidate:
+                native_candidate['quality']['content_sha256']=content_reference['sha256']
         if 'scope_limit' in request:
             from .scope import restrict
             mask=restrict(mask,request['scope_limit'],source.image.size)
