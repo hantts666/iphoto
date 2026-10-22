@@ -4,7 +4,7 @@ from copy import deepcopy
 import base64
 from io import BytesIO
 from ..engine import LABELS, PRESETS, RANGES, Recipe, RECIPE_FIELDS
-from ..document import new_layer, raster_mask, raster_mask_cached, validate_layers, MAX_LAYERS
+from ..document import new_layer, raster_mask, raster_mask_cached, validate_layers, validate_mask, MAX_LAYERS
 from PIL import Image
 from ..ai_layer_edits import validate_layer_controls
 from ..ai_layer_groups import validate_group_plan
@@ -215,6 +215,56 @@ def _consume_selection(self, state):
     self._selection_target_id = ""
     self._pixel_points, self._pixel_hint = [], None
     self._draft_history, self._draft_cursor = [], 0
+
+
+def applyRangeMask(self, mask, expected, *, target_id='', name='局部调整'):
+    """Publish an explicitly accepted channel range in one document command.
+
+    A bound correction updates its layer. An unbound range creates an
+    independent adjustment with the same parent policy as manual selections.
+    No temporary draft transition or second output confirmation is needed.
+    """
+    if not self.hasImage or self.busy or self.hasRegionDraft:
+        raise ValueError('当前不能使用此范围，原有图层与选区保留')
+    if (self._generation!=expected['generation'] or self._sha!=expected['sha']
+            or self._selected!=expected['layer_id'] or self._layers!=expected['layers']
+            or self._candidate!=expected['candidate'] or self._selection_target_id!=expected['target_id']):
+        raise ValueError('照片、范围或图层已变化，过期结果未应用')
+    mask = validate_mask(mask)
+    # Channel output is a native alpha bitmap. A 256/512px occupancy check
+    # can erase a real low-coverage strand before the command even starts.
+    from ..masks import bitmap_has_coverage
+    if (mask['base']!='empty' or mask['ops'] or mask['inverted'] or mask['feather']
+            or mask.get('edge_shift',0) or not mask.get('bitmap')):
+        raise ValueError('通道结果缺少完整透明度，原范围保留')
+    if not bitmap_has_coverage(mask['bitmap']):
+        raise ValueError('当前范围为空，请调整通道或反转后再使用')
+    if target_id and target_id!=self._selected:
+        raise ValueError('原图层已变化，范围未保存')
+    if not target_id and len(self._layers)>=MAX_LAYERS:
+        raise ValueError('图层与组最多 32 项，请先整理图层后再使用此范围')
+    prepared = deepcopy(self._layers)
+    current = next(item for item in prepared if item['id']==self._selected)
+    if current['kind']!='group':
+        current['recipe'],current['locked']=dict(self._recipe),sorted(self._locked)
+    if target_id:
+        current['mask']=mask
+        selected=target_id
+    else:
+        layer=new_layer(name,True,self._selected if self.activeIsGroup else self.activeParentId)
+        layer['mask']=mask
+        prepared.append(layer)
+        selected=layer['id']
+    prepared=validate_layers(prepared)
+    # Finish prior gestures, then record precisely this range command.
+    self._commit()
+    self._layers,self._selected=prepared,selected
+    _consume_selection(self,'confirmed')
+    self._load_layer()
+    self._commit()
+    self._change()
+    self._selection.showAppliedResult(selected)
+    return selected
 
 
 def addLocalLayers(self, proposed, *, consume_selection=False, selection_state="discarded", allow_pixel_patch=False):

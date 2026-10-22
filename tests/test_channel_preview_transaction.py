@@ -26,7 +26,7 @@ def prepared(editor,tmp_path):
 
 
 @pytest.mark.parametrize('preview_first',[False,True])
-def test_real_channel_result_creates_layer_bound_draft_only_when_applied(qt_app,ai_store,tmp_path,monkeypatch,preview_first):
+def test_real_channel_result_saves_layer_directly_only_when_applied(qt_app,ai_store,tmp_path,monkeypatch,preview_first):
     editor=Editor(ai_store=ai_store)
     try:
         original=prepared(editor,tmp_path);before=snapshot(editor);channel=editor.channelMask
@@ -42,14 +42,15 @@ def test_real_channel_result_creates_layer_bound_draft_only_when_applied(qt_app,
             wait_for(lambda:channel.hasResult and not channel.loading and settled(editor),seconds=45)
             assert snapshot(editor)==before
         channel.apply()
-        wait_for(lambda:editor.hasSelectionDraft and not channel.opened and settled(editor),seconds=45)
+        wait_for(lambda:not channel.opened and settled(editor),seconds=45)
         assert requests.count('matte')==1
-        assert editor._layers==before[0] and editor._cursor==before[3]
-        assert editor._selection_target_id==editor._selected
-        final=deepcopy(editor._candidate)
-        assert final!=original and editor._draft_history==[original,final]
-        editor.undo();assert editor._candidate==original
-        editor.redo();assert editor._candidate==final
+        final=deepcopy(editor._layer()['mask'])
+        expected=deepcopy(before[0]);next(item for item in expected if item['id']==editor._selected)['mask']=final
+        assert editor._layers==expected and editor._cursor==before[3]+1
+        assert not editor.hasSelectionDraft and editor._selection_target_id=='' and editor._draft_history==[]
+        assert final!=original and editor.selection.pickedLayerId==editor.activeLayerId
+        editor.undo();assert editor._layer()['mask']==original and editor._layers==before[0]
+        editor.redo();assert editor._layer()['mask']==final and not editor.hasSelectionDraft
     finally:editor.close()
 
 

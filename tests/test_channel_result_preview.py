@@ -66,9 +66,11 @@ def test_real_ai_preview_native_views_export_and_cached_apply_are_atomic(canvas,
     ui.click('channelApplyButton')
     wait_for(lambda: not channel.opened and settled(e))
     assert requests.count('matte') == 1
-    assert e._candidate == result['mask'] and e._layers == before[1]
-    final = deepcopy(e._candidate); e.undo(); assert e._candidate == before[0]
-    e.redo(); assert e._candidate == final
+    assert not e.hasSelectionDraft and e._layer()['mask'] == result['mask']
+    expected=deepcopy(before[1]);next(item for item in expected if item['id']==e._selected)['mask']=result['mask']
+    assert e._layers==expected and e._cursor==before[3]+1
+    final = deepcopy(e._layer()['mask']); e.undo(); assert e._layers==before[1]
+    e.redo(); assert e._layer()['mask']==final
     wait_for(lambda: settled(e))
     target = tmp_path/'actual-cutout.png'
     assert e.exportRange(str(target), 'cutout')
@@ -137,8 +139,9 @@ def test_invalid_or_unchanged_option_preserves_real_cached_result_without_recalc
             assert (channel.options, channel.state, channel._result, channel._views, channel._result_views) == original
             assert not channel.timer.isActive() and unchanged(e) == before
         channel.apply(); wait_for(lambda: not channel.opened and settled(e))
-        assert 'matte' not in requests and e._candidate == original[2]['mask']
-        assert e._layers == before[1]
+        assert 'matte' not in requests and not e.hasSelectionDraft and e._layer()['mask']==original[2]['mask']
+        expected=deepcopy(before[1]);next(item for item in expected if item['id']==e._selected)['mask']=original[2]['mask']
+        assert e._layers==expected
     finally: e.close()
 
 

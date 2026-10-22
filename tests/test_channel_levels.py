@@ -92,11 +92,12 @@ def test_switching_restores_levels_but_keeps_shared_controls_and_exact_apply(qt_
         # preserves the full canvas. The fixture's independent bbox is known.
         assert actual.tobytes()==expected.crop((19,0,221,160)).tobytes()
         channel.apply();wait_for(lambda:not channel.opened and settled(editor))
-        final=deepcopy(editor._candidate)
+        final=deepcopy(editor._layer()['mask'])
         assert raster_mask(final,image.size).tobytes()==expected.tobytes()
-        assert (editor._layers,editor._cursor)==before[1:3]
-        editor.undo();wait_for(lambda:settled(editor));assert editor._candidate==before[0]
-        editor.redo();wait_for(lambda:settled(editor));assert editor._candidate==final
+        assert editor._layers[:-1]==before[1] and editor._cursor==before[2]+1
+        assert not editor.hasSelectionDraft
+        editor.undo();wait_for(lambda:settled(editor));assert editor._layers==before[1]
+        editor.redo();wait_for(lambda:settled(editor));assert editor._layer()['mask']==final
     finally:editor.close()
 
 

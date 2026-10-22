@@ -177,6 +177,12 @@ Dialog {
         Action { objectName: "channelCloseButton"; text: root.editor.matteBusy ? "取消计算" : "关闭"; onClicked: { if(root.editor.matteBusy) root.editor.selection.cancelTask(); else root.close() } }
         Item { Layout.fillWidth:true }
         Action { objectName: "channelResultPreviewButton"; text: root.channel.hasResult ? "实际效果已就绪" : "预览实际效果"; visible: root.config.whole!==true && (root.config.ai===true || root.config.color===true); enabled: !root.editor.busy && !root.channel.loading && root.previewReady && !root.channel.hasResult; onClicked: root.channel.previewResult() }
-        Action { objectName: "channelApplyButton"; text:root.channel.hasResult ? "使用实际结果" : root.config.whole===true ? "生成选区" : "应用到当前范围"; primary:true; enabled:!root.editor.busy && !root.channel.loading && root.previewReady; onClicked:root.channel.apply() }
+        Action {
+            objectName: "channelApplyButton"
+            text: root.channel.savesCurrentLayer ? "使用并保存此层范围" : "使用并开始调整"
+            hint: root.channel.savesCurrentLayer ? "直接更新此层范围，保留参数；可一步撤销" : "自动建立独立调整层，无需再次选择输出位置；可一步撤销"
+            primary:true; enabled:!root.editor.busy && !root.channel.loading && root.previewReady
+            onClicked:root.channel.apply()
+        }
     }
 }

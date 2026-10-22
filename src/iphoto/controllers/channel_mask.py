@@ -121,6 +121,11 @@ class ChannelMaskController(QObject):
     def loading(self):
         return self._loading
 
+    @Property(bool, notify=changed)
+    def savesCurrentLayer(self):
+        return bool(self.state and (self.state['target_id']
+                    or self.state['candidate'] is None and not self._options.get('whole')))
+
     @Slot()
     def open(self):
         e = self.editor
@@ -299,14 +304,23 @@ class ChannelMaskController(QObject):
             self._publish(result)
 
     def _publish(self, result):
-        from ..document import validate_mask
-        from .matting import complete
-        result = {**result, 'mask':validate_mask(result['mask'])}
-        create_draft = self.state['candidate'] is None
+        from .layers import applyRangeMask
+        from .matting import channel_feedback
+        from ..matting.channels import CHANNEL_NAMES
+        if not self._valid():
+            return
+        target = self.state['target_id'] or (self.state['layer_id'] if self.savesCurrentLayer else '')
+        try:
+            applyRangeMask(self.editor,result['mask'],self.state,target_id=target,
+                           name='通道 · '+CHANNEL_NAMES[result['quality']['channel']])
+        except ValueError as exc:
+            self._loading=False
+            self._note=str(exc)
+            self.sessionTimer.start()
+            self.changed.emit()
+            return
         self.close()
-        if create_draft:
-            self.editor.beginSelection('current')
-        complete(self.editor, result)
+        channel_feedback(self.editor,result['quality'],applied=True)
 
     @Slot()
     def close(self):

@@ -127,6 +127,11 @@ def decode_bitmap(value, size):
     )
 
 
+def bitmap_has_coverage(value):
+    """Check a validated bitmap at its stored resolution, without a copy."""
+    return _decode(value['png'],value['width'],value['height']).getbbox() is not None
+
+
 def encode_bitmap(image, *, sampling=None, preserve_resolution=False):
     if sampling not in (None, "alpha"):
         raise ValueError("蒙版采样方式无效")
