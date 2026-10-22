@@ -147,7 +147,13 @@ Dialog {
         }
         RowLayout {
             visible: !root.comparingChannels && root.config.whole!==true
-            CheckBox { objectName: "channelUseAiBox"; text: "结合 AI 细化透明边缘"; checked: root.config.ai===true; enabled:!root.editor.busy; onClicked:root.channel.setOption("ai",checked) }
+            CheckBox {
+                objectName: "channelUseAiBox"; text: "结合 AI 细化透明边缘"
+                checked: root.config.ai===true; enabled:!root.editor.busy; hoverEnabled:true
+                ToolTip.visible:hovered
+                ToolTip.text:"开启时，通道参数提供保留／移除参照，透明边缘由 AI 估计；关闭后直接使用通道灰度。"
+                onClicked:root.channel.setOption("ai",checked)
+            }
             Item { Layout.fillWidth:true }
             Caption { text: "范围" }
             SpinBox { objectName: "channelRadiusBox"; editable:true; from:1; to:256; value:root.config.radius || 32; enabled:!root.editor.busy; onValueModified:root.channel.setOption("radius",value) }

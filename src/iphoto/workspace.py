@@ -110,6 +110,7 @@ class Editor(QObject):
         self._matte_buffer = b""
         self._matte_aborting = False
         self._matte_fresh = False
+        self._matte_session = None
         self._export_request = self._export_cancelled = None
         self._export_buffer = b""
         self._export_line_offset = 0

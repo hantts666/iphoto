@@ -33,7 +33,23 @@ class ChannelMaskController(QObject):
         self.timer.setSingleShot(True)
         self.timer.setInterval(160)
         self.timer.timeout.connect(self._refresh)
-        editor.changed.connect(self.changed.emit)
+        self.sessionTimer = QTimer(self)
+        self.sessionTimer.setSingleShot(True)
+        self.sessionTimer.setInterval(30000)
+        self.sessionTimer.timeout.connect(self._release_session)
+        editor.changed.connect(self._editor_changed)
+
+    def _editor_changed(self):
+        if self.state and not self._valid():
+            self.close()
+        else:
+            self.changed.emit()
+
+    def _release_session(self):
+        from .matte_process import release_session
+        token = (self.state or {}).get('token')
+        if token:
+            release_session(self.editor,token)
 
     def _valid(self):
         state = self.state
@@ -164,7 +180,9 @@ class ChannelMaskController(QObject):
                       if self._options.get('whole') else f"当前 {CHANNEL_NAMES[result['channel']]}通道；白色保留，黑色移除，灰色保留透明度。" + ('通道差异偏弱，需检查边缘。' if result['score'] < 2 else ''))
         self._note += ' 可切换100%拖动检查。' if self._native else ' 大范围预览已缩小显示。'
         if self._show_result:
-            self._note = '实际结果已就绪；黑白底使用与透明 PNG 相同的前景颜色恢复。' + '；'.join(self._result['quality'].get('warnings', []))
+            prefix = ('已沿用相同的 AI 透明边缘；' if self._result['quality'].get('reused_alpha')
+                      else '实际结果已就绪；')
+            self._note = prefix + '黑白底与透明 PNG 的前景颜色一致。' + '；'.join(self._result['quality'].get('warnings', []))
         if result.get('focused'):self._note='当前范围局部 · '+self._note
         self.changed.emit()
 
@@ -233,12 +251,14 @@ class ChannelMaskController(QObject):
             self.changed.emit()
             return
         self.timer.stop()
+        self.sessionTimer.stop()
         e._status = '正在结合通道灰度与AI细化原图透明边缘…可取消' if options['ai'] else '正在按原图提取通道透明度…可取消'
         if preview_only:
             self._loading = True
             self._note = '正在计算实际透明边缘，原范围保留…可取消'
         if e._request('matte', method='channel', mask=deepcopy(self.state['mask']), channel_options=options,
-                    channel_token=self.state['token'], channel_revision=self.state['revision'], preview_only=preview_only) is False:
+                    channel_token=self.state['token'], channel_session=self.state['token'],
+                    channel_revision=self.state['revision'], preview_only=preview_only) is False:
             self.cancelled()
         self.changed.emit()
 
@@ -247,6 +267,7 @@ class ChannelMaskController(QObject):
             return
         from ..document import validate_mask
         self._result = {'mask':validate_mask(result['mask']), 'quality':deepcopy(result['quality'])}
+        self.sessionTimer.start()
         self._note = '正在准备实际黑白底效果与前景颜色…'
         layers = deepcopy(self.state['layers'])
         target = self.state['target_id'] or (self.state['layer_id'] if self.state['candidate'] is None else '')
@@ -259,6 +280,7 @@ class ChannelMaskController(QObject):
         self.changed.emit()
 
     def cancelled(self):
+        self.sessionTimer.stop()
         if self._valid():
             self._loading = False
             self._note = '已取消计算，原范围保留；可调整参数后再预览。'
@@ -289,6 +311,8 @@ class ChannelMaskController(QObject):
     @Slot()
     def close(self):
         self.timer.stop()
+        self.sessionTimer.stop()
+        self._release_session()
         token = (self.state or {}).get('token')
         jobs = (self.editor._matte_active,self.editor._matte_pending)
         owned = bool(token and any(job and job.get('channel_token')==token for job in jobs))

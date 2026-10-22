@@ -1,4 +1,4 @@
-"""One-shot source-resolution alpha matting outside the main edit worker."""
+"""Isolated alpha matting, with bounded reuse for one manual channel dialog."""
 
 import json
 from pathlib import Path
@@ -9,19 +9,26 @@ from ..engine import load_source
 from .service import refine_alpha
 
 
-def main():
-    sys.stdin.reconfigure(encoding="utf-8")
-    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
-    line = sys.stdin.readline()
-    if not line:
-        return
-    request = {}
+def channel_session(request):
+    token = request.get('channel_session')
+    if token is None:
+        return None
+    if (not isinstance(token,str) or len(token)!=32 or any(c not in '0123456789abcdef' for c in token)
+            or request.get('method')!='channel' or type(request.get('preview_only')) is not bool
+            or token!=request.get('channel_token')):
+        raise ValueError('通道计算会话无效，原范围保留')
+    return token, request.get('source_path'), request.get('source_sha')
+
+
+def execute(request, *, session=None, solver=None):
     try:
-        if len(line) > 24 * 1024 * 1024:
-            raise ValueError("边缘细化请求过大")
-        request = json.loads(line)
         if request.get("op") != "matte":
             raise ValueError("未知边缘细化操作")
+        key = channel_session(request)
+        if session is not None and (request.get('method')!='channel'
+                or (request.get('channel_token'),request.get('source_path'),request.get('source_sha'))!=session
+                or key is not None and key!=session):
+            raise ValueError('通道计算会话已变化，原范围保留')
         method = request.get("method", "classic")
         if method not in ("classic", "neural", "channel", "correction", "hair"):
             raise ValueError("未知边缘细化方法")
@@ -56,7 +63,9 @@ def main():
                                      source_point_proposal=request.get('source_point_proposal'),learned=learned)
             else:
                 mask, quality = estimate(source.image, mask, request['channel_options'], progress=channel_progress,
-                                         native_candidate=native_candidate)
+                                         native_candidate=native_candidate,neural=solver)
+                if solver is not None and request['channel_options'].get('ai'):
+                    quality={**quality,'reused_alpha':solver.reused,'computed_tiles':solver.computed_tiles}
         elif method == "neural":
             from .neural import refine
 
@@ -101,7 +110,45 @@ def main():
             "generation": request.get("generation", 0),
             "ok": False, "error": str(exc)[:1000],
         }
-    print(json.dumps(response, ensure_ascii=False), flush=True)
+    return response
+
+
+def main():
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+    session, solver = None, None
+    for line in sys.stdin:
+        request = {}
+        try:
+            if len(line) > 24 * 1024 * 1024:
+                raise ValueError('边缘细化请求过大')
+            parsed = json.loads(line)
+            if not isinstance(parsed,dict):
+                raise ValueError('边缘细化请求无效')
+            request = parsed
+            key = channel_session(request)
+            if key is not None and solver is None:
+                from .session import ChannelSolver
+                solver = ChannelSolver()
+            response = execute(request,session=session,solver=solver)
+        except Exception as exc:
+            response={'id':request.get('id',-1),'op':'matte','generation':request.get('generation',0),
+                      'ok':False,'error':str(exc)[:1000]}
+            key = None
+        keep = bool(response.get('ok') and key is not None)
+        if keep:
+            response['channel_session'] = key[0]
+            session = key
+        print(json.dumps(response,ensure_ascii=False),flush=True)
+        if not keep:
+            return
+        # Keep only the model and one bounded alpha. Photo/guide/request
+        # buffers must not remain live while waiting for another user action.
+        from ..document import RASTER_CACHE
+        from ..masks import clear_decode_cache
+        RASTER_CACHE.clear()
+        clear_decode_cache()
+        del request,parsed,response,line
 
 
 if __name__ == "__main__":

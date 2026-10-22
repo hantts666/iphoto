@@ -1,4 +1,4 @@
-"""Cancellable, one-shot alpha matting process for foreground selection work."""
+"""Cancellable alpha work; manual channel dialogs can briefly reuse a session."""
 
 import json
 from pathlib import Path
@@ -7,6 +7,29 @@ import sys
 from PySide6.QtCore import QProcess
 
 from ..paths import ROOT
+
+
+def _session_key(request):
+    token = request.get('channel_session')
+    return (token,request.get('source_path'),request.get('source_sha')) if token else None
+
+
+def _retire(self):
+    self._matte_session = None
+    self._matte_fresh = False
+    if self._matte_process.state() != QProcess.NotRunning:
+        self._matte_aborting = True
+        self._matte_process.kill()
+
+
+def release_session(self, token):
+    session = self._matte_session
+    if session and session[0]==token and self._matte_active is None and self._matte_pending is None:
+        self._matte_session = None
+        self._matte_fresh = False
+        # An idle worker is waiting on stdin. EOF frees it without making
+        # publication of an already-computed result look like active work.
+        self._matte_process.closeWriteChannel()
 
 
 def queue(self, request):
@@ -33,8 +56,12 @@ def pump(self):
         return
     if state != QProcess.Running or not self._matte_fresh:
         return
+    if self._matte_session and self._matte_session != _session_key(self._matte_pending):
+        _retire(self)
+        return
     self._matte_active, self._matte_pending = self._matte_pending, None
     self._matte_fresh = False
+    self._matte_session = _session_key(self._matte_active)
     self._matte_process.write(
         (json.dumps(self._matte_active, ensure_ascii=False) + "\n").encode("utf-8")
     )
@@ -77,6 +104,16 @@ def read(self):
                     _progress(self, active, response["progress"])
                 continue
             self._matte_active = None
+            marker = response.get('channel_session')
+            if ((marker is not None or response.get('ok') and active.get('channel_session'))
+                    and marker != active.get('channel_session')):
+                raise ValueError('通道计算会话回复不匹配，原范围保留')
+            self._matte_fresh = bool(current and response.get('ok') and marker
+                                     and _session_key(active))
+            if not self._matte_fresh:
+                self._matte_session = None
+                if marker:
+                    _retire(self)
             if not current and 'auto_token' in active:
                 from .channel_auto import discard
                 discard(self, active['auto_token'])
@@ -107,15 +144,23 @@ def read(self):
             self.changed.emit()
         except Exception as exc:
             self._matte_active = None
+            if getattr(self,'_matte_session',None) or active.get('channel_session'):
+                _retire(self)
             if active.get('preview_only') and 'channel_token' in active:
                 self._channel_mask.failed('实际效果预览失败，原范围保留',
                     {'token':active['channel_token'], 'revision':active['channel_revision']})
             self._notify("处理边缘细化结果失败：" + str(exc), True)
+    if getattr(self,'_matte_pending',None):
+        pump(self)
 
 
 def _progress(self, active, progress):
     """Progress is informational; only the final reply may publish a mask."""
     if not isinstance(progress, dict):
+        return
+    if progress=={'phase':'reuse'} and active.get('method')=='channel' and active.get('channel_session'):
+        self._status='已复用相同原片与约束的透明度，正在准备实际效果…可取消'
+        self.changed.emit()
         return
     hair_phases = {'portrait':'AI 正在估计人物外缘透明度…可取消',
                    'hair_partition':'AI 正在区分头发、帽子、皮肤与衣物…可取消',
@@ -180,6 +225,7 @@ def stop(self):
     self._matte_active = self._matte_pending = None
     self._matte_buffer = b""
     self._matte_fresh = False
+    self._matte_session = None
     if self._matte_process.state() != QProcess.NotRunning:
         self._matte_aborting = True
         self._matte_process.kill()
@@ -198,6 +244,7 @@ def finished(self, *_):
     self._matte_active = None
     self._matte_buffer = b""
     self._matte_fresh = False
+    self._matte_session = None
     if had_active and not aborted and not self._closing:
         if active.get('preview_only') and 'channel_token' in active:
             self._channel_mask.failed('计算进程已退出，原范围保留；可重试',
@@ -218,6 +265,7 @@ def error(self, reason):
         self._matte_pending = None
     self._matte_buffer = b""
     self._matte_fresh = False
+    self._matte_session = None
     if not aborted and not self._closing:
         if active and active.get('preview_only') and 'channel_token' in active:
             self._channel_mask.failed('计算进程未能启动，原范围保留；可重试',
