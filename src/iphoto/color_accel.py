@@ -32,7 +32,7 @@ def _fused(rgb, controls):
         else:
             hue = f(f(f((red - green) / safe) + f(4)) * f(60))
         sat = f(delta / max(f(f(1) - abs(f(f(2) * light - f(1)))), f(1e-7))) if delta > 0 else f(0)
-        neutral = min(f(1), max(f(0), f(sat / f(.1))))
+        neutral = min(f(1), max(f(0), min(f(sat / f(.1)), f(delta / f(.12)))))
         neutral = f(f(neutral * neutral) * f(f(3) - f(f(2) * neutral)))
         hue_shift = sat_shift = light_shift = f(0)
         for band in range(8):

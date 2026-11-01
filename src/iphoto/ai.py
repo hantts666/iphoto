@@ -10,6 +10,7 @@ from .ai_settings import AISettings, PROVIDERS, SettingsStore
 from .ai_errors import content_inspection_failed
 from .engine import Recipe
 from .photo_strategy import parse_review as parse_photo_review
+from .photo_details import parse_details
 from .matte_review import parse_review as parse_matte_review
 from .matte_points import parse_points as parse_matte_points
 from .channel_advisor import parse_tune as parse_channel_tune
@@ -102,7 +103,7 @@ class AIController(QObject):
             phase = "正在精定位：" + self._context["workspace"]["_grounding_label"]
         else:
             task = {"scene": "分析画面", "selection": "定位范围", "targets": "选择对象",
-                    "photo_review": "3/4 成片效果检查", "matte_review":"4/4 抠图效果检查", "matte_points":"4/4 核对发丝落点", "channel_tune":"2/4 比较原像素通道参数", "regions": "规划分区", "advice": "修图建议", "auto": "智能修图",
+                    "photo_details":"放大精修嘴唇与皮肤细节", "photo_review": "3/4 成片效果检查", "matte_review":"4/4 抠图效果检查", "matte_points":"4/4 核对发丝落点", "channel_tune":"2/4 比较原像素通道参数", "regions": "规划分区", "advice": "修图建议", "auto": "智能修图",
                     "mask_points": "定位五官误选", "mask_review": "复查修正范围",
                     "mask_validate": "核对是否误删真实五官",
                     'mask_restore_validate': '核对新增五官覆盖',
@@ -357,6 +358,7 @@ class AIController(QObject):
                 "regions": "AI 正在规划分区图层…",
                 "auto": "AI 正在判断调整范围并规划图层…",
                 "photo_review": "3/4 AI 正在对照修改前后，检查边缘、肤色与细节…可取消",
+                "photo_details": "AI 正在放大检查实际风格结果，精调唇色与皮肤细节…可取消",
                 "repair": "AI 正在放大检查局部瑕疵并定位修复点…",
                 "matte_review":("4/4 AI 正在单独核对前景颜色与黑底串色…可取消"
                                 if (workspace or {}).get('color_only') is True else
@@ -449,6 +451,8 @@ class AIController(QObject):
                     )
                 elif context["mode"] == "photo_review":
                     result = parse_photo_review(response, context["workspace"])
+                elif context["mode"] == "photo_details":
+                    result = parse_details(response,context['workspace'])
                 elif context["mode"] == "matte_review":
                     result = parse_matte_review(response, context['workspace'])
                 elif context["mode"] == "matte_points":
@@ -523,7 +527,7 @@ class AIController(QObject):
             return False
         if (
             context["testing"]
-            or context["mode"] not in {"channel_tune", "matte_points", "matte_review", "photo_review", "auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate", "mask_restore_validate", "mask_reselect_validate"}
+            or context["mode"] not in {"photo_details", "channel_tune", "matte_points", "matte_review", "photo_review", "auto", "scene", "regions", "selection", "repair", "mask_points", "mask_review", "mask_validate", "mask_restore_validate", "mask_reselect_validate"}
             or context["validation_retry"]
             or context["abort"]
         ):

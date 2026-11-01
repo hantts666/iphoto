@@ -623,8 +623,9 @@ def main():
             raise ValueError('照片已变化，成片未应用')
         result = render_candidate(source.image, request['before'], request['proposed'],
                                   request.get('faces', []), cache, request['id'], request.get('soften', False),
-                                  foreground=request.get('foreground', False), inspection_box=request.get('inspection_box'))
-        current_crop_assets = {Path(item['path']) for item in result['images']}
+                                  foreground=request.get('foreground', False), inspection_box=request.get('inspection_box'),
+                                  inspect_details=request.get('inspect_details',False),soften_ids=request.get('soften_ids'))
+        current_crop_assets = {Path(item['path']) for item in result['images']+result.get('detail_images',[])}
         assets.extend(current_crop_assets)
         return result
 

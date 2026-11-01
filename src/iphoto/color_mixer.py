@@ -40,9 +40,11 @@ def hsl_to_rgb(hue, sat, light):
 
 def mix(rgb, recipe):
     hue, saturation, lightness = rgb_to_hsl(rgb)
-    # Nearly neutral pixels must not turn into a coloured fringe. Colour band
-    # adjustments fade smoothly to zero below 10% HSL saturation.
-    neutral = np.clip(saturation / .1, 0, 1)
+    # Relative HSL saturation alone is unstable near black: a two-code JPEG
+    # colour difference can otherwise receive a full selective lightness lift.
+    # Require meaningful encoded chroma as well; fully chromatic colours retain
+    # the complete adjustment and exact greys remain untouched.
+    neutral = np.clip(np.minimum(saturation / .1, (rgb.max(-1)-rgb.min(-1)) / .12), 0, 1)
     neutral = neutral * neutral * (3 - 2 * neutral)
     shifts = [np.zeros_like(hue) for _ in range(3)]
     for index, (name, _, center) in enumerate(COLORS):

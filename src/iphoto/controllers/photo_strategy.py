@@ -48,6 +48,13 @@ def prepare(self, proposed, origin):
         if current is None:
             return
         pending, state = current
+        if state.get('detail_building'):
+            details=state.pop('detail_building')
+            if len(details)!=len(proposed):
+                raise ValueError('细节精修分区数量改变，照片未应用')
+            state['detail_parts']={layer['id']:item['part'] for layer,item in zip(proposed,details)}
+            state['proposed']+=deepcopy(proposed)
+            return _render(self,pending,state,soften=True,soften_ids=[layer['id'] for layer in proposed])
         state['proposed'] = ([state['base']] if 'base' in state else []) + deepcopy(proposed)
         if state.get('generate'):
             state['preparing'] = True
@@ -63,14 +70,17 @@ def prepare(self, proposed, origin):
         self._notify(str(exc), True)
 
 
-def _render(self, pending, state, soften=False):
+def _render(self, pending, state, soften=False,soften_ids=None):
     from .face_inventory import current as current_faces
+    faces=deepcopy(current_faces(self))
+    inspect='base' in state and not state.get('details_checked') and len(state['proposed'])<min(4,MAX_LAYERS-len(self._layers))
+    if inspect:state['inspection_faces']=faces
     state['preparing'] = True
     self._status = ('3/4 正在核对人物位置并准备黑白底边缘…可取消' if state.get('foreground') else
                     '2/4 正在合成选区精修，核对边界与原图细节…可取消' if state.get('generate')
                     else '2/4 正在合成整体光色和局部精修，检查原图细节…可取消')
     self._request('photo_candidate', before=pending['layer_snapshot'], proposed=state['proposed'],
-                  faces=deepcopy(current_faces(self)), soften=soften,
+                  faces=faces, soften=soften,soften_ids=soften_ids,inspect_details=inspect,
                   expected_sha256=self._sha, foreground=state.get('foreground', False),
                   inspection_box=state.get('inspection_box'), context={'token': state['token']})
     self.changed.emit()
@@ -96,17 +106,59 @@ def ready(self, result, context, generation):
                                          expected_pixel_sha)
         state['proposed'] = result['proposed']
         state['preparing'] = False
+        if 'base' in state and not state.get('details_checked'):
+            state['details_checked']=True
+            if result.get('detail_faces'):
+                state['detail_reference']=result
+                state['detail_budget']=min(3,4-len(state['proposed']),MAX_LAYERS-len(self._layers)-len(state['proposed']))
+                state['detailing']=True
+                self._status='正在放大实际成片，检查唇色与皮肤纹理…可取消'
+                self.changed.emit()
+                images=[{'label':item['label'],'url':image_data_url(item['path'],lossless=item.get('lossless',False))}
+                        for item in result['detail_images']]
+                self.ai.plan(pending['text'],Recipe().to_dict(),[],result['images'][0]['path'],generation,'photo_details',
+                             {'faces':result['detail_faces'],'max_refinements':state['detail_budget'],'review_images':images})
+                return
+        _review(self,pending,state,result,frame_facts=frame_facts,position=position if state.get('foreground') else None)
+    except (ValueError, KeyError, OSError) as exc:
+        self._notify(str(exc), True)
+
+
+def details_planned(self,result):
+    from ..photo_details import regions_for_details
+    try:
+        current=_current(self)
+        if current is None:return
+        pending,state=current
+        if not state.pop('detailing',False):raise ValueError('细节精修阶段已变化，照片未应用')
+        reference=state.pop('detail_reference');state['detail_note']=result['summary']
+        if not result['refinements']:
+            return _review(self,pending,state,reference)
+        if len(result['refinements'])>state['detail_budget']:raise ValueError('细节精修图层位置不足')
+        regions=regions_for_details(result['refinements'],state['inspection_faces'])
+        state['detail_building']=deepcopy(result['refinements'])
+        self._status='正在按五官模型定位精修部位，合成唇色与纹理…可取消'
+        self.changed.emit()
+        if not pixel_selections.select_regions(self,regions,result['summary'],auto_apply=True,origin=pending):
+            raise ValueError('细节精修分区未能启动，照片未改变')
+    except (ValueError,KeyError,OSError) as exc:
+        self._notify(str(exc),True)
+
+
+def _review(self,pending,state,result,*,frame_facts=None,position=None):
+    try:
         state['reviewing'] = True
         images = [{**item, 'url': image_data_url(item['path'], lossless=item.get('lossless', False))} for item in result['images']]
         self._status = ('3/4 正在检查人物位置、黑白底边缘和不透明衣物…可取消' if state.get('foreground')
                         else '3/4 正在对比修改前后，检查边缘、肤色和局部质感…可取消')
         self.changed.emit()
-        self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], generation, 'photo_review',
+        self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], self._generation, 'photo_review',
                      {'revision': state['revision'], 'foreground': state.get('foreground', False),
                       'natural_development': 'base' in state,
                       **({'frame_facts': frame_facts,'position_check': position} if state.get('foreground') else {}),
                       'candidates': [{'layer_id': layer['id'], 'name': layer['name'], 'recipe': layer['recipe'],
                                       'mask_target':layer['mask'].get('semantic_target'), 'face_part':layer['mask'].get('face_part'),
+                                      'detail_part':state.get('detail_parts',{}).get(layer['id']),
                                       'whole_image': 'base' in state and index == 0} for index, layer in enumerate(state['proposed'])],
                       'review_images': [{'label': item['label'], 'url': item['url']} for item in images]})
     except (ValueError, KeyError, OSError) as exc:
@@ -145,7 +197,8 @@ def reviewed(self, result):
                  '\n已保存选区精修，范围外保持；可一步撤销、调强度或查看原图对比。' if state.get('generate')
                  else '\n已保存整体光色与局部精修，可一步撤销、调强度或查看原图对比。')
         message = (saved.strip() + '\nAI复查：' + result['summary'] if state.get('foreground') else
-                   state['direction'] + '\n成片检查：' + result['summary'] + saved)
+                   state['direction'] + ('\n细节精修：'+state['detail_note'] if state.get('detail_note') else '')
+                   + '\n成片检查：' + result['summary'] + saved)
         self._message('assistant', message,
                       state='applied', origin=origin)
         self._notify('4/4 AI重建前景已应用；可对比原图或一步撤销' if state.get('foreground')

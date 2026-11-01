@@ -17,6 +17,7 @@ from .ai_layer_groups import GROUP_SCHEMA, validate_group_plan
 from .ai_repair import REPAIRS_SCHEMA, REPAIR_SPOTS_SCHEMA, REPAIR_SPOTS_PROMPT, validate_repairs
 from .ai_mask_refinement import MASK_REFINEMENT_SCHEMA, POINTS_SCHEMA, POINTS_PROMPT, validate_request as validate_mask_refinement
 from .photo_strategy import DEVELOP_PROMPT, REVIEW_PROMPT as PHOTO_REVIEW_PROMPT, REVIEW_SCHEMA as PHOTO_REVIEW_SCHEMA
+from .photo_details import PROMPT as PHOTO_DETAILS_PROMPT,SCHEMA as PHOTO_DETAILS_SCHEMA
 from .matte_review import PROMPT as MATTE_REVIEW_PROMPT, FINAL_PROMPT as MATTE_FINAL_PROMPT, SCHEMA as MATTE_REVIEW_SCHEMA
 from .matte_color import PROMPT as MATTE_COLOR_PROMPT, SCHEMA as MATTE_COLOR_SCHEMA
 from .matte_compare import (PROMPT as MATTE_COMPARE_PROMPT, SCHEMA as MATTE_COMPARE_SCHEMA,
@@ -277,6 +278,7 @@ def build_payload(
                 "content": {
                     "auto": AUTO_PROMPT,
                     "photo_review": PHOTO_REVIEW_PROMPT,
+                    "photo_details": PHOTO_DETAILS_PROMPT,
                     "matte_review": MATTE_COLOR_PROMPT if color_matte_review else (MATTE_REGIONAL_PROMPT if regional_mattes else MATTE_COMPARE_PROMPT) if compare_mattes else MATTE_FINAL_PROMPT if final_matte_review else MATTE_REVIEW_PROMPT,
                     "matte_points": MATTE_POINTS_PROMPT,
                     "channel_tune": CHANNEL_TUNE_PROMPT,
@@ -302,7 +304,7 @@ def build_payload(
         ],
         "stream": False,
     }
-    if mode in ("photo_review", "matte_review", "matte_points", "channel_tune"):
+    if mode in ("photo_details", "photo_review", "matte_review", "matte_points", "channel_tune"):
         payload["messages"][1]["content"] = payload["messages"][1]["content"][:1]
         for item in review_images:
             payload["messages"][1]["content"].extend([{"type": "text", "text": item["label"]},
@@ -352,6 +354,7 @@ def build_payload(
                     "schema": {
                         "auto": AUTO_SCHEMA,
                         "photo_review": PHOTO_REVIEW_SCHEMA,
+                        "photo_details": PHOTO_DETAILS_SCHEMA,
                         "matte_review": MATTE_COLOR_SCHEMA if color_matte_review else (MATTE_REGIONAL_SCHEMA if regional_mattes else MATTE_COMPARE_SCHEMA) if compare_mattes else MATTE_REVIEW_SCHEMA,
                         "matte_points": MATTE_POINTS_SCHEMA,
                         "channel_tune": CHANNEL_TUNE_SCHEMA,
@@ -369,7 +372,7 @@ def build_payload(
                 },
             },
             max_completion_tokens=8192
-            if mode in ("auto", "regions", "scene", "selection")
+            if mode in ("auto", "regions", "scene", "selection", "photo_details")
             else 4096,
         )
         if compare_mattes:
@@ -387,7 +390,7 @@ def build_payload(
         # Qwen multimodal schemas can downgrade to JSON Object; enforce locally.
         payload.update(
             response_format={"type": "json_object"},
-            max_tokens=8192 if mode in ("auto", "regions", "scene", "selection") else 4096,
+            max_tokens=8192 if mode in ("auto", "regions", "scene", "selection", "photo_details") else 4096,
         )
         if settings.provider in {"qwen", "qianwen", "qianwen_token_plan"}:
             payload["enable_thinking"] = False

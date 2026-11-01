@@ -21,6 +21,10 @@ def validate_portrait_development(recipe, target, part=None):
 
 DEVELOP_PROMPT = """
 新增action=develop、scope=whole_image：用户泛化要求把照片P美、肤色好看、一键大片、整体人像精修时，先看整张照片的光线、肤色、背景关系，选择一致的摄影方向。不是简单给脸和手臂套强磨皮/HSL。精确局部要求、当前草稿、仅修改已有效果不能使用develop。
+整体风格要求同时提到“嘴唇等细节到位”仍使用develop，让后续原生近景阶段处理细节；只有单独修改某一部位、没有整体成片要求时才直接用layers。
+不要把所有照片做成同一种温和提亮。用户让你决定时，主动选一个适合画面且看得出差异的摄影风格，例如暖光电影感、清透日系、复古胶片或有层次的冷暖对比；strategy明确方向及主次，不堆叠风格名称。可用RGB/分通道曲线、分色HSL、对比和黑白场真正建立色彩与光线关系，不仅给曝光加0.3。用户要求大胆、浓郁或风格化时应有明显变化；保护五官和肤色不等于禁止有表现力的背景、暗部和高光。用户指定自然、纪实时尊重其强度要求。
+人像风格优先建立背景色彩与明暗层次。不要默认同时推高全局红/橙色段饱和和明度：它会把肤色、头发中微小色差和压缩杂色一并放大，出现橙色皮肤与头发斑块；暖光可先通过色温及曲线建立，皮肤在完整面部层协调。大胆风格不等于把脸、嘴唇、草地全部加黄加红。
+这一阶段先完成整体风格和必要面部光色，有人脸时尽量只用全图加1～2个关键局部层，为稍后的原生近景精修保留1～2个图层位置。程序会在真实风格结果上再次放大看嘴唇和皮肤，主动补充必要细节，不需要现在凭整图缩略图猜微小问题。
 strategy为简短中文字符串，说明可见问题、成片方向和验收重点；其他动作strategy=null。所有非generate/foreground动作edit_prompt=null。recipe是新增全图基调的完整参数（未使用为0/[]，skin_smoothing=0）。regions为0～3个必要局部层，使用现有分区结构，全部新增层最多max_new_layers。已有图层在底下，不能复制已有配方重复叠加。
 先协调曝光、阴影和白平衡，再做必要局部增强。肤色不要靠大幅提亮橙色、降低橙色饱和或压暗红色做成脸上贴片。帽檐下的人脸要保留自然阴影，与脖颈/嘴唇连续。泛化的自然成片默认保留皮肤纹理，face_skin/body_skin的skin_smoothing与softness必须0，不自动套磨皮；低分辨率或原片失焦更不能用磨皮修复。用户明确要求磨皮、柔肤时使用局部精修动作layers；明确去痘用repair。不要把泛化“P美”误作这些具体要求。不默认改变脸型、五官、身份、衣服或场景。
 整体成片必须区分面部光色和皮肤纹理：面部提亮、白平衡、HSL或曲线使用mask_target=face、face_part=all、face_scope=full，让嘴唇、眼睛和周围皮肤得到一致的光色调整；该层skin_smoothing=0、softness=0。face_skin不能做光色，不能只把皮肤漂白却把嘴唇留黑。总图层预算有限时优先全图及完整面部光色，省略非必要纹理或背景层；不要靠增加很多局部层弥补全图方案。
@@ -49,6 +53,7 @@ REVIEW_SCHEMA = {
 REVIEW_PROMPT = """你是iPhoto独立成片检查员。只依据实际图片比较，不因规划者的承诺或用户说法而认定结果好。
 先检查候选嘴唇是否相对周围皮肤变灰变暗、眼周是否形成暗圈、皮肤是否变成无纹理亮块，再判断整体是否更好。额外嘴周对照包含嘴唇与周围皮肤，请比较二者关系，不能因嘴唇像素没变就放行。原片本来失焦不能通过磨皮修复；发现候选更糊应减少磨皮。具体指出图片中看到的变化，不能复述参数或笼统声称“自然、无瑕疵”。
 natural_development=true表示泛化的自然成片：保留皮肤纹理，不能添加磨皮或柔化；面部光色只能在完整face层调整，不能单独漂白face_skin。若脸部同时被多种参数过度提亮、肤色苍白或明暗变平，应减少局部补偿。
+标有detail_part的候选层是看过原生近景后新增的精修：lips只调整真实唇色，skin_texture仅处理可见皮肤纹理。检查其是否确实改善、有没有浓口红感、嘴内牙齿染色、唇缘接缝或过度平滑；可修改现有精修层，不能把其他光色参数混进纹理层。对于用户要求的风格化，不要把明显的色调、冷暖对比或对比度本身当作错误；同时检查风格是否清晰、主体是否突出，不能把温和提亮当成完成风格要求。
 图片按标签依次为修改前整图、候选整图、实际编辑部位或人脸的同位置修改前/候选放大。局部图片保留周围参照，图层名称只用于对应部位。检查整体光色是否符合用户要求且有可见改善；脸和脖颈/嘴周是否断色、面具边界、光晕；皮肤是否蜡化、丢失自然纹理；手臂等身体局部与衣物/背景是否接缝、误改；五官身份、衣物、背景是否被误改。根据图片判断，不能仅凭磨皮或曝光数值认定好坏。不要把正常帽檐阴影或原有瑕疵当成此次造成的缺陷，不要求照片达到没有依据的完美。
 foreground=true时是用户明确选择的AI重建人物抠图：整图背景移除是预期变化，细小纹理可被重绘，但人物身份、位置、姿势、帽子及衣物样式仍须保留。额外图片为实际白底／黑底整图与生成分辨率边缘。每个边缘的双格图，左格是原片同画布位置，右格是生成白底；紧随其后的单格是该右格同位置的生成黑底。请逐格核对两处原片与生成的轮廓、缺失细节及黑底浅边，不能把双格图当成两个人或横向构图。原片同画布位置仅供比较，几何尚未证明一致。frame_facts给出程序从实际图片读取的原画布／生成画布宽高，不是AI推测；横竖幅按此宽高判断，每格最多512px的边缘检查窗不是整张构图，不能因放大窗形状而声称人物旋转或横竖构图改变。宽高接近不证明人物位置、身份或姿势相同，仍须比较整图。检查是否移位／缩放、改脸或换装、粗白边／灰雾、衣物或皮肤错误透明、残留其他人物或背景。没有Alpha真值，不能仅凭细线多或蒙版整齐认定好。只能accept/reject/uncertain、edits=[]；调色参数不能修好透明度或人物错位。图片不足以判断就uncertain，不假定通过。
 position_check若存在，是程序从不透明纹理对应测得的整体位置核对；它只核对可匹配纹理的平移、统一缩放和旋转，不能证明身份、非刚性局部或原片细丝保真。此项通过仍须检查实际黑白底、衣物和皮肤，不能因测量或其他AI承诺而认定画质好。
@@ -93,7 +98,10 @@ def parse_review(data, workspace):
             if candidates[edit['layer_id']]['whole_image'] and recipe['skin_smoothing']:
                 raise ValueError('成片检查不能对全图磨皮')
             candidate=candidates[edit['layer_id']]
-            if workspace.get('natural_development'):
+            if candidate.get('detail_part'):
+                from .photo_details import validate_recipe
+                validate_recipe(recipe,candidate['detail_part'])
+            elif workspace.get('natural_development'):
                 validate_portrait_development(recipe,candidate.get('mask_target'),candidate.get('face_part'))
             clean.append({'layer_id': edit['layer_id'], 'recipe': recipe})
         return {**plan, 'edits': clean}
@@ -109,7 +117,7 @@ def soften_effect_mask(mask, size):
     from .document import raster_mask, validate_mask
     from .masks import encode_bitmap
 
-    if mask.get('semantic_target') not in ('face', 'face_skin', 'body_skin') or mask.get('face_part'):
+    if mask.get('semantic_target') not in ('face', 'face_skin', 'body_skin') or mask.get('face_part') not in (None,'lips'):
         return deepcopy(mask)
     alpha = raster_mask(mask, size)
     box = alpha.getbbox()
@@ -209,7 +217,8 @@ def mouth_review_box(faces,size):
     return max(boxes,key=lambda item:item[0])[1] if boxes else None
 
 
-def render_candidate(image, before, proposed, faces, directory, identity, soften=False, *, foreground=False, inspection_box=None):
+def render_candidate(image, before, proposed, faces, directory, identity, soften=False, *, foreground=False, inspection_box=None,
+                     inspect_details=False,soften_ids=None):
     """Worker-only composition and matched edited-region/face comparisons."""
     from pathlib import Path
     from .document import render_layers, validate_layers, raster_mask
@@ -218,7 +227,8 @@ def render_candidate(image, before, proposed, faces, directory, identity, soften
     candidates = validate_layers(proposed)
     if soften:
         for layer in candidates:
-            layer['mask'] = soften_effect_mask(layer['mask'], image.size)
+            if soften_ids is None or layer['id'] in soften_ids:
+                layer['mask'] = soften_effect_mask(layer['mask'], image.size)
     baseline = render_layers(image, validate_layers(before))
     output = None if foreground else render_layers(image, validate_layers(before + candidates))
     assets = []
@@ -227,6 +237,7 @@ def render_candidate(image, before, proposed, faces, directory, identity, soften
         path = Path(directory) / f'photo-{identity}-{len(assets):02d}.png'
         picture.save(path, compress_level=3)
         assets.append({'label': label, 'path': str(path), 'lossless': lossless})
+        return assets[-1]
     if foreground:
         from .generated_foreground import review_images
         from .foreground_position import check_position
@@ -256,4 +267,16 @@ def render_candidate(image, before, proposed, faces, directory, identity, soften
     if mouth:
         save(preview(baseline.crop(mouth),768),'嘴周与邻近皮肤 · 修改前',lossless=True)
         save(preview(output.crop(mouth),768),'嘴周与邻近皮肤 · 候选',lossless=True)
-    return {'proposed': candidates, 'images': assets}
+    review_assets=list(assets);detail_images=list(assets[:2]);detail_faces=[]
+    if inspect_details:
+        for face in faces[:3]:
+            box=raster_mask(face['mask'],image.size).getbbox()
+            if not box or min(box[2]-box[0],box[3]-box[1])<64 or not face.get('id'):
+                continue
+            margin=round(max(box[2]-box[0],box[3]-box[1])*.25)
+            box=(max(0,box[0]-margin),max(0,box[1]-margin),min(image.width,box[2]+margin),min(image.height,box[3]+margin))
+            label=f"人脸 {face['id']} · 原生近景"
+            detail_images.extend([save(preview(baseline.crop(box),1280),label+'修改前',lossless=True),
+                                  save(preview(output.crop(box),1280),label+'风格候选',lossless=True)])
+            detail_faces.append({'id':face['id'],'name':face.get('name','人脸'),'crop_box':list(box)})
+    return {'proposed': candidates, 'images': review_assets,'detail_images':detail_images if detail_faces else [],'detail_faces':detail_faces}

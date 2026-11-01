@@ -24,6 +24,20 @@ def test_hsl_conversion_matches_independent_colorsys_on_greys_and_random_colours
     assert np.allclose(hsl_to_rgb(hue, sat, light), pixels, atol=2e-6)
 
 
+def test_near_black_colour_noise_does_not_become_large_lightness_blocks():
+    from iphoto.color_mixer import mix,mix_fast
+    # The orange pixel differs by one code from neutral, despite 25% HSL saturation.
+    samples=np.array([[4,4,4],[5,4,3],[80,80,80],[81,80,79],[240,130,20]],np.float32)/255
+    recipe=Recipe(hsl_orange_lightness=20,hsl_orange_saturation=25)
+    actual=np.rint(mix(samples,recipe)*255).astype(int)
+    assert np.max(np.abs(actual[1]-actual[0]))<=4
+    assert np.max(np.abs(actual[3]-actual[2]))<=4
+    assert np.array_equal(actual[0],[4,4,4]) and np.array_equal(actual[2],[80,80,80])
+    assert np.max(np.abs(actual[-1]-samples[-1]*255))>10
+    large=np.tile(samples,(1000,1)).astype(np.float32)
+    assert np.array_equal(np.rint(mix_fast(large,recipe)*255),np.rint(mix(large,recipe)*255))
+
+
 @pytest.mark.parametrize("key", ["red_channel", "green_channel", "blue_channel"])
 def test_rgb_gain_changes_only_requested_channel_with_exact_reference(key):
     pixels = np.random.default_rng(99).integers(0, 256, (63, 256, 4), dtype=np.uint8)

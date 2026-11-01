@@ -565,6 +565,9 @@ def _cloud_plan(self, result, generation):
     if result.get("mode") == "photo_review" and pending.get('photo_strategy'):
         from .photo_strategy import reviewed
         return reviewed(self, result)
+    if result.get('mode')=='photo_details' and pending.get('photo_strategy'):
+        from .photo_strategy import details_planned
+        return details_planned(self,result)
     if result.get('mode') == 'matte_review' and pending.get('channel_auto'):
         from .channel_auto import reviewed as matte_reviewed
         return matte_reviewed(self,result)
