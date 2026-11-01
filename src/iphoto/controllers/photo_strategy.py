@@ -102,9 +102,11 @@ def ready(self, result, context, generation):
                         else '3/4 正在对比修改前后，检查边缘、肤色和局部质感…可取消')
         self.changed.emit()
         self.ai.plan(pending['text'], Recipe().to_dict(), [], images[0]['path'], generation, 'photo_review',
-                     {'direction': state['direction'], 'revision': state['revision'], 'foreground': state.get('foreground', False),
+                     {'revision': state['revision'], 'foreground': state.get('foreground', False),
+                      'natural_development': 'base' in state,
                       **({'frame_facts': frame_facts,'position_check': position} if state.get('foreground') else {}),
                       'candidates': [{'layer_id': layer['id'], 'name': layer['name'], 'recipe': layer['recipe'],
+                                      'mask_target':layer['mask'].get('semantic_target'), 'face_part':layer['mask'].get('face_part'),
                                       'whole_image': 'base' in state and index == 0} for index, layer in enumerate(state['proposed'])],
                       'review_images': [{'label': item['label'], 'url': item['url']} for item in images]})
     except (ValueError, KeyError, OSError) as exc:

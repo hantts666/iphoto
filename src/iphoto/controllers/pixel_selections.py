@@ -83,7 +83,7 @@ def start(self, jobs, context, priority=None, composition=None):
         origin=context.get('origin',{})
         if not origin.get('photo_strategy') and not origin.get('channel_auto'):
             targets={str(index):region['mask_target'] for index,region in enumerate(context['regions'])
-                     if region.get('mask_target') in ('face_skin','body_skin')
+                     if region.get('mask_target') in ('face','face_skin','body_skin')
                      and region.get('face_part','all')=='all'}
             if targets:
                 options['skin_effects']={'size':[self._width,self._height],'targets':targets,

@@ -6,10 +6,25 @@ from copy import deepcopy
 from .engine import Recipe, RECIPE_FIELDS, RECIPE_PROPERTIES
 
 
+def validate_portrait_development(recipe, target, part=None):
+    """Whole-photo development must keep facial light continuous across features."""
+    if part not in (None,'all'):
+        return
+    if target=='face_skin' and any(value for key,value in recipe.items()
+                                   if key not in ('skin_smoothing','sharpness','softness')):
+        raise ValueError('整体人像成片的面部光色必须用face覆盖完整五官，不能只提亮face_skin留下暗嘴暗眼；face_skin层仅用于皮肤纹理。请协调全图或使用独立face光色层，预算不足时省略磨皮层。')
+    if target=='face' and (recipe.get('skin_smoothing') or recipe.get('softness')):
+        raise ValueError('完整人脸光色层不能磨皮或柔化五官；整体成片请保留纹理，明确要求磨皮时另用layers局部精修。')
+    if target in ('face_skin','body_skin') and (recipe.get('skin_smoothing') or recipe.get('softness')):
+        raise ValueError('整体自然成片保留皮肤纹理，不默认叠加磨皮或柔化；请省略该纹理层。用户明确要求磨皮时使用局部精修动作layers，不能用develop自动套磨皮。')
+
+
 DEVELOP_PROMPT = """
 新增action=develop、scope=whole_image：用户泛化要求把照片P美、肤色好看、一键大片、整体人像精修时，先看整张照片的光线、肤色、背景关系，选择一致的摄影方向。不是简单给脸和手臂套强磨皮/HSL。精确局部要求、当前草稿、仅修改已有效果不能使用develop。
 strategy为简短中文字符串，说明可见问题、成片方向和验收重点；其他动作strategy=null。所有非generate/foreground动作edit_prompt=null。recipe是新增全图基调的完整参数（未使用为0/[]，skin_smoothing=0）。regions为0～3个必要局部层，使用现有分区结构，全部新增层最多max_new_layers。已有图层在底下，不能复制已有配方重复叠加。
-先协调曝光、阴影和白平衡，再做必要局部增强。肤色不要靠大幅提亮橙色、降低橙色饱和或压暗红色做成脸上贴片。帽檐下的人脸要保留自然阴影，与脖颈/嘴唇连续。温和局部提亮和保纹理磨皮；不要把低分辨率细节缺失误判为需要重磨皮。不默认改变脸型、五官、身份、衣服或场景。
+先协调曝光、阴影和白平衡，再做必要局部增强。肤色不要靠大幅提亮橙色、降低橙色饱和或压暗红色做成脸上贴片。帽檐下的人脸要保留自然阴影，与脖颈/嘴唇连续。泛化的自然成片默认保留皮肤纹理，face_skin/body_skin的skin_smoothing与softness必须0，不自动套磨皮；低分辨率或原片失焦更不能用磨皮修复。用户明确要求磨皮、柔肤时使用局部精修动作layers；明确去痘用repair。不要把泛化“P美”误作这些具体要求。不默认改变脸型、五官、身份、衣服或场景。
+整体成片必须区分面部光色和皮肤纹理：面部提亮、白平衡、HSL或曲线使用mask_target=face、face_part=all、face_scope=full，让嘴唇、眼睛和周围皮肤得到一致的光色调整；该层skin_smoothing=0、softness=0。face_skin不能做光色，不能只把皮肤漂白却把嘴唇留黑。总图层预算有限时优先全图及完整面部光色，省略非必要纹理或背景层；不要靠增加很多局部层弥补全图方案。
+局部面部提亮只补足全图之后仍存在的不足，保留额头、鼻梁与脸颊的立体明暗。不要默认同时叠加局部曝光、白色阶、橙色明度和降饱和来美白；肤色已经正常时只做必要的光线校正。
 summary描述拟采用的方案，不声称已经修好。程序先合成实际效果，再独立放大检查实际编辑的局部、面部和脸颈边界（最多三组局部对照）；不合格会修改一次或拒绝应用。顶层layer_edits=[]、group=null、repairs=[]、mask_refinement=null。
 新增action=generate：image_edit_available=true时可以直接生成选区内精修像素，调用专门的图像编辑模型，不要求只能调参数。用户明确要求直接精修、生成式编辑、补纹理或选区内内容变化时可使用；不把仅改曝光/颜色的精确指令升级为生成式处理。泛化人像美化通常先用develop，用户不满意参数方案或明确要求深度精修时可用generate。
 edit_prompt给中文具体视觉编辑指令，保留身份、构图和未要求改变的内容，改善皮肤质感、气色、真实光影，不凭空换脸。strategy=null，顶层recipe保持current_recipe，layer_edits=[]、group=null、repairs=[]、mask_refinement=null。程序会渲染候选并检查，summary只描述将执行的方案。
@@ -32,6 +47,8 @@ REVIEW_SCHEMA = {
 }
 
 REVIEW_PROMPT = """你是iPhoto独立成片检查员。只依据实际图片比较，不因规划者的承诺或用户说法而认定结果好。
+先检查候选嘴唇是否相对周围皮肤变灰变暗、眼周是否形成暗圈、皮肤是否变成无纹理亮块，再判断整体是否更好。额外嘴周对照包含嘴唇与周围皮肤，请比较二者关系，不能因嘴唇像素没变就放行。原片本来失焦不能通过磨皮修复；发现候选更糊应减少磨皮。具体指出图片中看到的变化，不能复述参数或笼统声称“自然、无瑕疵”。
+natural_development=true表示泛化的自然成片：保留皮肤纹理，不能添加磨皮或柔化；面部光色只能在完整face层调整，不能单独漂白face_skin。若脸部同时被多种参数过度提亮、肤色苍白或明暗变平，应减少局部补偿。
 图片按标签依次为修改前整图、候选整图、实际编辑部位或人脸的同位置修改前/候选放大。局部图片保留周围参照，图层名称只用于对应部位。检查整体光色是否符合用户要求且有可见改善；脸和脖颈/嘴周是否断色、面具边界、光晕；皮肤是否蜡化、丢失自然纹理；手臂等身体局部与衣物/背景是否接缝、误改；五官身份、衣物、背景是否被误改。根据图片判断，不能仅凭磨皮或曝光数值认定好坏。不要把正常帽檐阴影或原有瑕疵当成此次造成的缺陷，不要求照片达到没有依据的完美。
 foreground=true时是用户明确选择的AI重建人物抠图：整图背景移除是预期变化，细小纹理可被重绘，但人物身份、位置、姿势、帽子及衣物样式仍须保留。额外图片为实际白底／黑底整图与生成分辨率边缘。每个边缘的双格图，左格是原片同画布位置，右格是生成白底；紧随其后的单格是该右格同位置的生成黑底。请逐格核对两处原片与生成的轮廓、缺失细节及黑底浅边，不能把双格图当成两个人或横向构图。原片同画布位置仅供比较，几何尚未证明一致。frame_facts给出程序从实际图片读取的原画布／生成画布宽高，不是AI推测；横竖幅按此宽高判断，每格最多512px的边缘检查窗不是整张构图，不能因放大窗形状而声称人物旋转或横竖构图改变。宽高接近不证明人物位置、身份或姿势相同，仍须比较整图。检查是否移位／缩放、改脸或换装、粗白边／灰雾、衣物或皮肤错误透明、残留其他人物或背景。没有Alpha真值，不能仅凭细线多或蒙版整齐认定好。只能accept/reject/uncertain、edits=[]；调色参数不能修好透明度或人物错位。图片不足以判断就uncertain，不假定通过。
 position_check若存在，是程序从不透明纹理对应测得的整体位置核对；它只核对可匹配纹理的平移、统一缩放和旋转，不能证明身份、非刚性局部或原片细丝保真。此项通过仍须检查实际黑白底、衣物和皮肤，不能因测量或其他AI承诺而认定画质好。
@@ -75,6 +92,9 @@ def parse_review(data, workspace):
             recipe = Recipe.from_dict(edit['recipe']).to_dict()
             if candidates[edit['layer_id']]['whole_image'] and recipe['skin_smoothing']:
                 raise ValueError('成片检查不能对全图磨皮')
+            candidate=candidates[edit['layer_id']]
+            if workspace.get('natural_development'):
+                validate_portrait_development(recipe,candidate.get('mask_target'),candidate.get('face_part'))
             clean.append({'layer_id': edit['layer_id'], 'recipe': recipe})
         return {**plan, 'edits': clean}
     except (KeyError, IndexError, TypeError, json.JSONDecodeError):
@@ -82,14 +102,14 @@ def parse_review(data, workspace):
 
 
 def soften_effect_mask(mask, size):
-    """Fade a skin effect inward, including protected lip/eye holes; never grow it."""
+    """Fade portrait effects inward; preserve full-face features and skin holes."""
     import cv2
     import numpy as np
     from PIL import Image
     from .document import raster_mask, validate_mask
     from .masks import encode_bitmap
 
-    if mask.get('semantic_target') not in ('face_skin', 'body_skin') or mask.get('face_part'):
+    if mask.get('semantic_target') not in ('face', 'face_skin', 'body_skin') or mask.get('face_part'):
         return deepcopy(mask)
     alpha = raster_mask(mask, size)
     box = alpha.getbbox()
@@ -172,6 +192,23 @@ def review_regions(candidates, faces, size):
     return regions
 
 
+def mouth_review_box(faces,size):
+    """One native mouth-and-cheek comparison, without inventing facial detail."""
+    import numpy as np
+    boxes=[]
+    for face in faces:
+        points=np.asarray(face.get('face_features',{}).get('mouth',[]),dtype=float)
+        if points.shape!=(2,2) or not np.isfinite(points).all() or np.any((points<0)|(points>1)):
+            continue
+        points*=size;span=float(np.linalg.norm(points[1]-points[0]))
+        if span<8:continue
+        x,y=points.mean(0);radius=min(span,512.)
+        box=(max(0,int(x-radius*1.25)),max(0,int(y-radius*.8)),
+             min(size[0],int(x+radius*1.25)+1),min(size[1],int(y+radius*.8)+1))
+        boxes.append((span,box))
+    return max(boxes,key=lambda item:item[0])[1] if boxes else None
+
+
 def render_candidate(image, before, proposed, faces, directory, identity, soften=False, *, foreground=False, inspection_box=None):
     """Worker-only composition and matched edited-region/face comparisons."""
     from pathlib import Path
@@ -215,4 +252,8 @@ def render_candidate(image, before, proposed, faces, directory, identity, soften
     for box, label, _ in review_regions(candidates, faces, image.size):
         save(preview(baseline.crop(box), 1280), label+'修改前', lossless=True)
         save(preview(output.crop(box), 1280), label+'候选', lossless=True)
+    mouth=mouth_review_box(faces,image.size)
+    if mouth:
+        save(preview(baseline.crop(mouth),768),'嘴周与邻近皮肤 · 修改前',lossless=True)
+        save(preview(output.crop(mouth),768),'嘴周与邻近皮肤 · 候选',lossless=True)
     return {'proposed': candidates, 'images': assets}

@@ -112,6 +112,7 @@ def test_real_worker_review_before_atomic_commit(qt_app, ai_store, tmp_path, ver
         if context['mode'] == 'auto':
             return response(develop())
         assert context['mode'] == 'photo_review'
+        assert context['natural_development'] is True and 'direction' not in context
         evidence=[item['image_url']['url'] for item in payload['messages'][1]['content'] if item['type']=='image_url']
         assert len(evidence)==4 and all(url.startswith('data:image/png;base64,') for url in evidence[-2:])
         observed.append((len(editor._layers), editor._cursor, editor.busy))
@@ -166,6 +167,7 @@ def test_generated_pixels_commit_only_after_review_and_keep_selection_outside_ex
                              'edit_prompt':'选区内淡紫色','strategy':None,'recipe':Recipe().to_dict(),
                              'regions':[],'layer_edits':[],'repairs':[],'group':None,'mask_refinement':None})
         assert context['mode']=='photo_review' and len(editor._layers)==1
+        assert context['natural_development'] is False and 'direction' not in context
         evidence=[item['image_url']['url'] for item in payload['messages'][1]['content'] if item['type']=='image_url']
         assert len(evidence)==4 and all(url.startswith('data:image/png;base64,') for url in evidence[-2:])
         return response({'status':'accept','summary':'检查选区内色彩，外部保持','edits':[]})

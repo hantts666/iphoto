@@ -11,7 +11,7 @@ def prepare_items(items,spec):
             or size[0]*size[1]>MAX_MASK_PIXELS
             or not isinstance(targets,dict) or not 1<=len(targets)<=4
             or any(not isinstance(key,str) or not key or len(key)>80
-                   or target not in ('face_skin','body_skin') for key,target in targets.items())
+                   or target not in ('face','face_skin','body_skin') for key,target in targets.items())
             or not isinstance(seeds,dict) or set(seeds)-set(targets)):
         raise ValueError('皮肤调整过渡的范围或尺寸无效，已有图层保留')
     originals={item['id']:item for item in items}

@@ -21,7 +21,7 @@ def item(identifier='0',target='face_skin'):
 
 
 @pytest.mark.parametrize('cached',[False,True])
-@pytest.mark.parametrize('target',['face_skin','body_skin'])
+@pytest.mark.parametrize('target',['face','face_skin','body_skin'])
 def test_exact_shared_transition_and_selection_cache_remains_unchanged(cached,target):
     original=item(target=target);before=deepcopy(original);untouched=item('other')
     spec={'size':[280,220],'targets':{'0':target},'seeds':{'0':original} if cached else {}}
@@ -87,7 +87,7 @@ def test_mixed_region_relocalization_does_not_fade_staged_skin_siblings_twice():
     assert skin['mask']!=soften_effect_mask(first['mask'],(280,220))
 
 
-@pytest.mark.parametrize('case',['direct','cached','strategy','channel','object','face','nose','draft'])
+@pytest.mark.parametrize('case',['direct','cached','strategy','channel','object','face','nose','lips','draft'])
 def test_real_editor_schedules_only_unstaged_automatic_skin_effects(qt_app,ai_store,tmp_path,monkeypatch,case):
     from iphoto.workspace import Editor
     from iphoto.controllers import pixel_selections
@@ -99,15 +99,16 @@ def test_real_editor_schedules_only_unstaged_automatic_skin_effects(qt_app,ai_st
     try:
         editor.openImage(str(source));wait_for(lambda:editor.hasImage and settled(editor))
         monkeypatch.setattr(editor,'_request',lambda op,**data:sent.append({'op':op,**data}))
-        target='body_skin' if case=='cached' else 'object' if case=='object' else 'face' if case=='face' else 'face_skin'
+        target='body_skin' if case=='cached' else 'object' if case=='object' else 'face' if case in ('face','lips') else 'face_skin'
         region={'name':'skin','reason':'natural effect','mask_target':target,'mask':empty_mask(True),
                 'recipe':Recipe(exposure=.25).to_dict(),'anchor':[.5,.5]}
         if case=='nose':region['face_part']='nose'
+        if case=='lips':region['face_part']='lips'
         origin={'photo_strategy':{'token':'private'}} if case=='strategy' else {'channel_auto':{'token':'private'}} if case=='channel' else {}
         seeds={'0':item(target=target)} if case=='cached' else {}
         pixel_selections.select_regions(editor,[region],'skin',case!='draft',origin=origin,seed_items=seeds)
         assert len(sent)==1
-        expected=case in ('direct','cached')
+        expected=case in ('direct','cached','face')
         assert ('skin_effects' in sent[0])==expected
         if expected:
             assert sent[0]['skin_effects']=={'size':[280,220],'targets':{'0':target},'seeds':seeds}
