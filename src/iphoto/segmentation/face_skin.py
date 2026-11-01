@@ -178,6 +178,7 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     precision = False
     fallback = False
     feature_refinement = False
+    interior_refinement = None
     part_alpha = None
     if features is not None:
         features = validate_features(features)
@@ -323,6 +324,24 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
                 fallback = True
                 if progress is not None:
                     progress('face_fallback')
+    if (engine is not None and not provided_engine and native and target=='face'
+            and part=='all' and scope=='full' and features is not None):
+        from . import face_precision
+        if face_precision.available():
+            try:
+                from .face_interior import candidates,restore
+                context=np.asarray(raster_mask(context_hint,image.size).crop(box))
+                pending=candidates(np.asarray(alpha),context)
+                if pending.any():
+                    if progress is not None:progress('face_structure')
+                    parser=face_precision.backend(progress=progress) if progress is not None else face_precision.backend()
+                    landmarks=np.asarray([*features['eyes'],points[0][:2],*features['mouth']])*image.size-(left,top)
+                    support=parser.confirm_face(patch,landmarks,pending,progress=progress)
+                    revised,interior_refinement=restore(np.asarray(alpha),context,support)
+                    alpha=Image.fromarray(revised)
+            except Exception:
+                fallback=True
+                if progress is not None:progress('face_fallback')
     if scope_alpha is not None:
         from PIL import ImageChops
         alpha = ImageChops.multiply(alpha, scope_alpha)
@@ -340,13 +359,13 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
         result["face_part"] = part
         result['face_part_scope'] = spatial_mask(hint)
     quality = {
-        "model": ("BiSeNet + FaRL LaPa" if feature_refinement else "FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
+        "model": ("BiSeNet + FaRL LaPa" if feature_refinement or interior_refinement is not None else "FaRL LaPa" if precision else "BiSeNet") + (" · " + PARTS[part]['label'] if part in PARTS else " · 人脸" if target == "face" else " · 面部皮肤"), "semantic_target": target,
         "protected_features": ["嘴内", "面部皮肤", "鼻子", "眼睛", "眉毛", "头发", "帽子", "衣物"] if part == 'lips' else ["头发", "帽子", "衣物", "颈部"] if target == "face" else ["眼睛", "眉毛", "嘴唇", "头发", "帽子", "衣物"],
         "warnings": [("嘴唇" if part == 'lips' else "人脸" if target == "face" else "面部皮肤") + "已自动分区，请放大检查遮挡与边缘"],
         "elapsed_ms": round((perf_counter() - started) * 1000, 1),
         "mask_size": list(image.size), "crop_size": list(patch.size),
         "boundary_grid": "source" if native else "model", "boundary_size": [grid_width, grid_height],
-        "coverage": round((np.count_nonzero(np.asarray(alpha)) if continuous or feature_refinement else float(hard.mean())*patch.width*patch.height) / (image.width * image.height) * 100, 2),
+        "coverage": round((np.count_nonzero(np.asarray(alpha)) if continuous or feature_refinement or interior_refinement is not None else float(hard.mean())*patch.width*patch.height) / (image.width * image.height) * 100, 2),
         "continuous_boundary": continuous or feature_refinement,
         "skin_feature_refinement": feature_refinement,
         "anchor_recovered": recovered,
@@ -357,4 +376,8 @@ def segment(image, hint, points, *, crop=None, engine=None, target="face_skin", 
     }
     if fallback:
         quality['warnings'].insert(0,'精细五官模型未完成，已使用基础面部分区；请放大检查边缘')
+    if interior_refinement is not None:
+        quality['face_interior']=interior_refinement
+        if interior_refinement['retained_regions']:
+            quality['warnings'].append('部分面部内部范围未获精细模型确认，已保留原范围；请放大检查')
     return result, quality

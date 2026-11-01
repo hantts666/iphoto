@@ -4,6 +4,7 @@ Coordinate formulas follow FacePerceiver/facer (MIT), revision
 ddd35c76ff840174b8a5403ad1c1255e37b8782b. Runtime uses NumPy and ONNX only.
 The 19-class parser retains whole-face outer protection; this model refines
 nose/lips and internal skin/feature boundaries within that person's domain.
+Whole-face deficits use sparse semantic confirmation inside that exterior.
 """
 from hashlib import sha256
 from importlib.util import find_spec
@@ -167,6 +168,34 @@ def native_part_alpha(scores, matrix, labels, part):
     return result
 
 
+def native_face_support(scores,matrix,labels,candidates):
+    """Conservative semantic support on requested pixels, never an alpha map."""
+    if (scores.shape!=(1,11,512,512) or scores.dtype!=np.float32 or not np.isfinite(scores).all()
+            or np.shape(matrix)!=(3,3) or not np.isfinite(matrix).all()
+            or not isinstance(candidates,np.ndarray) or candidates.ndim!=2 or candidates.dtype!=np.bool_
+            or labels is not None and (labels.ndim!=2 or labels.dtype!=np.uint8 or labels.max(initial=0)>18
+                                       or candidates.shape!=labels.shape)):
+        raise ValueError('精细面部内部参照无效')
+    from .face_interior import MAX_PIXELS
+    from ..masks import MAX_MASK_PIXELS
+    if candidates.size>MAX_MASK_PIXELS or np.count_nonzero(candidates)>MAX_PIXELS:
+        raise ValueError('精细面部内部范围超过局部预算')
+    result=np.zeros(candidates.shape,bool)
+    ys,xs=np.nonzero(candidates if labels is None else candidates&np.isin(labels,tuple(range(1,14))))
+    pixels=np.ascontiguousarray(scores[0].transpose(1,2,0))
+    for start in range(0,len(xs),4096):
+        xx,yy=xs[start:start+4096],ys[start:start+4096]
+        coordinates=np.stack((xx,yy),-1).astype(np.float32)+.5
+        coords=warp(coordinates@matrix[:2,:2].T+matrix[:2,2])
+        block=sample_bilinear(pixels,coords/448*512-.5)
+        weights=np.exp(block-block.max(1,keepdims=True))
+        likelihood=weights[:,1:10].sum(1)/weights.sum(1)
+        # This score is only a second semantic check, not calibrated accuracy.
+        predicted=block.argmax(1)
+        result[yy,xx]=(likelihood>=.9)&(predicted>=1)&(predicted<=9)
+    return result
+
+
 class FaceParser:
     name = 'FaRL LaPa'
 
@@ -182,7 +211,7 @@ class FaceParser:
         self.session = ort.InferenceSession(str(verified_path()),sess_options=options,providers=['CPUExecutionProvider'])
         self._cached = None
 
-    def _prediction(self, image, points, *, progress=None):
+    def _scores(self,image,points,*,progress=None):
         matrix = alignment(points)
         # Nose/lips jobs share one face's semantic output. Hash pixels as well
         # as its transform so another photo or moved crop cannot reuse it.
@@ -191,13 +220,23 @@ class FaceParser:
         if self._cached is not None and self._cached[0] == key:
             if progress is not None:
                 progress('face_cached')
-            labels=self._cached[1]
-            if isinstance(labels,tuple):
-                labels=np.frombuffer(zlib.decompress(labels[1]),np.uint8).reshape(labels[0])
-            return labels, self._cached[2], matrix
+            return key,self._cached[2],matrix
         if progress is not None:
             progress('face_infer')
         scores = self.session.run(None,{'image':aligned_image(image,matrix)})[0]
+        if scores.shape!=(1,11,512,512) or scores.dtype!=np.float32 or not np.isfinite(scores).all():
+            raise ValueError('精细五官模型分数无效')
+        scores.setflags(write=False)
+        self._cached=(key,None,scores) if scores.nbytes<=MAX_CACHE_BYTES else None
+        return key,scores,matrix
+
+    def _prediction(self,image,points,*,progress=None):
+        key,scores,matrix=self._scores(image,points,progress=progress)
+        if self._cached is not None and self._cached[1] is not None:
+            labels=self._cached[1]
+            if isinstance(labels,tuple):
+                labels=np.frombuffer(zlib.decompress(labels[1]),np.uint8).reshape(labels[0])
+            return labels,scores,matrix
         if progress is not None:
             progress('face_boundary')
         labels = native_labels(scores,matrix,image.size)
@@ -226,6 +265,11 @@ class FaceParser:
         if progress is not None:
             progress('face_skin_features')
         return labels,native_part_alpha(scores,matrix,labels,'skin')
+
+    def confirm_face(self,image,points,candidates,*,progress=None):
+        _,scores,matrix=self._scores(image,points,progress=progress)
+        if progress is not None:progress('face_structure')
+        return native_face_support(scores,matrix,None,candidates)
 
 
 def backend(*, progress=None):

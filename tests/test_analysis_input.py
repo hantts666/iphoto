@@ -244,3 +244,68 @@ def test_wrong_close_up_content_ack_cannot_reach_ai(qt_app,ai_store,tmp_path,mon
         worker_bridge._read(editor)
         assert editor._layers==before and '局部分析未应用' in editor.status
     finally:editor.close()
+
+
+@pytest.mark.parametrize('kind',['matching','missing','wrong','raw-legacy','raw-wrong'])
+def test_project_catalog_restores_only_with_matching_applied_content(qt_app,ai_store,tmp_path,monkeypatch,kind):
+    from iphoto.document import read_project
+    source,layers=scene(tmp_path);editor=Editor(ai_store=ai_store);precache=[]
+    if kind.startswith('raw'):layers=layers[:1]
+    try:
+        editor.openImage(str(source.path));wait_for(lambda:editor.hasImage and settled(editor))
+        prepare_editor(editor,layers)
+        expected=key(editor._layers)
+        editor._scene.set({'summary':'saved','objects':[{'id':'saved-target','name':'target','category':'object','mask':empty_mask(True)}]})
+        saved=tmp_path/'catalog.iphoto';editor.saveProject(str(saved))
+        wait_for(lambda:editor._project_save_future is None and saved.is_file())
+        data=json.loads(saved.read_text(encoding='utf8'))
+        if kind=='matching':assert data['scene_catalog']['content_key']==expected
+        elif kind in ('missing','raw-legacy'):data['scene_catalog'].pop('content_key',None)
+        else:data['scene_catalog']['content_key']='0'*64
+        saved.write_text(json.dumps(data),encoding='utf8')
+        monkeypatch.setattr(pixel_selections,'precache',lambda e,ids:precache.append(list(ids)))
+        key([])  # Reopening must not rely on this process remembering a prior key.
+        editor.openProject(str(saved));wait_for(lambda:settled(editor) and editor._project_path==str(saved.resolve()))
+        assert editor._analysis_key==expected and editor._layers==read_project(saved)['layers']
+        assert bool(editor._scene.catalog)==(kind in ('matching','raw-legacy'))
+        assert bool(precache)==(kind in ('matching','raw-legacy'))
+    finally:editor.close()
+
+
+@pytest.mark.parametrize('case',['ordinary','draft','newer-render','newer-status'])
+def test_prepared_face_jobs_recover_current_anchors_and_handoff_status_without_overwriting_newer_work(qt_app,ai_store,tmp_path,monkeypatch,case):
+    source,layers=scene(tmp_path);editor=Editor(ai_store=ai_store);held=[]
+    try:
+        editor.openImage(str(source.path));wait_for(lambda:editor.hasImage and settled(editor))
+        prepare_editor(editor,layers)
+        image,ref=ContentCache(tmp_path).get(source,layers=layers);proxy=tmp_path/'prepared.png';image.convert('RGB').save(proxy)
+        editor._status='后台预计算元素蒙版'
+        data={'jobs':[{'id':'restored-face','mask_target':'face','recover_face_anchor':False},
+                      {'id':'manual-face','mask_target':'face','recover_face_anchor':False}],
+              'priority':'low','context':{'purpose':'precache','status_epoch':editor._status_epoch}}
+        original=deepcopy(data)
+        def request(op,**payload):
+            if op=='analysis_input':
+                editor._status_epoch+=1;payload['context']['status_epoch']=editor._status_epoch
+            held.append({'op':op,**payload})
+        monkeypatch.setattr(editor,'_request',request)
+        analysis_input.defer(editor,'segment',data)
+        active=held[0]
+        if case=='draft':editor._candidate=empty_mask(True)
+        elif case=='newer-render':editor._status_epoch+=1
+        elif case=='newer-status':editor._status='用户刚开始的新操作';editor._status_epoch+=1
+        epoch=editor._status_epoch
+        result={'path':str(proxy),'proxy_sha256':sha256(proxy.read_bytes()).hexdigest(),
+            'content_reference':ref,'source_sha':source.digest,'source_size':list(source.image.size),
+            'content_key':key(layers),'faces':[{'id':'restored-face','name':'face','mask':empty_mask(True),
+                                             'mask_target':'face','anchor':[.5,.5]}]}
+        analysis_input.ready(editor,result,active)
+        assert len(held)==2 and held[1]['op']=='segment' and data==original
+        assert held[1]['jobs'][0]['recover_face_anchor'] is True
+        assert held[1]['jobs'][1]['recover_face_anchor'] is False
+        if case=='newer-status':
+            assert editor._status=='用户刚开始的新操作' and held[1]['context']['status_epoch']!=editor._status_epoch
+        else:
+            assert held[1]['context']['status_epoch']==epoch
+            assert editor._status==('图像内容已准备，已有范围保留' if case=='draft' else '后台预计算元素蒙版')
+    finally:editor.close()

@@ -7,6 +7,7 @@ from uuid import uuid4
 from ..analysis_content import key
 
 CROP_OPERATIONS={'object_crop','repair_crop','mask_refinement_crop','mask_refinement_apply'}
+PREPARING_STATUS='正在准备已修改图像的分析内容（调色前）…可取消'
 
 
 def invalidate(e):
@@ -45,11 +46,11 @@ def defer(e,kind,data):
         _dispatch(e,kind,data,prepared)
         return True
     waiters=getattr(e,'_analysis_waiters',[])
-    waiters.append({'kind':kind,'data':deepcopy(data),'generation':e._generation,'binding':bound})
+    waiters.append({'kind':kind,'data':deepcopy(data),'generation':e._generation,'binding':bound,'status':e._status})
     e._analysis_waiters=waiters
     if getattr(e,'_analysis_token',None):return True
     token=uuid4().hex;e._analysis_token=token
-    e._status='正在准备已修改图像的分析内容（调色前）…可取消'
+    e._status=PREPARING_STATUS
     if e._request('analysis_input',analysis_layers=deepcopy(e._layers),expected_sha256=e._sha,
                   content_key=identity,context={'token':token,'binding':bound}) is False:
         failed(e,'图像分析内容未能准备，原范围保留',{'token':token})
@@ -58,6 +59,11 @@ def defer(e,kind,data):
 
 def _dispatch(e,kind,data,prepared):
     if kind=='segment':
+        data=deepcopy(data)
+        known={face['id'] for face in e._face_hints}
+        for job in data.get('jobs',[]):
+            if job['id'] in known and job.get('mask_target') in ('face','face_skin'):
+                job['recover_face_anchor']=True
         e._request('segment',**data,_analysis_prepared=prepared)
     elif kind=='operation':
         e._request(data['op'],**data['request'],_analysis_prepared=prepared)
@@ -110,6 +116,18 @@ def ready(e,result,active):
     _unavailable(e,[waiter for waiter in waiters if waiter not in eligible])
     if not eligible and any(waiter['data'].get('priority')!='low' for waiter in waiters):
         return e._notify('照片或图层已变化，分析结果未应用',True)
+    # Opening a project also schedules a render, which advances the epoch
+    # without replacing our preparation message. That message still belongs
+    # to this matching token and must end when preparation finishes.
+    if context.get('status_epoch')==e._status_epoch or e._status==PREPARING_STATUS:
+        foreground=[waiter for waiter in eligible if waiter['data'].get('priority')!='low']
+        if foreground:e._status=foreground[0]['status']
+        elif eligible:e._status='图像内容已准备，已有范围保留' if e._candidate is not None else eligible[0]['status']
+        else:e._status='图像内容已准备；过期的元素预计算未应用'
+        epoch=e._status_epoch
+        for waiter in eligible:
+            waiter_context=waiter['data'].get('context',{})
+            if 'status_epoch' in waiter_context:waiter_context['status_epoch']=epoch
     for waiter in eligible:_dispatch(e,waiter['kind'],waiter['data'],prepared)
 
 

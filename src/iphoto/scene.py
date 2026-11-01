@@ -263,6 +263,10 @@ def validate_catalog(value):
     objects = value.get("objects")
     if not isinstance(objects, list) or not 1 <= len(objects) <= MAX_OBJECTS:
         raise ValueError("元素清单数量无效")
+    content_key=value.get('content_key','')
+    if (not isinstance(content_key,str) or len(content_key) not in (0,64)
+            or any(character not in '0123456789abcdef' for character in content_key)):
+        raise ValueError('元素清单的图像内容标识无效')
     clean = []
     ids = set()
     for obj in objects:
@@ -302,7 +306,8 @@ def validate_catalog(value):
                 raise ValueError("元素内部保留点无效")
             item["anchor"] = [number(v, 0, 1) for v in anchor]
         clean.append(item)
-    return {"summary": value["summary"], "objects": clean}
+    return {"summary": value["summary"], "objects": clean,
+            **({'content_key':content_key} if 'content_key' in value else {})}
 
 
 def with_local_faces(catalog, faces):

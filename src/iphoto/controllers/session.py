@@ -103,7 +103,13 @@ def _opened(self):
             self._candidate = payload.get("selection_draft")
             self._selection_target_id = payload.get("selection_target_id", "")
             self._region_candidate = payload.get("region_draft")
-            self._scene.set(payload.get("scene_catalog"))
+            from .analysis_input import invalidate
+            invalidate(self)
+            catalog=payload.get('scene_catalog')
+            if catalog is not None and catalog.get('content_key','')!=self._analysis_key:
+                catalog=None
+                self._status='已恢复工程；旧元素清单未确认当前图像内容，请重新分析画面'
+            self._scene.set(catalog)
             if self._scene.catalog:
                 self._scene.remember(self._scene_key())
                 from . import pixel_selections
@@ -152,6 +158,12 @@ def openImage(self, url):
 def _payload(self):
     from ..document import project_version
     self._sync_layer()
+    from ..analysis_content import key
+    catalog=deepcopy(self._scene.catalog)
+    if catalog is not None:
+        catalog.pop('content_key',None)
+        content_key=key(self._layers)
+        if content_key:catalog['content_key']=content_key
     return {
         "schema_version": project_version(self._layers,self._candidate,self._region_candidate),
         "engine_version": ENGINE_VERSION,
@@ -165,7 +177,7 @@ def _payload(self):
         "selection_draft": self._candidate,
         "selection_target_id": self._selection_target_id,
         "region_draft": self._region_candidate,
-        "scene_catalog": self._scene.catalog,
+        "scene_catalog": catalog,
     }
 
 
