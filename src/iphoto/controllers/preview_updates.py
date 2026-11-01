@@ -2,6 +2,9 @@
 
 
 def changed(self, *, parameter=False):
+    if not parameter:
+        from .analysis_input import invalidate
+        invalidate(self)
     previous = self._generation
     self._generation += 1
     if parameter:

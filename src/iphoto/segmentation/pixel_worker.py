@@ -3,6 +3,8 @@
 import json
 import sys
 from time import perf_counter
+from hashlib import sha256
+from pathlib import Path
 
 from PIL import Image
 
@@ -13,7 +15,8 @@ def load_native(request):
     loaded = load_source(request["source_path"])
     if loaded.digest != request.get("source_sha"):
         raise ValueError("照片源文件已变化，本次分区未应用")
-    return loaded.image
+    from ..analysis_content import resolve
+    return resolve(loaded,request.get('content_reference'))
 
 
 def main():
@@ -37,12 +40,21 @@ def main():
                                   "progress": {"kind": kind, "phase": phase, "part": part, "total": total,**details}}), flush=True)
 
             path = request["proxy_path"]
-            if path != image_path:
+            proxy_sha=request.get('proxy_sha256')
+            if request.get('content_reference') is not None:
+                if not isinstance(proxy_sha,str) or sha256(Path(path).read_bytes()).hexdigest()!=proxy_sha:
+                    raise ValueError('分析预览已变化，本次分区未应用')
+                from ..analysis_content import read_layers
+                if sha256(Path(request['source_path']).read_bytes()).hexdigest()!=request.get('source_sha'):
+                    raise ValueError('照片源文件已变化，本次分区未应用')
+                read_layers(request['content_reference'],digest=request['source_sha'],size=request.get('source_size'))
+            image_key=(path,proxy_sha)
+            if image_key != image_path:
                 with Image.open(path) as opened:
                     loaded = opened.convert("RGB")
                 if max(loaded.size) > 1600:
                     raise ValueError("像素代理图超过尺寸上限")
-                image, image_path = loaded, path
+                image, image_path = loaded, image_key
             started = perf_counter()
             composition = request.get("composition")
             source = None
@@ -74,6 +86,8 @@ def main():
 
                 result["mask"] = compose(composition, result["items"])
             result["elapsed_ms"] = round((perf_counter() - started) * 1000)
+            if request.get('content_reference') is not None:
+                result['content_sha256']=request['content_reference']['sha256']
             source = None
             response = {
                 "id": request["id"],

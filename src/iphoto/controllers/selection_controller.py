@@ -617,6 +617,7 @@ class SelectionController(QObject):
         content_jobs = ([self._editor._active] if self._editor._active else []) + list(self._editor._queue)
         if any(job['op'] == 'foreground_import' and not job.get('cancelled') for job in content_jobs):
             return 'content'
+        if any(job['op']=='analysis_input' and not job.get('cancelled') for job in content_jobs):return 'ai'
         if getattr(self._editor, "_matte_active", None) or getattr(self._editor, "_matte_pending", None):
             return "matte"
         active = self._editor._pixel_active or self._editor._active
@@ -669,6 +670,10 @@ class SelectionController(QObject):
     def cancelTask(self):
         kind = self.taskKind
         editor = self._editor
+        if getattr(editor,'_analysis_token',None):
+            from .analysis_input import cancel
+            cancel(editor)
+            return editor._notify('已取消分析内容准备，原范围保留',True)
         if kind == 'content':
             from .foreground_content import cancel
             return cancel(editor)

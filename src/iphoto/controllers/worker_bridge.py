@@ -13,6 +13,15 @@ def _request(self, op, **data):
     if self.process.state() == QProcess.NotRunning:
         self._notify("本地引擎未运行，请保存项目后重新打开 iPhoto", True)
         return False
+    prepared=data.pop('_analysis_prepared',None)
+    if prepared is None:
+        from .analysis_input import defer,CROP_OPERATIONS
+        if op=='segment' and defer(self,'segment',data):return
+        if op in CROP_OPERATIONS and defer(self,'operation',{'op':op,'request':data}):return
+    if prepared is not None:
+        data.update(content_reference=deepcopy(prepared['content_reference']),proxy_path=prepared['path'],
+                    proxy_sha256=prepared['proxy_sha256'],source_path=data.get('source_path',self._path),source_sha=data.get('source_sha',self._sha),
+                    source_size=prepared['source_size'])
     self._serial += 1
     request = {"id": self._serial, "op": op, "generation": self._generation, **data}
     if op != "segment" or request.get("priority") != "low":
@@ -62,6 +71,8 @@ def _warm_running(self):
 
 
 def _start_warm(self):
+    from ..analysis_content import key
+    if key(getattr(self,'_layers',[])):return
     if not self.hasImage or self._warm_ready_sha == self._sha:
         return
     if _warm_running(self):
@@ -151,9 +162,9 @@ def _pump_pixel(self):
     self._pixel_queue.remove(self._pixel_active)
     request = {
         **self._pixel_active,
-        "proxy_path": QUrl(self._original).toLocalFile(),
-        "source_path": self._path,
-        "source_sha": self._sha,
+        "proxy_path": self._pixel_active.get('proxy_path',QUrl(self._original).toLocalFile()),
+        "source_path": self._pixel_active.get('source_path',self._path),
+        "source_sha": self._pixel_active.get('source_sha',self._sha),
     }
     self._pixel_process.write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
     self.changed.emit()
@@ -251,6 +262,8 @@ def _pixel_read(self):
                 # Progress is not a result: it cannot release the active job,
                 # publish a partial layer, or mark whole-photo SAM as ready.
                 continue
+            if response.get('ok') and response.get('result',{}).get('content_sha256')!=(active.get('content_reference') or {}).get('sha256'):
+                response={**response,'ok':False,'error':'图像内容已变化，本次分区未应用'}
             self._pixel_active = None
             context = active.get("context", {})
             current_scene_cache = (
@@ -316,7 +329,7 @@ def _pixel_read(self):
                 from ..segmentation.semantic_refine import supported
                 if any(job.get("mask_target", "object") == "object" and not supported(job.get("hint"))
                        for job in active.get("jobs", [])) or context.get("purpose") == "warm":
-                    self._warm_ready_sha = self._sha
+                    if not active.get('content_reference'):self._warm_ready_sha = self._sha
                 complete(self, response["result"], active["context"])
             elif context.get('origin', {}).get('photo_strategy') or context.get('origin', {}).get('channel_auto'):
                 self._notify('局部精修范围已过期，成片未应用', True)
@@ -462,6 +475,16 @@ def _read(self):
                 continue
             self._active = None
             op = response["op"]
+            from .analysis_input import CROP_OPERATIONS
+            if (op in CROP_OPERATIONS and active.get('content_reference') is not None and response.get('ok')
+                    and response.get('result',{}).get('content_sha256')!=active['content_reference']['sha256']):
+                response={**response,'ok':False,'error':'图像内容已变化，本次局部分析未应用'}
+            if op=='analysis_input':
+                from .analysis_input import ready,failed
+                if response['ok']:ready(self,response['result'],active)
+                else:failed(self,response['error'],active['context'])
+                self.changed.emit();self._pump()
+                continue
             if op in ("matte_candidate", "matte_point_evidence", "generative_crop", "generative_align", "foreground_alpha", "photo_candidate", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply", "foreground_import") and active.get("cancelled"):
                 self.changed.emit()
                 self._pump()
@@ -574,6 +597,8 @@ def _read(self):
                 self._histogram = value["histogram"]
                 self._stats = value.get("stats")
                 self._face_hints = value.get("faces", [])
+                self._source_face_hints=deepcopy(self._face_hints)
+                self._analysis_input=None;self._analysis_token=None;self._analysis_waiters=[];self._analysis_key=''
                 self._recipe = Recipe().to_dict()
                 self._locked = set()
                 self._history = [(dict(self._recipe), set())]

@@ -4,12 +4,14 @@ from copy import deepcopy
 
 from ..scene import combine_masks, with_local_faces
 from ..document import MAX_LAYERS
+from ..analysis_content import key as content_key
 from . import pixel_selections
 
 
 def _scene_key(self):
     return (
         self._sha,
+        content_key(self._layers),
         self._ai.settings.provider,
         self._ai.settings.base_url,
         self._ai.settings.model,
@@ -18,6 +20,10 @@ def _scene_key(self):
 
 def analyzeScene(self, refresh=False):
     if not self.hasImage or self.busy or self.hasRegionDraft:
+        return
+    if not self._ai.ready and content_key(self._layers):
+        from .analysis_input import defer
+        defer(self,'faces',{})
         return
     if not self._ai.ready and self._face_hints:
         self._scene.set(with_local_faces(self._scene.catalog,self._face_hints))

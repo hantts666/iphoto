@@ -23,20 +23,41 @@ def project(layers):
     return result
 
 
-def validate_reference(value,source):
+_KEY_CACHE=None
+
+
+def key(layers):
+    """Recipe-independent identity of validated editor content, without a render."""
+    global _KEY_CACHE
+    nodes=composition_key([{**layer,'recipe':{},'locked':[]} for layer in layers])
+    if not nodes:
+        _KEY_CACHE=None
+        return ''
+    if _KEY_CACHE is not None and _KEY_CACHE[0]==nodes:return _KEY_CACHE[1]
+    digest=sha256(json.dumps(nodes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    # One structural copy; immutable PNG strings are shared, not copied.
+    # Freeze containers so later edits cannot mutate the remembered identity.
+    _KEY_CACHE=deepcopy(nodes),digest
+    return digest
+
+
+def validate_reference(value,source=None,*,digest=None,size=None):
+    if source is not None:digest,size=source.digest,list(source.image.size)
     if (not isinstance(value,dict) or set(value)!={'path','sha256','source_sha','canvas_size'}
             or not isinstance(value['path'],str) or not Path(value['path']).is_absolute()
             or not isinstance(value['sha256'],str) or len(value['sha256'])!=64
             or any(c not in '0123456789abcdef' for c in value['sha256'])
-            or value['source_sha']!=source.digest or not isinstance(value['canvas_size'],list)
+            or value['source_sha']!=digest or not isinstance(value['canvas_size'],list)
             or len(value['canvas_size'])!=2 or any(type(v) is not int for v in value['canvas_size'])
-            or value['canvas_size']!=list(source.image.size)):
+            or any(not 1<=v<=32768 for v in value['canvas_size'])
+            or value['canvas_size'][0]*value['canvas_size'][1]>60_000_000
+            or value['canvas_size']!=size):
         raise ValueError('图像内容参照已变化，原范围保留')
     return value
 
 
-def _read_bytes(value,source):
-    value=validate_reference(value,source)
+def _read_bytes(value,source=None,*,digest=None,size=None):
+    value=validate_reference(value,source,digest=digest,size=size)
     try:
         path=Path(value['path'])
         if path.stat().st_size>MAX_PROJECT_BYTES:
@@ -49,13 +70,14 @@ def _read_bytes(value,source):
         raise ValueError('图像内容快照无法读取，原范围保留') from exc
 
 
-def read_layers(value,source):
+def read_layers(value,source=None,*,digest=None,size=None):
+    if source is not None:digest,size=source.digest,list(source.image.size)
     try:
-        data=_read_bytes(value,source)
+        data=_read_bytes(value,digest=digest,size=size)
         payload=json.loads(data)
         if (not isinstance(payload,dict) or set(payload)!={'schema','source_sha','canvas_size','layers'}
                 or type(payload['schema']) is not int or payload['schema']!=1
-                or payload['source_sha']!=source.digest or payload['canvas_size']!=list(source.image.size)):
+                or payload['source_sha']!=digest or payload['canvas_size']!=size):
             raise ValueError('图像内容快照与照片不一致')
         layers=validate_layers(payload['layers'])
         if any(any(layer['recipe'].values()) or layer['locked'] for layer in layers):

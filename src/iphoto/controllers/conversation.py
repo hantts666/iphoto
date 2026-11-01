@@ -363,6 +363,10 @@ def sendMessage(self, text, mode, *, foreground_requested=False):
     if selection_request:
         self._status = "AI 正在规划当前范围的调整；原范围保留，完成后自动应用…"
     if mode in ("scene", "targets", "selection", "regions"):
+        from .analysis_input import defer
+        if defer(self,'spatial',{'text':text,'recipe':dict(self._recipe),'locked':sorted(self._locked),'mode':mode}):
+            self.changed.emit()
+            return True
         context = _spatial_context(self)
         self._ai.plan(
             text,

@@ -266,7 +266,7 @@ class Editor(QObject):
             + ([self._export_request] if self._export_request else [])
         )
         return self._export_aborting or self.aiRepairPreparing or self.aiObjectPreparing or self.aiMaskPreparing or self.aiPhotoPreparing or self.aiChannelPreparing or any(
-            (request["op"] in ("photo_candidate", "generative_crop", "generative_align", "foreground_alpha", "foreground_import") and not request.get("cancelled"))
+            (request["op"] in ("photo_candidate", "generative_crop", "generative_align", "foreground_alpha", "foreground_import", "analysis_input") and not request.get("cancelled"))
             or request["op"] in {"open", "export", "interpret", "selection", "matte", "repair_crop", "object_crop", "mask_refinement_crop", "mask_refinement_apply"}
             or (request["op"] == "segment" and request.get("priority") != "low")
             for request in operations

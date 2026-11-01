@@ -62,6 +62,7 @@ def main():
     channel_reference_cache = {}
     from .analysis_content import ContentCache
     content_cache = ContentCache(cache)
+    analysis_proxy = None
     channel_draft_assets = set()
     handlers = {}
 
@@ -216,11 +217,14 @@ def main():
         if request["source_sha"] != source.digest:
             raise ValueError("照片已变化，过期修复图未准备")
         box = crop_pixels(request["crop"], source.image.size)
-        picture = source.image.crop(box)
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
+        picture = content.crop(box)
+        if reference is not None:picture=picture.convert('RGB')
         target = cache / f"repair-crop-{request['id']}.png"
         picture.save(target, icc_profile=SRGB_PROFILE)
         assets.append(target)
-        return {"path": str(target), "crop_size": list(picture.size)}
+        return {"path": str(target), "crop_size": list(picture.size),
+                **({'content_sha256':reference['sha256']} if reference is not None else {})}
 
     @register("object_crop")
     def _object_crop(request):
@@ -230,13 +234,16 @@ def main():
         if request["source_sha"] != source.digest:
             raise ValueError("照片已变化，过期目标细节未准备")
         box = crop_pixels(request["crop"], source.image.size)
-        picture = source.image.crop(box)
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
+        picture = content.crop(box)
+        if reference is not None:picture=picture.convert('RGB')
         crop_size = [picture.width, picture.height]
         picture.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
         target = cache / f"object-crop-{request['id']}.png"
         picture.save(target, icc_profile=SRGB_PROFILE)
         assets.append(target)
-        return {"path": str(target), "crop_size": crop_size, "image_size": list(picture.size)}
+        return {"path": str(target), "crop_size": crop_size, "image_size": list(picture.size),
+                **({'content_sha256':reference['sha256']} if reference is not None else {})}
 
     @register("mask_refinement_crop")
     def _mask_refinement_crop(request):
@@ -245,16 +252,17 @@ def main():
 
         if request["source_sha"] != source.digest:
             raise ValueError("照片已变化，过期范围修正图未准备")
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
         if request.get('verify'):
-            picture, mask, overlay, box = prepare_crop(source.image, request['mask'], reference=request['reference_mask'],
+            picture, mask, overlay, box = prepare_crop(content, request['mask'], reference=request['reference_mask'],
                 opacity=.5 if request.get('restore_verify') is True or request.get('reselect_verify') is True else .4,
                 reselection_scope=request.get('reselect_scope') if request.get('reselect_verify') is True else None)
             regions = []
         elif request.get('review'):
             from .ai_mask_review import prepare_review
-            picture, mask, overlay, box, regions = prepare_review(source.image, request['mask'], reference=request.get('reference_mask'))
+            picture, mask, overlay, box, regions = prepare_review(content, request['mask'], reference=request.get('reference_mask'))
         else:
-            picture, mask, overlay, box = prepare_crop(source.image, request["mask"])
+            picture, mask, overlay, box = prepare_crop(content, request["mask"])
             regions = []
         paths = [cache / f"mask-refinement-{request['id']}-{kind}.png" for kind in ("photo", "mask", "overlay")]
         native_size = picture.size
@@ -274,10 +282,10 @@ def main():
 
             if request.get('reselect_verify') is True:
                 kinds=('reference','changes','additions')
-                comparisons=reselection_images(source.image,request['mask'],request['reference_mask'],box,request['reselect_scope'])
+                comparisons=reselection_images(content,request['mask'],request['reference_mask'],box,request['reselect_scope'])
             else:
                 kinds=('reference','changes')
-                comparisons=comparison_images(source.image,request['mask'],request['reference_mask'],box,restore=request.get('restore_verify') is True)
+                comparisons=comparison_images(content,request['mask'],request['reference_mask'],box,restore=request.get('restore_verify') is True)
             for kind,item in zip(kinds,comparisons):
                 path = cache / f"mask-refinement-{request['id']}-{kind}.png"
                 display(item).save(path, icc_profile=SRGB_PROFILE); assets.append(path)
@@ -287,12 +295,13 @@ def main():
             from .ai_mask_review import context_image
 
             path = cache / f"mask-refinement-{request['id']}-context.png"
-            context_image(source.image, request['context_crop'], box).save(path, icc_profile=SRGB_PROFILE)
+            context_image(content, request['context_crop'], box).save(path, icc_profile=SRGB_PROFILE)
             assets.append(path); extra['context_path'] = str(path)
             crop_assets.add(path)
         current_crop_assets = crop_assets
         return {"path": str(paths[0]), "mask_path": str(paths[1]), "overlay_path": str(paths[2]),
-                "crop_box": box, "crop_size": list(native_size), "source_size": list(source.image.size), 'regions': regions, **extra}
+                "crop_box": box, "crop_size": list(native_size), "source_size": list(source.image.size), 'regions': regions,
+                **({'content_sha256':reference['sha256']} if reference is not None else {}), **extra}
 
     @register('mask_refinement_apply')
     def _mask_refinement_apply(request):
@@ -300,8 +309,9 @@ def main():
 
         if request['source_sha'] != source.digest:
             raise ValueError('照片已变化，过期复查排除未应用')
-        mask = remove_regions(source.image, request['mask'], request['exclude_regions'], request['regions'], reference=request.get('reference_mask'))
-        return {'mask': mask}
+        content,reference=content_cache.get(source,reference=request.get('content_reference'))
+        mask = remove_regions(content, request['mask'], request['exclude_regions'], request['regions'], reference=request.get('reference_mask'))
+        return {'mask': mask,**({'content_sha256':reference['sha256']} if reference is not None else {})}
 
     @register("selection")
     def _selection(request):
@@ -341,6 +351,32 @@ def main():
             request.get("locked", []),
         )
         return {"recipe": recipe.to_dict(), "summary": summary}
+
+    @register('analysis_input')
+    def _analysis_input(request):
+        nonlocal analysis_proxy
+        from hashlib import sha256
+        from .analysis_content import key
+        if request.get('expected_sha256')!=source.digest:
+            raise ValueError('照片已变化，分析内容未应用')
+        layers=request['analysis_layers']
+        if not request.get('content_key') or key(layers)!=request['content_key']:
+            raise ValueError('图像内容已变化，分析未启动')
+        content,reference=content_cache.get(source,layers=layers)
+        if reference is None:raise ValueError('图像内容已恢复原片，请重新分析')
+        picture=preview(content.convert('RGB'),1600)
+        path=cache/f"analysis-input-{reference['sha256']}.png"
+        picture.save(path,compress_level=3)
+        if analysis_proxy is not None and analysis_proxy!=path:analysis_proxy.unlink(missing_ok=True)
+        analysis_proxy=path
+        from .segmentation.face_detection import available,detect
+        warnings=[];faces=[]
+        if available():
+            try:faces=detect(picture,warnings=warnings)
+            except Exception:warnings.append('当前内容的人脸定位未完成')
+        return {'path':str(path),'proxy_sha256':sha256(path.read_bytes()).hexdigest(),
+                'content_reference':reference,'content_key':request['content_key'],
+                'source_sha':source.digest,'source_size':list(source.image.size),'faces':faces,'warnings':warnings}
 
     @register("channel_preview")
     def _channel_preview(request):
