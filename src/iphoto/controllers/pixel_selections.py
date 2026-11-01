@@ -79,6 +79,15 @@ def start(self, jobs, context, priority=None, composition=None):
     options = {"priority": priority} if priority else {}
     if composition is not None:
         options["composition"] = composition
+    if context.get('purpose')=='regions' and context.get('auto_apply'):
+        origin=context.get('origin',{})
+        if not origin.get('photo_strategy') and not origin.get('channel_auto'):
+            targets={str(index):region['mask_target'] for index,region in enumerate(context['regions'])
+                     if region.get('mask_target') in ('face_skin','body_skin')
+                     and region.get('face_part','all')=='all'}
+            if targets:
+                options['skin_effects']={'size':[self._width,self._height],'targets':targets,
+                    'seeds':{key:value for key,value in context.get('seed_items',{}).items() if key in targets}}
     if self._request("segment", jobs=jobs, context=context, **options) is False:
         return False
     return True

@@ -66,7 +66,7 @@ def main():
                 if first_face is not None:
                     detail_progress("face_source",first_face,len(jobs))
                 source = load_native(request)
-            if composition is not None and not request.get("jobs"):
+            if not jobs and (composition is not None or request.get('skin_effects')):
                 # Combining cached masks needs no model import or embedding.
                 result = {"items": []}
             else:
@@ -81,6 +81,9 @@ def main():
                     image, jobs, tolerant=request.get("priority") == "low", source=source,
                     progress=progress, detail_progress=detail_progress
                 )
+            if request.get('skin_effects') is not None:
+                from ..skin_effects import prepare_items
+                result['items']=prepare_items(result['items'],request['skin_effects'])
             if composition is not None:
                 from .object_composition import compose
 

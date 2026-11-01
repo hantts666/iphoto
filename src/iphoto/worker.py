@@ -327,12 +327,15 @@ def main():
     def _segment(request):
         from .segmentation.service import segment_jobs
 
-        return segment_jobs(
-            proxy,
-            request.get("jobs"),
-            tolerant=request.get("context", {}).get("purpose") == "precache",
-            source=source.image,
-        )
+        jobs=request.get('jobs',[])
+        if not jobs and request.get('skin_effects'):
+            result={'items':[]}
+        else:
+            result=segment_jobs(proxy,jobs,tolerant=request.get('context',{}).get('purpose')=='precache',source=source.image)
+        if request.get('skin_effects') is not None:
+            from .skin_effects import prepare_items
+            result['items']=prepare_items(result['items'],request['skin_effects'])
+        return result
 
     @register("matte")
     def _matte(request):
