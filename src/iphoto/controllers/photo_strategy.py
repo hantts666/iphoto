@@ -6,6 +6,7 @@ from uuid import uuid4
 from ..document import new_layer, MAX_LAYERS
 from ..engine import Recipe
 from ..ai_protocol import image_data_url
+from ..photo_details import MAX_DETAIL_LAYERS, MAX_DEVELOP_LAYERS
 from . import layers, pixel_selections
 
 
@@ -73,7 +74,9 @@ def prepare(self, proposed, origin):
 def _render(self, pending, state, soften=False,soften_ids=None):
     from .face_inventory import current as current_faces
     faces=deepcopy(current_faces(self))
-    inspect='base' in state and not state.get('details_checked') and len(state['proposed'])<min(4,MAX_LAYERS-len(self._layers))
+    inspect='base' in state and not state.get('details_checked') and len(state['proposed'])<min(MAX_DEVELOP_LAYERS,MAX_LAYERS-len(self._layers))
+    if 'base' in state and not state.get('details_checked') and not inspect:
+        state['inspection_note']='图层位置已用满，本次未新增近景细节精修。'
     if inspect:state['inspection_faces']=faces
     state['preparing'] = True
     self._status = ('3/4 正在核对人物位置并准备黑白底边缘…可取消' if state.get('foreground') else
@@ -108,9 +111,11 @@ def ready(self, result, context, generation):
         state['preparing'] = False
         if 'base' in state and not state.get('details_checked'):
             state['details_checked']=True
+            if result.get('uninspected_faces'):
+                state['inspection_note']=f"本次检查了 {len(result['detail_faces'])} 张可辨识的人脸近景；另有 {result['uninspected_faces']} 张未进入细节精修。"
             if result.get('detail_faces'):
                 state['detail_reference']=result
-                state['detail_budget']=min(3,4-len(state['proposed']),MAX_LAYERS-len(self._layers)-len(state['proposed']))
+                state['detail_budget']=min(MAX_DETAIL_LAYERS,MAX_DEVELOP_LAYERS-len(state['proposed']),MAX_LAYERS-len(self._layers)-len(state['proposed']))
                 state['detailing']=True
                 self._status='正在放大实际成片，检查唇色与皮肤纹理…可取消'
                 self.changed.emit()
@@ -190,7 +195,8 @@ def reviewed(self, result):
         # it only here so the existing layer gate can commit all layers once.
         applied = layers.addLocalLayers(self, state['proposed'],
                                        consume_selection=bool(pending.get('selection_snapshot')),
-                                       selection_state='confirmed', allow_pixel_patch=state.get('generate', False))
+                                       selection_state='confirmed', allow_pixel_patch=state.get('generate', False),
+                                       reviewed_development='base' in state)
         origin = {**pending, 'layer_id': self._selected, 'layer_name': 'AI重建抠图' if state.get('foreground') else '成片精修',
                   'adjustment_layer_ids': [layer['id'] for layer in applied]}
         saved = (f"\n已保存AI重建前景（生成分辨率{state['generated_size'][0]}×{state['generated_size'][1]}），可能改变细节；原片保留，可一步撤销或查看原图对比。" if state.get('foreground') else
@@ -198,6 +204,7 @@ def reviewed(self, result):
                  else '\n已保存整体光色与局部精修，可一步撤销、调强度或查看原图对比。')
         message = (saved.strip() + '\nAI复查：' + result['summary'] if state.get('foreground') else
                    state['direction'] + ('\n细节精修：'+state['detail_note'] if state.get('detail_note') else '')
+                   + ('\n'+state['inspection_note'] if state.get('inspection_note') else '')
                    + '\n成片检查：' + result['summary'] + saved)
         self._message('assistant', message,
                       state='applied', origin=origin)

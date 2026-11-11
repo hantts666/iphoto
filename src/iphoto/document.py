@@ -589,7 +589,9 @@ def validate_conversation(messages):
             item['repair_layer_ids'] = list(repair_ids)
         if 'adjustment_layer_ids' in msg:
             adjustment_ids = msg['adjustment_layer_ids']
-            if (not isinstance(adjustment_ids, list) or not 1 <= len(adjustment_ids) <= 4
+            # Saved result references describe a whole reviewed transaction,
+            # which may contain several independently bounded planning stages.
+            if (not isinstance(adjustment_ids, list) or not 1 <= len(adjustment_ids) <= MAX_LAYERS
                     or any(not isinstance(lid, str) or not 1 <= len(lid) <= 64 for lid in adjustment_ids)
                     or len(set(adjustment_ids)) != len(adjustment_ids)):
                 raise ValueError('局部调整结果的图层引用无效')

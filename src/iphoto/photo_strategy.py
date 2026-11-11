@@ -24,7 +24,7 @@ DEVELOP_PROMPT = """
 整体风格要求同时提到“嘴唇等细节到位”仍使用develop，让后续原生近景阶段处理细节；只有单独修改某一部位、没有整体成片要求时才直接用layers。
 不要把所有照片做成同一种温和提亮。用户让你决定时，主动选一个适合画面且看得出差异的摄影风格，例如暖光电影感、清透日系、复古胶片或有层次的冷暖对比；strategy明确方向及主次，不堆叠风格名称。可用RGB/分通道曲线、分色HSL、对比和黑白场真正建立色彩与光线关系，不仅给曝光加0.3。用户要求大胆、浓郁或风格化时应有明显变化；保护五官和肤色不等于禁止有表现力的背景、暗部和高光。用户指定自然、纪实时尊重其强度要求。
 人像风格优先建立背景色彩与明暗层次。不要默认同时推高全局红/橙色段饱和和明度：它会把肤色、头发中微小色差和压缩杂色一并放大，出现橙色皮肤与头发斑块；暖光可先通过色温及曲线建立，皮肤在完整面部层协调。大胆风格不等于把脸、嘴唇、草地全部加黄加红。
-这一阶段先完成整体风格和必要面部光色，有人脸时尽量只用全图加1～2个关键局部层，为稍后的原生近景精修保留1～2个图层位置。程序会在真实风格结果上再次放大看嘴唇和皮肤，主动补充必要细节，不需要现在凭整图缩略图猜微小问题。
+这一阶段先完成整体风格和必要面部光色。多人合照按实际光线协调各个人脸，不要为了给细节腾位置而漏掉人物。后续原生近景精修有独立预算，最多增加3个必要细节层，并仍受项目总图层上限约束；当前阶段遵守max_new_layers。程序会在真实风格结果上再次放大看嘴唇和皮肤，主动补充必要细节，不需要现在凭整图缩略图猜微小问题。
 strategy为简短中文字符串，说明可见问题、成片方向和验收重点；其他动作strategy=null。所有非generate/foreground动作edit_prompt=null。recipe是新增全图基调的完整参数（未使用为0/[]，skin_smoothing=0）。regions为0～3个必要局部层，使用现有分区结构，全部新增层最多max_new_layers。已有图层在底下，不能复制已有配方重复叠加。
 先协调曝光、阴影和白平衡，再做必要局部增强。肤色不要靠大幅提亮橙色、降低橙色饱和或压暗红色做成脸上贴片。帽檐下的人脸要保留自然阴影，与脖颈/嘴唇连续。泛化的自然成片默认保留皮肤纹理，face_skin/body_skin的skin_smoothing与softness必须0，不自动套磨皮；低分辨率或原片失焦更不能用磨皮修复。用户明确要求磨皮、柔肤时使用局部精修动作layers；明确去痘用repair。不要把泛化“P美”误作这些具体要求。不默认改变脸型、五官、身份、衣服或场景。
 整体成片必须区分面部光色和皮肤纹理：面部提亮、白平衡、HSL或曲线使用mask_target=face、face_part=all、face_scope=full，让嘴唇、眼睛和周围皮肤得到一致的光色调整；该层skin_smoothing=0、softness=0。face_skin不能做光色，不能只把皮肤漂白却把嘴唇留黑。总图层预算有限时优先全图及完整面部光色，省略非必要纹理或背景层；不要靠增加很多局部层弥补全图方案。
@@ -269,14 +269,22 @@ def render_candidate(image, before, proposed, faces, directory, identity, soften
         save(preview(output.crop(mouth),768),'嘴周与邻近皮肤 · 候选',lossless=True)
     review_assets=list(assets);detail_images=list(assets[:2]);detail_faces=[]
     if inspect_details:
-        for face in faces[:3]:
+        from .photo_details import MAX_DETAIL_FACES
+        eligible=[]
+        for face in faces:
             box=raster_mask(face['mask'],image.size).getbbox()
             if not box or min(box[2]-box[0],box[3]-box[1])<64 or not face.get('id'):
                 continue
+            eligible.append((face,box))
+        # Filter first: a tiny background face must not displace a readable
+        # subject merely because it was found earlier by the detector.
+        eligible.sort(key=lambda item:-(item[1][2]-item[1][0])*(item[1][3]-item[1][1]))
+        for face,box in eligible[:MAX_DETAIL_FACES]:
             margin=round(max(box[2]-box[0],box[3]-box[1])*.25)
             box=(max(0,box[0]-margin),max(0,box[1]-margin),min(image.width,box[2]+margin),min(image.height,box[3]+margin))
             label=f"人脸 {face['id']} · 原生近景"
             detail_images.extend([save(preview(baseline.crop(box),1280),label+'修改前',lossless=True),
                                   save(preview(output.crop(box),1280),label+'风格候选',lossless=True)])
             detail_faces.append({'id':face['id'],'name':face.get('name','人脸'),'crop_box':list(box)})
-    return {'proposed': candidates, 'images': review_assets,'detail_images':detail_images if detail_faces else [],'detail_faces':detail_faces}
+    return {'proposed': candidates, 'images': review_assets,'detail_images':detail_images if detail_faces else [],'detail_faces':detail_faces,
+            'uninspected_faces':len(faces)-len(detail_faces) if inspect_details else 0}

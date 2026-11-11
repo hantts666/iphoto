@@ -180,7 +180,7 @@ def test_old_message_reference_deleted_layer_and_availability_never_decode_masks
     assert not editor.conversationAdjustmentLayers(message['id'])
 
 
-@pytest.mark.parametrize('bad',[[],['a']*2,['a']*5,[True],[''],['x'*65],None])
+@pytest.mark.parametrize('bad',[[],['a']*2,['a']*5,[str(i) for i in range(33)],[True],[''],['x'*65],None])
 def test_saved_adjustment_references_are_bounded_and_unambiguous(bad):
     with pytest.raises(ValueError,match='图层引用'):
         validate_conversation([{'id':'message','role':'assistant','adjustment_layer_ids':bad}])

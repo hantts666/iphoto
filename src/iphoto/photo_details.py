@@ -5,8 +5,14 @@ from copy import deepcopy
 from .engine import Recipe,RECIPE_FIELDS,RECIPE_PROPERTIES
 from .ai_tasks import RECIPE_LIMITS_PROMPT
 
+MAX_DETAIL_FACES = 3
+MAX_DETAIL_LAYERS = 3
+# Styling retains its four-layer limit; inspected refinements have their own
+# bounded allowance and are published in the same reviewed transaction.
+MAX_DEVELOP_LAYERS = 4 + MAX_DETAIL_LAYERS
+
 SCHEMA={'type':'object','additionalProperties':False,'properties':{
-    'summary':{'type':'string'},'refinements':{'type':'array','maxItems':3,'items':{
+    'summary':{'type':'string'},'refinements':{'type':'array','maxItems':MAX_DETAIL_LAYERS,'items':{
         'type':'object','additionalProperties':False,'properties':{
             'face_id':{'type':'string'},'part':{'type':'string','enum':['lips','skin_texture']},
             'name':{'type':'string'},'reason':{'type':'string'},
@@ -15,6 +21,7 @@ SCHEMA={'type':'object','additionalProperties':False,'properties':{
 
 PROMPT='''你是iPhoto的人像细节精修师。整体风格已经实际渲染，现在必须看原生人脸近景，主动完成有依据的精修，而不是只说没有问题。
 图片含原片、实际风格候选、每张人脸同位置的原片/候选近景，标签中的face_id对应唯一人物。坐标不由你猜，程序用该人物的本地五官模型定位。
+多人合照必须逐人检查，保留各人的自然肤色与唇色差异，不把同一套口红或磨皮参数复制给所有人。预算紧张时优先覆盖各人最明显的问题，再考虑同一人的第二项细节；summary如实说明观察与未处理的问题，不能只修一个人却声称全员完成。
 逐一检查嘴唇颜色、上下唇明暗、唇缘与皮肤衔接；检查面部肤色是否连贯、纹理是否粗糙或已经失焦。结合用户需求和风格决定必要细节，不等用户一项项点名。唇色泛灰或太淡可增加真实血色和适度明度，保留唇纹、嘴内和牙齿；不是所有人都要涂浓口红，保留年龄与本人特征。
 refinements最多max_refinements项，每项只对应一个已给出的face_id。part=lips可用曝光、HSL、曲线、色温等精调真实上下唇，不能磨皮、柔化或锐化五官。HSL的正饱和会把该色段向完全饱和推进，数值25并不代表温和增加25%；自然血色优先从小幅饱和/色偏开始，避免一圈鲜红的唇线。上下唇需要保留明暗差，不要强行统一成同一红色，儿童尤其不应出现成人口红感。
 part=skin_texture只允许skin_smoothing或sharpness，作用范围排除了眉眼嘴唇，不能声称它改善五官清晰度；只有原片近景确实有需要处理的粗糙纹理时才用磨皮。sharpness仅增强皮肤已有细微纹理，看不出原有细纹、原片失焦、低清或本来光滑时跳过纹理层，不以失焦为理由锐化或磨皮。不要把整体提亮/美白再次塞入纹理层。
@@ -42,7 +49,7 @@ def parse_details(data,workspace):
         if not isinstance(plan,dict) or set(plan)!={'summary','refinements'}:raise ValueError('细节精修结构无效')
         if not isinstance(plan['summary'],str) or not 1<=len(plan['summary'].strip())<=2000:raise ValueError('细节精修说明无效')
         items=plan['refinements'];faces={face['id'] for face in workspace['faces']};seen=set()
-        if not isinstance(items,list) or len(items)>min(3,workspace['max_refinements']):raise ValueError('细节精修超出剩余图层预算')
+        if not isinstance(items,list) or len(items)>min(MAX_DETAIL_LAYERS,workspace['max_refinements']):raise ValueError('细节精修超出剩余图层预算')
         clean=[]
         for item in items:
             if not isinstance(item,dict) or set(item)!={'face_id','part','name','reason','recipe'}:raise ValueError('细节精修项目无效')

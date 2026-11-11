@@ -1,7 +1,7 @@
 """Read live local masks for inspection navigation, without editing documents."""
 from PIL import Image, ImageChops
 
-from ..document import raster_mask_cached
+from ..document import raster_mask_cached, MAX_LAYERS
 
 
 def reviewable(layer):
@@ -28,7 +28,7 @@ def content_scale(editor, layer):
 
 
 def live_layers(editor, ids):
-    if not isinstance(ids, list) or not 1 <= len(ids) <= 4:
+    if not isinstance(ids, list) or not 1 <= len(ids) <= MAX_LAYERS:
         return []
     by_id = {layer['id']: layer for layer in editor._layers}
     return [by_id[lid] for lid in dict.fromkeys(lid for lid in ids if isinstance(lid, str))

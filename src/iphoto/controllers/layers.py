@@ -267,13 +267,16 @@ def applyRangeMask(self, mask, expected, *, target_id='', name='局部调整'):
     return selected
 
 
-def addLocalLayers(self, proposed, *, consume_selection=False, selection_state="discarded", allow_pixel_patch=False):
+def addLocalLayers(self, proposed, *, consume_selection=False, selection_state="discarded", allow_pixel_patch=False,
+                   reviewed_development=False):
     """Apply complete automatic results once, without a temporary UI draft."""
     if (not self.hasImage or self.busy or self.hasRegionDraft
             or self.hasSelectionDraft and not consume_selection):
         raise ValueError("当前不能建立局部调整层，已有图层与范围保留")
-    if not isinstance(proposed, list) or not 1 <= len(proposed) <= 4:
-        raise ValueError("局部调整需要 1～4 个完整图层")
+    from ..photo_details import MAX_DEVELOP_LAYERS
+    limit = MAX_DEVELOP_LAYERS if reviewed_development else 4
+    if not isinstance(proposed, list) or not 1 <= len(proposed) <= limit:
+        raise ValueError(f"局部调整需要 1～{limit} 个完整图层")
     if len(self._layers) + len(proposed) > MAX_LAYERS:
         raise ValueError("图层与组最多 32 项，局部调整未应用")
     prepared = validate_layers(proposed)
