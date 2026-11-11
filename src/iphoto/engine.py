@@ -18,7 +18,7 @@ from .storage import atomic_output
 from .color_mixer import FIELDS as HSL_FIELDS, LABELS as HSL_LABELS, mix as mix_colors, mix_fast as mix_colors_fast, mix_curves_fast
 from .tone_curves import FIELDS as CURVE_FIELDS, LABELS as CURVE_LABELS, SCHEMA as CURVE_SCHEMA, validate as validate_curve, apply as apply_curves, apply_fast as apply_curves_fast
 
-ENGINE_VERSION = "1.11.61-chroma-stability"
+ENGINE_VERSION = "1.11.63-texture-smoothing"
 SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
 RANGES = {
     "exposure": (-2.0, 2.0),
@@ -483,11 +483,22 @@ def _detail(image, recipe, detail_size=None):
             working, diameter, 16 + 52 * strength, 3 + 5 * strength
         )
         if step > 1:
-            smooth = cv2.resize(
-                smooth, (working.shape[1] * step, working.shape[0] * step),
+            # Apply only the coarse-scale correction to native pixels. Blending
+            # the enlarged low-resolution image would also erase pores and
+            # fine texture that the bilateral filter never examined.
+            correction = smooth.astype(np.float32) - working.astype(np.float32)
+            correction = cv2.resize(
+                correction, (working.shape[1] * step, working.shape[0] * step),
                 interpolation=cv2.INTER_LINEAR,
             )[:image.height, :image.width]
-        image = Image.fromarray(cv2.addWeighted(original, 1 - strength, smooth, strength, 0))
+            correction *= strength
+            correction += original
+            np.rint(correction, out=correction)
+            np.clip(correction, 0, 255, out=correction)
+            pixels = correction.astype(np.uint8)
+        else:
+            pixels = cv2.addWeighted(original, 1 - strength, smooth, strength, 0)
+        image = Image.fromarray(pixels)
     if recipe.softness:
         softened = image.filter(ImageFilter.GaussianBlur(max(0.25, radius * 3)))
         image = Image.blend(image, softened, recipe.softness / 100)

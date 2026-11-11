@@ -7,7 +7,28 @@ from PIL import Image
 import pytest
 
 from iphoto.document import new_layer, raster_mask, render_detail_tile, render_layers
-from iphoto.engine import Recipe
+from iphoto.engine import Recipe, render
+
+
+@pytest.mark.parametrize('step',[2,3,4])
+def test_native_smoothing_keeps_subgrid_texture_while_correcting_coarse_variation(step):
+    # These two images have identical cell means but different native texture.
+    # Smoothing may change their shared coarse tone, never flatten the detail
+    # that disappeared during the speed-oriented downsample.
+    rng=np.random.default_rng(22)
+    coarse=rng.integers(-9,10,(40,48,1))+np.array([165,125,105])
+    plain=np.repeat(np.repeat(coarse,step,axis=0),step,axis=1).astype(np.uint8)
+    pattern=np.zeros((step,step),dtype=np.int16);pattern[:,0]=8;pattern[:,-1]=-8
+    detail=np.tile(pattern,(40,48))[...,None]
+    textured=(plain.astype(np.int16)+detail).astype(np.uint8)
+    recipe=Recipe(skin_smoothing=70);size=(1600*step,1200*step)
+    base=np.asarray(render(Image.fromarray(plain),recipe,detail_size=size)).astype(np.int16)
+    result=np.asarray(render(Image.fromarray(textured),recipe,detail_size=size)).astype(np.int16)
+    # Native fine detail is retained, while measurable coarse unevenness falls.
+    assert np.max(np.abs((result-base)-detail))<=1
+    assert np.mean(np.abs(base-plain.astype(np.int16)))>1
+    means=base.reshape(40,step,48,step,3).mean((1,3))
+    assert means[3:-3,3:-3,0].std()<coarse[3:-3,3:-3,0].std()*.8
 
 
 @pytest.fixture(scope="module")
